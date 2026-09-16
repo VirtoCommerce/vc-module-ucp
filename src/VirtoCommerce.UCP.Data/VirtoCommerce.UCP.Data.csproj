@@ -6,7 +6,7 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="VirtoCommerce.OrdersModule.Core" Version="3.1000.0" />
-    <PackageReference Include="VirtoCommerce.Platform.Core" Version="3.1039.0" />
+    <PackageReference Include="VirtoCommerce.Platform.Core" Version="3.1066.0-alpha.13384-vcst-5378-unified-buyer-flow" />
     <PackageReference Include="VirtoCommerce.StoreModule.Core" Version="3.1004.0" />
   </ItemGroup>
   <ItemGroup>

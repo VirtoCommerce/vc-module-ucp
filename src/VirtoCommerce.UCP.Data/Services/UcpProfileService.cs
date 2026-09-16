@@ -32,17 +32,14 @@ public class UcpProfileService : IUcpProfileService
 
     private static readonly string[] AuthScopes =
     [
-        "ucp.profile.read",
-        "ucp.catalog.read",
-        "ucp.cart.write",
-        "ucp.checkout.write",
-        "ucp.checkout.handoff",
-        "ucp.order.read",
-        "ucp.geography.read",
+        "openid",
+        "profile",
+        "offline_access",
     ];
 
     private static readonly string[] SupportedMcpTools =
     [
+        ModuleConstants.McpTools.LinkBuyerIdentity,
         ModuleConstants.McpTools.GetStoreCapabilities,
         ModuleConstants.McpTools.SearchProducts,
         ModuleConstants.McpTools.GetProduct,
@@ -75,17 +72,22 @@ public class UcpProfileService : IUcpProfileService
         "Address changes after checkout or handoff require update_checkout followed by a new handoff_checkout URL.",
         "When the buyer is ready to pay or continue to hosted checkout, prefer checkout_and_handoff so the response includes the final continue_url.",
         "After hosted checkout, track_order can use the original cart_id before an order_id is available.",
+        "For ordinary shopping, call commerce tools directly without linking an account.",
+        "When the user explicitly asks to act on their behalf or use their account, organization, personalized prices, saved data, or orders, call link_buyer_identity before buyer-sensitive commerce tools.",
+        "Authenticated buyer and organization identity come only from the validated Platform OAuth token. Never send user or organization identity headers.",
+        "To upgrade an anonymous cart, call link_buyer_identity and then update_cart with the saved anonymous buyer_id; UCP verifies ownership and delegates merging to XCart.",
     ];
 
     private static readonly (string Name, string Method, string Path, string Capability, string Status, string Description)[] EndpointOperations =
     [
+        (ModuleConstants.McpTools.LinkBuyerIdentity, "MCP", ModuleConstants.Endpoints.Mcp, "identity_linking", "available", "Trigger Platform OAuth account linking before buyer-sensitive commerce operations."),
         (ModuleConstants.McpTools.GetStoreCapabilities, "GET", ModuleConstants.Endpoints.Discovery, "profile", "available", "Read UCP capabilities, callable MCP tools, endpoint metadata, auth hints, headers, and integration guidance."),
         (ModuleConstants.McpTools.SearchProducts, "POST", ModuleConstants.Endpoints.CatalogSearch, ModuleConstants.Capabilities.Catalog, "available", "Search buyer-aware catalog products."),
         (ModuleConstants.McpTools.GetProduct, "GET", ModuleConstants.Endpoints.CatalogProduct, ModuleConstants.Capabilities.Catalog, "available", "Get one buyer-aware product by stable product id."),
         (ModuleConstants.McpTools.CreateCart, "POST", ModuleConstants.Endpoints.CartCreate, ModuleConstants.Capabilities.Cart, "available", "Create a cart and optionally add the first item."),
         (ModuleConstants.McpTools.ListCarts, "GET", ModuleConstants.Endpoints.CartList, ModuleConstants.Capabilities.Cart, "available", "List recent buyer-scoped carts."),
         (ModuleConstants.McpTools.GetCart, "GET", ModuleConstants.Endpoints.CartGet, ModuleConstants.Capabilities.Cart, "available", "Read cart lines, totals, coupons, addresses, shipments, payments, and continue_url."),
-        (ModuleConstants.McpTools.UpdateCart, "PUT", ModuleConstants.Endpoints.CartUpdate, ModuleConstants.Capabilities.Cart, "available", "Update cart items and coupons."),
+        (ModuleConstants.McpTools.UpdateCart, "PUT", ModuleConstants.Endpoints.CartUpdate, ModuleConstants.Capabilities.Cart, "available", "Update cart items and coupons. With a linked Platform identity it can safely merge the saved anonymous cart through XCart."),
         (
             ModuleConstants.McpTools.CreateCheckout,
             "POST",
@@ -166,9 +168,12 @@ public class UcpProfileService : IUcpProfileService
             },
             Auth = new UcpProfileAuth
             {
-                Agent = "agent_api_key",
+                Agent = "mcp_transport",
                 AnonymousCatalog = _options.AnonymousCatalog,
-                BuyerDelegation = "buyer_context_headers",
+                BuyerDelegation = "platform_oauth_bearer",
+                BuyerIdentitySource = "platform_claims_principal",
+                AuthorizationServer = request == null ? null : $"{GetRequestOrigin(request)}{request.PathBase}/",
+                ProtectedResourceMetadata = BuildProtectedResourceMetadataUrl(request),
             },
             Headers = new UcpHeaderProfile
             {
@@ -176,11 +181,6 @@ public class UcpProfileService : IUcpProfileService
                 CorrelationId = ModuleConstants.Headers.CorrelationId,
                 TraceId = ModuleConstants.Headers.TraceId,
                 IdempotencyKey = ModuleConstants.Headers.IdempotencyKey,
-                BuyerContext =
-                {
-                    ModuleConstants.Headers.BuyerUserId,
-                    ModuleConstants.Headers.BuyerOrganizationId,
-                },
             },
             Errors = new UcpErrorProfile
             {
@@ -188,6 +188,8 @@ public class UcpProfileService : IUcpProfileService
                 Codes =
                 {
                     ModuleConstants.ErrorCodes.InvalidRequest,
+                    ModuleConstants.ErrorCodes.IdentityRequired,
+                    ModuleConstants.ErrorCodes.BuyerContextMismatch,
                     ModuleConstants.ErrorCodes.MissingStoreId,
                     ModuleConstants.ErrorCodes.ProductNotFound,
                     ModuleConstants.ErrorCodes.CartNotFound,
@@ -457,6 +459,14 @@ public class UcpProfileService : IUcpProfileService
         return string.IsNullOrWhiteSpace(origin)
             ? null
             : $"{origin}{ModuleConstants.Endpoints.Mcp}";
+    }
+
+    protected virtual string BuildProtectedResourceMetadataUrl(HttpRequest request)
+    {
+        var origin = GetRequestOrigin(request);
+        return string.IsNullOrWhiteSpace(origin)
+            ? ModuleConstants.Endpoints.McpProtectedResourceMetadata
+            : origin + request.PathBase + ModuleConstants.Endpoints.McpProtectedResourceMetadata;
     }
 
     protected virtual string GetHandoffTemplate(string origin)

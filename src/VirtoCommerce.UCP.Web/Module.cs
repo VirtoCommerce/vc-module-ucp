@@ -79,6 +79,7 @@ public class Module : IModule, IHasConfiguration
             });
 
         serviceCollection.AddTransient<IUcpProfileService, UcpProfileService>();
+        serviceCollection.AddScoped<IUcpBuyerContextAccessor, UcpBuyerContextAccessor>();
         serviceCollection.AddTransient<IUcpCatalogService, UcpCatalogService>();
         serviceCollection.AddTransient<IUcpCartService, UcpCartService>();
         serviceCollection.AddTransient<IUcpCheckoutService, UcpCheckoutService>();

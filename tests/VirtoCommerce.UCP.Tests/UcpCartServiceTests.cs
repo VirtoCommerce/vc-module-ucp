@@ -1,15 +1,16 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
+using VirtoCommerce.Platform.Core.Common;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Data.Services;
-using VirtoCommerce.Platform.Core.Common;
 using Xunit;
 
 namespace VirtoCommerce.UCP.Tests;
@@ -17,6 +18,38 @@ namespace VirtoCommerce.UCP.Tests;
 [Trait("Category", "Unit")]
 public class UcpCartServiceTests
 {
+    [Fact]
+    public async Task CreateCart_RejectsInvalidSecondLineBeforeAddingFirstItem()
+    {
+        var executor = new StubXApiExecutor(CartWithOneItemJson);
+        var service = CreateService(executor);
+
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.CreateCart(new UcpCartRequest
+        {
+            LineItems =
+            {
+                new UcpCartLineItemRequest { ProductId = "product-1", Quantity = 1 },
+                new UcpCartLineItemRequest { ProductId = "product-2", Quantity = 0 },
+            },
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, exception.Code);
+        Assert.Empty(executor.Requests);
+    }
+
+    [Fact]
+    public async Task CreateCart_NullLinesReturnsStructuredError()
+    {
+        var service = CreateService(new StubXApiExecutor());
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.CreateCart(new UcpCartRequest
+        {
+            LineItems = null,
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, exception.Code);
+        Assert.Equal(400, exception.StatusCode);
+    }
+
     [Fact]
     public async Task CreateCart_AddsItemsAndCouponThroughXCart()
     {
@@ -52,7 +85,10 @@ public class UcpCartServiceTests
     [Fact]
     public async Task CreateCart_AcceptsTopLevelContextAliases()
     {
-        var executor = new StubXApiExecutor(CartWithOneItemJson);
+        var executor = new StubXApiExecutor(CartWithOneItemJson.Replace(
+            "\"customerId\":\"anonymous\"",
+            "\"customerId\":\"buyer-1\"",
+            System.StringComparison.Ordinal));
         var service = CreateService(executor, options: new UcpOptions
         {
             DefaultCurrency = "USD",
@@ -108,7 +144,9 @@ public class UcpCartServiceTests
     [Fact]
     public async Task ListCarts_RequiresBuyerContext()
     {
-        var service = CreateService(new StubXApiExecutor());
+        var service = CreateService(
+            new StubXApiExecutor(),
+            buyerContextAccessor: new TestBuyerContextAccessor());
 
         var exception = await Assert.ThrowsAsync<UcpException>(() => service.ListCarts(new UcpCartListRequest
         {
@@ -200,12 +238,65 @@ public class UcpCartServiceTests
     }
 
     [Fact]
-    public async Task UpdateCart_AdoptsExistingCartOwnerWhenBuyerContextIsMissing()
+    public async Task UpdateCart_RejectsAnonymousCartOwnedByDifferentBuyer()
     {
+        const string buyerId = "ucp-anonymous-33333333333333333333333333333333";
         var executor = new StubXApiExecutor(CartOwnedByGeneratedBuyerJson, CartQuantityChangedForGeneratedBuyerJson);
-        var service = CreateService(executor);
+        var httpContextAccessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext(),
+        };
+        var service = new UcpCartService(
+            executor,
+            httpContextAccessor,
+            Options.Create(new UcpOptions
+            {
+                DefaultStoreId = "store-acme",
+                DefaultCurrency = "USD",
+                DefaultCultureName = "en-US",
+            }),
+            buyerContextAccessor: new UcpBuyerContextAccessor(httpContextAccessor));
 
-        await service.UpdateCart("cart-1", new UcpCartRequest
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.UpdateCart("cart-1", new UcpCartRequest
+        {
+            Context = new UcpCartContext
+            {
+                BuyerId = buyerId,
+                StoreId = "store-acme",
+                Currency = "USD",
+                Language = "en-US",
+            },
+            LineItems =
+            {
+                new UcpCartLineItemRequest { Id = "line-1", ProductId = "product-1", Quantity = 3 },
+            },
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.BuyerContextMismatch, exception.Code);
+        Assert.Equal(403, exception.StatusCode);
+        Assert.Equal(["UcpGetCart"], executor.OperationNames);
+    }
+
+    [Fact]
+    public async Task UpdateCart_ProductionAccessorRejectsMissingAnonymousBuyerContext()
+    {
+        var executor = new StubXApiExecutor(CartOwnedByGeneratedBuyerJson);
+        var httpContextAccessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext(),
+        };
+        var service = new UcpCartService(
+            executor,
+            httpContextAccessor,
+            Options.Create(new UcpOptions
+            {
+                DefaultStoreId = "store-acme",
+                DefaultCurrency = "USD",
+                DefaultCultureName = "en-US",
+            }),
+            buyerContextAccessor: new UcpBuyerContextAccessor(httpContextAccessor));
+
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.UpdateCart("cart-1", new UcpCartRequest
         {
             Context = new UcpCartContext
             {
@@ -215,16 +306,159 @@ public class UcpCartServiceTests
             },
             LineItems =
             {
-                new UcpCartLineItemRequest { Id = "line-1", ProductId = "product-1", Quantity = 3 },
+                new UcpCartLineItemRequest { Id = "line-1", ProductId = "product-1", Quantity = 1 },
+            },
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, exception.Code);
+        Assert.Empty(executor.Requests);
+    }
+
+    [Theory]
+    [InlineData("product-1")]
+    [InlineData(null)]
+    public async Task UpdateCart_AuthenticatedModeMergesOwnedAnonymousCartThroughXCart(string productId)
+    {
+        const string anonymousBuyerId = "ucp-anonymous-22222222222222222222222222222222";
+        var sourceCart = CartOwnedByGeneratedBuyerJson.Replace("ucp-anonymous-generated", anonymousBuyerId, System.StringComparison.Ordinal);
+        var mergedCart = CartWithOneItemJson
+            .Replace("\"addItem\"", "\"mergeCart\"", System.StringComparison.Ordinal)
+            .Replace("\"isAnonymous\":true", "\"isAnonymous\":false", System.StringComparison.Ordinal)
+            .Replace("\"customerId\":\"anonymous\"", "\"customerId\":\"user-1\"", System.StringComparison.Ordinal)
+            .Replace("\"organizationId\":null", "\"organizationId\":\"org-1\"", System.StringComparison.Ordinal)
+            .Replace("\"cart-1\"", "\"merged-cart\"", System.StringComparison.Ordinal)
+            .Replace("\"line-1\"", "\"merged-line\"", System.StringComparison.Ordinal);
+        var executor = new StubXApiExecutor(sourceCart, mergedCart);
+        var httpContextAccessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext(),
+        };
+        httpContextAccessor.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", "user-1"),
+            new Claim(ClaimTypes.NameIdentifier, "user-1"),
+            new Claim("organization_id", "org-1"),
+        ], "Bearer"));
+        var service = new UcpCartService(
+            executor,
+            httpContextAccessor,
+            Options.Create(new UcpOptions
+            {
+                DefaultStoreId = "store-acme",
+                DefaultCurrency = "USD",
+                DefaultCultureName = "en-US",
+            }),
+            buyerContextAccessor: new UcpBuyerContextAccessor(httpContextAccessor));
+
+        var response = await service.UpdateCart("cart-1", new UcpCartRequest
+        {
+            Context = new UcpCartContext
+            {
+                BuyerId = anonymousBuyerId,
+                OrganizationId = "org-1",
+                StoreId = "store-acme",
+                Currency = "USD",
+                Language = "en-US",
+            },
+            LineItems =
+            {
+                new UcpCartLineItemRequest { Id = "line-1", ProductId = productId, Quantity = 1 },
             },
         }, TestContext.Current.CancellationToken);
 
-        var mutationCommand = executor.Requests[1].Variables["command"].AsDictionary();
+        var mergeCommand = executor.Requests[1].Variables["command"].AsDictionary();
+        Assert.Equal(["UcpGetCart", "UcpMergeCart"], executor.OperationNames);
+        Assert.Equal("cart-1", mergeCommand["secondCartId"]);
+        Assert.Equal("user-1", mergeCommand["userId"]);
+        Assert.Equal(true, mergeCommand["deleteAfterMerge"]);
+        Assert.Equal("user-1", response.Cart.BuyerId);
+        Assert.Equal("merged-cart", response.Cart.Id);
+        Assert.True(executor.Requests[1].User.Identity?.IsAuthenticated);
+    }
 
-        Assert.Equal(["UcpGetCart", "UcpChangeCartItemQuantity"], executor.OperationNames);
-        Assert.False(executor.Requests[0].Variables.ContainsKey("userId") && executor.Requests[0].Variables["userId"] != null);
-        Assert.Equal("ucp-anonymous-generated", mutationCommand["userId"]);
-        Assert.Contains(executor.Requests[1].User.Claims, claim => claim.Type == "user_id" && claim.Value == "ucp-anonymous-generated");
+    [Fact]
+    public async Task UpdateCart_InvalidLineDoesNotRemoveExistingItems()
+    {
+        var executor = new StubXApiExecutor(CartQueryJson, CartItemRemovedJson, CartItemRemovedJson);
+        var service = CreateService(executor);
+
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.UpdateCart("cart-1", new UcpCartRequest
+        {
+            LineItems = { new UcpCartLineItemRequest { Id = "missing-line", Quantity = 1 } },
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, exception.Code);
+        Assert.Equal(["UcpGetCart"], executor.OperationNames);
+    }
+
+    [Fact]
+    public async Task UpdateCart_QuantityOverflowDoesNotModifyCart()
+    {
+        var executor = new StubXApiExecutor(CartQueryJson);
+        var service = CreateService(executor);
+
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.UpdateCart("cart-1", new UcpCartRequest
+        {
+            LineItems =
+            {
+                new UcpCartLineItemRequest { ProductId = "product-1", Quantity = int.MaxValue },
+                new UcpCartLineItemRequest { ProductId = "product-1", Quantity = 1 },
+            },
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, exception.Code);
+        Assert.Equal(["UcpGetCart"], executor.OperationNames);
+    }
+
+    [Fact]
+    public async Task UpdateCart_AuthenticatedUpgradeIsIdempotentWhenAnonymousCartWasAlreadyMerged()
+    {
+        const string anonymousBuyerId = "ucp-anonymous-22222222222222222222222222222222";
+        var authenticatedCart = CartWithOneItemJson
+            .Replace("\"addItem\"", "\"cart\"", System.StringComparison.Ordinal)
+            .Replace("\"isAnonymous\":true", "\"isAnonymous\":false", System.StringComparison.Ordinal)
+            .Replace("\"customerId\":\"anonymous\"", "\"customerId\":\"user-1\"", System.StringComparison.Ordinal);
+        var executor = new StubXApiExecutor("""{"data":{"cart":null}}""", authenticatedCart);
+        var httpContextAccessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext(),
+        };
+        httpContextAccessor.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", "user-1"),
+            new Claim(ClaimTypes.NameIdentifier, "user-1"),
+        ], "Bearer"));
+        var service = new UcpCartService(
+            executor,
+            httpContextAccessor,
+            Options.Create(new UcpOptions
+            {
+                DefaultStoreId = "store-acme",
+                DefaultCurrency = "USD",
+                DefaultCultureName = "en-US",
+            }),
+            buyerContextAccessor: new UcpBuyerContextAccessor(httpContextAccessor));
+
+        var response = await service.UpdateCart("cart-1", new UcpCartRequest
+        {
+            Context = new UcpCartContext
+            {
+                BuyerId = anonymousBuyerId,
+                StoreId = "store-acme",
+                Currency = "USD",
+                Language = "en-US",
+            },
+            LineItems =
+            {
+                new UcpCartLineItemRequest { Id = "line-1", ProductId = "product-1", Quantity = 1 },
+            },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["UcpGetCart", "UcpGetCart"], executor.OperationNames);
+        Assert.Equal("user-1", response.Cart.BuyerId);
+        Assert.Null(executor.Requests[1].Variables["cartId"]);
+        Assert.Equal("user-1", executor.Requests[1].Variables["userId"]);
+        Assert.True(executor.Requests[1].User.Identity?.IsAuthenticated);
     }
 
     [Fact]
@@ -242,12 +476,25 @@ public class UcpCartServiceTests
     }
 
     [Fact]
-    public async Task GetCart_DoesNotInjectAnonymousFallbackWhenBuyerContextIsMissing()
+    public async Task GetCart_ProductionAccessorRejectsMissingAnonymousBuyerContext()
     {
         var executor = new StubXApiExecutor(CartOwnedByGeneratedBuyerJson);
-        var service = CreateService(executor);
+        var httpContextAccessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext(),
+        };
+        var service = new UcpCartService(
+            executor,
+            httpContextAccessor,
+            Options.Create(new UcpOptions
+            {
+                DefaultStoreId = "store-acme",
+                DefaultCurrency = "USD",
+                DefaultCultureName = "en-US",
+            }),
+            buyerContextAccessor: new UcpBuyerContextAccessor(httpContextAccessor));
 
-        var response = await service.GetCart("cart-1", new UcpCartRequest
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.GetCart("cart-1", new UcpCartRequest
         {
             Context = new UcpCartContext
             {
@@ -255,12 +502,10 @@ public class UcpCartServiceTests
                 Currency = "USD",
                 Language = "en-US",
             },
-        }, TestContext.Current.CancellationToken);
+        }, TestContext.Current.CancellationToken));
 
-        Assert.Equal("ucp-anonymous-generated", response.Cart.BuyerId);
-        Assert.Equal("UcpGetCart", executor.OperationNames.Single());
-        Assert.False(executor.Requests[0].Variables.ContainsKey("userId") && executor.Requests[0].Variables["userId"] != null);
-        Assert.DoesNotContain(executor.Requests[0].User.Claims, claim => claim.Type == "user_id" && claim.Value == "ucp-anonymous");
+        Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, exception.Code);
+        Assert.Empty(executor.Requests);
     }
 
     [Fact]
@@ -593,7 +838,11 @@ public class UcpCartServiceTests
         Assert.Equal(string.Empty, shippingAddress["regionName"]);
     }
 
-    private static UcpCartService CreateService(IXApiInProcessExecutor executor, ICountriesService countriesService = null, UcpOptions options = null)
+    private static UcpCartService CreateService(
+        IXApiInProcessExecutor executor,
+        ICountriesService countriesService = null,
+        UcpOptions options = null,
+        IUcpBuyerContextAccessor buyerContextAccessor = null)
     {
         var httpContextAccessor = new HttpContextAccessor
         {
@@ -612,7 +861,8 @@ public class UcpCartServiceTests
             executor,
             httpContextAccessor,
             Options.Create(options),
-            countriesService);
+            countriesService,
+            buyerContextAccessor ?? new TestBuyerContextAccessor("anonymous"));
     }
 
     private sealed class StubXApiExecutor : IXApiInProcessExecutor

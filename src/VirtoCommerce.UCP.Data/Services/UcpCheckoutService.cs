@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -10,6 +11,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
 using VirtoCommerce.Platform.Core.Common;
+using VirtoCommerce.Platform.Core.DistributedLock;
 using VirtoCommerce.StoreModule.Core.Services;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
@@ -37,19 +39,23 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
 
     private readonly IUcpCartService _cartService;
     private readonly IDistributedCache _distributedCache;
+    private readonly IDistributedLockService _distributedLock;
     private readonly IStoreService _storeService;
     private readonly UcpOptions _options;
 
     public UcpCheckoutService(
         IUcpCartService cartService,
         IDistributedCache distributedCache,
+        IDistributedLockService distributedLock,
         IHttpContextAccessor httpContextAccessor,
         IOptions<UcpOptions> options,
-        IStoreService storeService = null)
-        : base(httpContextAccessor)
+        IStoreService storeService = null,
+        IUcpBuyerContextAccessor buyerContextAccessor = null)
+        : base(httpContextAccessor, buyerContextAccessor)
     {
         _cartService = cartService;
         _distributedCache = distributedCache;
+        _distributedLock = distributedLock;
         _options = options.Value;
         _storeService = storeService;
     }
@@ -160,13 +166,28 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "ucp_session is required.");
         }
 
+        var cacheKey = GetHandoffSessionCacheKey(request.UcpSession);
+        using (await AsyncLock.GetLockByKey(cacheKey).LockAsync())
+        {
+            return await _distributedLock.ExecuteAsync(
+                cacheKey,
+                () => RestoreHandoffCore(cacheKey, cancellationToken),
+                lockTimeout: TimeSpan.FromSeconds(30),
+                tryLockTimeout: TimeSpan.FromSeconds(5),
+                retryInterval: TimeSpan.FromMilliseconds(50),
+                cancellationToken: cancellationToken);
+        }
+    }
+
+    private async Task<UcpHandoffRestoreResponse> RestoreHandoffCore(string cacheKey, CancellationToken cancellationToken)
+    {
         var cacheResult = await UcpDiagnostics.ExecuteDependency(
             "cache",
             "distributed-cache",
             "GetHandoffSession",
             async () =>
             {
-                var payloadJson = await _distributedCache.GetStringAsync(GetHandoffSessionCacheKey(request.UcpSession), cancellationToken);
+                var payloadJson = await _distributedCache.GetStringAsync(cacheKey, cancellationToken);
                 if (string.IsNullOrWhiteSpace(payloadJson))
                 {
                     return (Payload: (CheckoutHandoffTokenPayload)null, Outcome: "miss");
@@ -199,16 +220,27 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "ucp_session is invalid or expired.");
         }
 
+        var buyerContext = ResolveBuyerContext(
+            requestedBuyerIds: [payload.BuyerId],
+            requestedOrganizationIds: [payload.OrganizationId],
+            requireBuyer: true,
+            requireAuthenticatedBuyer: payload.RequiresAuthentication);
+
         var context = new UcpCartContext
         {
             StoreId = payload.StoreId,
             Currency = payload.Currency,
             Language = payload.CultureName,
-            BuyerId = payload.BuyerId,
-            OrganizationId = payload.OrganizationId,
+            BuyerId = buyerContext.PublicBuyerId,
+            OrganizationId = buyerContext.OrganizationId,
         };
 
         var cart = await GetCartForCheckout(payload.CartId, context, cancellationToken);
+        await UcpDiagnostics.ExecuteDependency(
+            "cache",
+            "distributed-cache",
+            "RemoveHandoffSession",
+            () => _distributedCache.RemoveAsync(cacheKey, cancellationToken));
         var checkout = new UcpCheckout
         {
             Id = payload.CheckoutId,
@@ -228,6 +260,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         {
             Ucp = CreateMetadata("success", HandoffCapability),
             Checkout = checkout,
+            AnonymousBuyerId = buyerContext.IsAuthenticated ? null : buyerContext.PublicBuyerId,
         };
     }
 
@@ -474,6 +507,10 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
 
     protected virtual async Task<string> StoreHandoffPayload(UcpCheckout checkout, UcpCartContext context, DateTimeOffset expiresAt, CancellationToken cancellationToken)
     {
+        var buyerContext = ResolveBuyerContext(
+            requestedBuyerIds: [checkout.Buyer?.Id, checkout.Cart?.BuyerId, context?.BuyerId],
+            requestedOrganizationIds: [checkout.Cart?.OrganizationId, context?.OrganizationId],
+            requireBuyer: true);
         var sessionToken = GenerateSessionToken();
         var payload = new CheckoutHandoffTokenPayload
         {
@@ -482,8 +519,10 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             StoreId = checkout.Cart.StoreId,
             Currency = checkout.Cart.Currency,
             CultureName = FirstNotEmpty(context?.Language, _options.DefaultCultureName, "en-US"),
-            BuyerId = checkout.Buyer?.Id,
-            OrganizationId = checkout.Cart.OrganizationId,
+            BuyerId = buyerContext.PublicBuyerId,
+            OrganizationId = buyerContext.OrganizationId,
+            RequiresAuthentication = buyerContext.IsAuthenticated,
+            IssuedAt = DateTimeOffset.UtcNow,
             Buyer = checkout.Buyer,
             ShippingAddress = checkout.ShippingAddress,
             BillingAddress = checkout.BillingAddress,
@@ -519,7 +558,9 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
 
     protected virtual string GetHandoffSessionCacheKey(string sessionToken)
     {
-        return HandoffSessionCacheKeyPrefix + sessionToken;
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionToken);
+        var tokenHash = SHA256.HashData(Encoding.UTF8.GetBytes(sessionToken));
+        return HandoffSessionCacheKeyPrefix + Convert.ToHexString(tokenHash);
     }
 
     protected virtual async Task<string> BuildContinueUrl(string token, string storeId)
@@ -551,7 +592,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
     protected virtual UcpCheckoutBuyer MergeBuyer(UcpCheckoutBuyer buyer, UcpCart cart)
     {
         buyer ??= new UcpCheckoutBuyer();
-        buyer.Id = FirstNotEmpty(buyer.Id, cart.BuyerId);
+        buyer.Id = cart.BuyerId;
         return buyer;
     }
 

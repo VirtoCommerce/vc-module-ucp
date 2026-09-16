@@ -17,57 +17,63 @@ public abstract class UcpServiceBase
     private const decimal MinorUnitScale = 100m;
 
     private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly IUcpBuyerContextAccessor _buyerContextAccessor;
 
-    protected UcpServiceBase(IHttpContextAccessor httpContextAccessor)
+    protected UcpServiceBase(
+        IHttpContextAccessor httpContextAccessor,
+        IUcpBuyerContextAccessor buyerContextAccessor = null)
     {
         _httpContextAccessor = httpContextAccessor;
+        _buyerContextAccessor = buyerContextAccessor ?? new UcpBuyerContextAccessor(httpContextAccessor);
     }
 
     protected IHttpContextAccessor HttpContextAccessor => _httpContextAccessor;
 
     protected virtual ClaimsPrincipal BuildBuyerPrincipal(string buyerUserId = null, string organizationId = null)
     {
-        var httpUser = _httpContextAccessor.HttpContext?.User;
-        buyerUserId = FirstNotEmpty(buyerUserId, GetBuyerUserId());
-        organizationId = FirstNotEmpty(organizationId, GetBuyerOrganizationId());
-
-        if (string.IsNullOrWhiteSpace(buyerUserId) && string.IsNullOrWhiteSpace(organizationId))
-        {
-            return httpUser;
-        }
-
-        var claims = new List<Claim>();
-        if (httpUser != null)
-        {
-            claims.AddRange(httpUser.Claims);
-        }
-
-        if (!string.IsNullOrWhiteSpace(buyerUserId))
-        {
-            claims.Add(new Claim(ClaimTypes.NameIdentifier, buyerUserId));
-            claims.Add(new Claim("sub", buyerUserId));
-            claims.Add(new Claim("user_id", buyerUserId));
-        }
-
-        if (!string.IsNullOrWhiteSpace(organizationId))
-        {
-            claims.Add(new Claim("organization_id", organizationId));
-            claims.Add(new Claim("OrganizationId", organizationId));
-            claims.Add(new Claim("org_id", organizationId));
-            claims.Add(new Claim("virto:organization_id", organizationId));
-        }
-
-        return new ClaimsPrincipal(new ClaimsIdentity(claims, "ucp_delegated_buyer"));
+        return ResolveBuyerContext(
+            requestedBuyerIds: [buyerUserId],
+            requestedOrganizationIds: [organizationId]).Principal;
     }
 
     protected virtual string GetBuyerUserId()
     {
-        return GetHeader(ModuleConstants.Headers.BuyerUserId);
+        return ResolveBuyerContext().UserId;
     }
 
     protected virtual string GetBuyerOrganizationId()
     {
-        return GetHeader(ModuleConstants.Headers.BuyerOrganizationId);
+        return ResolveBuyerContext().OrganizationId;
+    }
+
+    protected virtual UcpBuyerContext ResolveBuyerContext(
+        IEnumerable<string> requestedBuyerIds = null,
+        IEnumerable<string> requestedOrganizationIds = null,
+        bool createAnonymousBuyer = false,
+        bool requireBuyer = false,
+        bool requireAuthenticatedBuyer = false)
+    {
+        return _buyerContextAccessor.Resolve(new UcpBuyerContextRequest
+        {
+            RequestedBuyerIds = requestedBuyerIds,
+            RequestedOrganizationIds = requestedOrganizationIds,
+            CreateAnonymousBuyer = createAnonymousBuyer,
+            RequireBuyer = requireBuyer,
+            RequireAuthenticatedBuyer = requireAuthenticatedBuyer,
+        });
+    }
+
+    protected static ClaimsPrincipal BuildAnonymousBuyerPrincipal(string buyerUserId)
+    {
+        var identity = new ClaimsIdentity();
+        if (!string.IsNullOrWhiteSpace(buyerUserId))
+        {
+            identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, buyerUserId));
+            identity.AddClaim(new Claim("sub", buyerUserId));
+            identity.AddClaim(new Claim("user_id", buyerUserId));
+        }
+
+        return new ClaimsPrincipal(identity);
     }
 
     protected virtual string GetHeader(string name)

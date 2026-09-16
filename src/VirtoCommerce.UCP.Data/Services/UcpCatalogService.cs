@@ -27,8 +27,9 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
     public UcpCatalogService(
         IXApiInProcessExecutor xApiExecutor,
         IHttpContextAccessor httpContextAccessor,
-        IOptions<UcpOptions> options)
-        : base(httpContextAccessor)
+        IOptions<UcpOptions> options,
+        IUcpBuyerContextAccessor buyerContextAccessor = null)
+        : base(httpContextAccessor, buyerContextAccessor)
     {
         _xApiExecutor = xApiExecutor;
         _options = options.Value;
@@ -38,11 +39,12 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
     {
         request ??= new UcpCatalogSearchRequest();
         var catalogRequest = BuildCatalogExecutionRequest(request);
+        var buyerContext = ResolveBuyerContext();
 
         var variables = new Dictionary<string, object>
         {
             ["storeId"] = catalogRequest.StoreId,
-            ["userId"] = GetBuyerUserId(),
+            ["userId"] = buyerContext.UserId,
             ["currencyCode"] = catalogRequest.Currency,
             ["cultureName"] = catalogRequest.CultureName,
             ["query"] = request.Query,
@@ -55,7 +57,7 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
             Query = SearchProductsQuery,
             OperationName = "UcpSearchProducts",
             Variables = variables,
-            User = BuildBuyerPrincipal(),
+            User = buyerContext.Principal,
         }, cancellationToken);
 
         using var document = ParseGraphQlResult(result, "XCatalog", IsRecoverablePropertyValueError);
@@ -71,7 +73,7 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
             .Where(product => catalogRequest.MaxPrice == null || product.Price == null || product.Price.Amount <= catalogRequest.MaxPrice.Value)
             .ToList();
 
-        return new UcpCatalogSearchResponse
+        var response = new UcpCatalogSearchResponse
         {
             Ucp = CreateMetadata("success", "dev.ucp.shopping.catalog.search"),
             Products = mappedProducts,
@@ -81,6 +83,9 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
                 HasNextPage = ReadInt(products, "totalCount", mappedProducts.Count) > mappedProducts.Count,
             },
         };
+        AddIdentityOptionalMessage(response.Messages, buyerContext);
+
+        return response;
     }
 
     public virtual async Task<UcpProductResponse> GetProduct(string productId, UcpCatalogSearchRequest request, CancellationToken cancellationToken = default)
@@ -89,12 +94,13 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
 
         request ??= new UcpCatalogSearchRequest();
         var catalogRequest = BuildCatalogExecutionRequest(request);
+        var buyerContext = ResolveBuyerContext();
 
         var variables = new Dictionary<string, object>
         {
             ["id"] = productId,
             ["storeId"] = catalogRequest.StoreId,
-            ["userId"] = GetBuyerUserId(),
+            ["userId"] = buyerContext.UserId,
             ["currencyCode"] = catalogRequest.Currency,
             ["cultureName"] = catalogRequest.CultureName,
         };
@@ -104,7 +110,7 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
             Query = GetProductQuery,
             OperationName = "UcpGetProduct",
             Variables = variables,
-            User = BuildBuyerPrincipal(),
+            User = buyerContext.Principal,
         }, cancellationToken);
 
         using var document = ParseGraphQlResult(result, "XCatalog", IsRecoverablePropertyValueError);
@@ -117,19 +123,37 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
             throw CreateException(ModuleConstants.ErrorCodes.ProductNotFound, $"Product '{productId}' was not found.", StatusCodes.Status404NotFound);
         }
 
-        await EnsureProductBelongsToStore(productId, productElement, catalogRequest, cancellationToken);
+        await EnsureProductBelongsToStore(productId, productElement, catalogRequest, buyerContext, cancellationToken);
 
-        return new UcpProductResponse
+        var response = new UcpProductResponse
         {
             Ucp = CreateMetadata("success", "dev.ucp.shopping.catalog.lookup"),
             Product = ReadProduct(productElement),
         };
+        AddIdentityOptionalMessage(response.Messages, buyerContext);
+
+        return response;
+    }
+
+    private static void AddIdentityOptionalMessage(ICollection<UcpMessage> messages, UcpBuyerContext buyerContext)
+    {
+        if (!buyerContext.IsAuthenticated)
+        {
+            messages.Add(new UcpMessage
+            {
+                Type = "info",
+                Code = ModuleConstants.ErrorCodes.IdentityOptional,
+                Content = "This response is anonymous. If the user asked to use their account, organization, personalized pricing, saved data, or orders, call link_buyer_identity and repeat this operation before continuing.",
+                Severity = "info",
+            });
+        }
     }
 
     private async Task EnsureProductBelongsToStore(
         string productId,
         JsonElement product,
         CatalogExecutionRequest catalogRequest,
+        UcpBuyerContext buyerContext,
         CancellationToken cancellationToken)
     {
         var lookupText = FirstNotEmpty(ReadString(product, "code"), ReadString(product, "name"));
@@ -140,13 +164,13 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
             Variables = new Dictionary<string, object>
             {
                 ["storeId"] = catalogRequest.StoreId,
-                ["userId"] = GetBuyerUserId(),
+                ["userId"] = buyerContext.UserId,
                 ["currencyCode"] = catalogRequest.Currency,
                 ["cultureName"] = catalogRequest.CultureName,
                 ["query"] = lookupText,
                 ["first"] = MaxLimit,
             },
-            User = BuildBuyerPrincipal(),
+            User = buyerContext.Principal,
         }, cancellationToken);
 
         using var document = ParseGraphQlResult(result, "XCatalog");

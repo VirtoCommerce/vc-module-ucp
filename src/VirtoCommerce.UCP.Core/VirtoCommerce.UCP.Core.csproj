@@ -4,6 +4,6 @@
     <SonarQubeTestProject>false</SonarQubeTestProject>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="VirtoCommerce.Platform.Core" Version="3.1039.0" />
+    <PackageReference Include="VirtoCommerce.Platform.Core" Version="3.1066.0-alpha.13384-vcst-5378-unified-buyer-flow" />
   </ItemGroup>
 </Project>

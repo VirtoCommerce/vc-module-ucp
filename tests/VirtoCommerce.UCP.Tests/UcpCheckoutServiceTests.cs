@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -10,6 +11,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
+using VirtoCommerce.Platform.Core.DistributedLock;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Models;
@@ -47,7 +49,9 @@ public class UcpCheckoutServiceTests
     {
         var cart = CreateCart();
         cart.Addresses.Add(CreateShippingAddress());
-        var service = CreateService(new StubCartService(cart));
+        var cache = new StubDistributedCache();
+        var distributedLock = new TestDistributedLockService();
+        var service = CreateService(new StubCartService(cart), cache, distributedLock);
 
         var handoff = await service.HandoffCheckout("cart-1", new UcpCheckoutRequest
         {
@@ -60,6 +64,17 @@ public class UcpCheckoutServiceTests
         Assert.Contains(handoff.Messages, x => x.Code == "shipping_required");
 
         var token = handoff.Checkout.ContinueUrl.Split("ucp_session=").Last();
+        var cacheKey = GetHandoffCacheKey(token);
+        Assert.DoesNotContain(token, cacheKey, StringComparison.Ordinal);
+        var payloadJson = Encoding.UTF8.GetString(cache.Get(cacheKey));
+        using (var payload = JsonDocument.Parse(payloadJson))
+        {
+            Assert.True(payload.RootElement.TryGetProperty("issued_at", out _));
+            Assert.True(payload.RootElement.TryGetProperty("expires_at", out _));
+            Assert.False(payload.RootElement.TryGetProperty("access_token", out _));
+            Assert.False(payload.RootElement.TryGetProperty("refresh_token", out _));
+            Assert.DoesNotContain(token, payloadJson, StringComparison.Ordinal);
+        }
         var restore = await service.RestoreHandoff(new UcpHandoffRestoreRequest
         {
             UcpSession = System.Uri.UnescapeDataString(token),
@@ -68,6 +83,120 @@ public class UcpCheckoutServiceTests
         Assert.Equal("cart-1", restore.Checkout.CartId);
         Assert.Equal("buyer@example.com", restore.Checkout.Buyer.Email);
         Assert.Equal("buyer-1", restore.Checkout.Buyer.Id);
+        Assert.Equal("buyer-1", restore.AnonymousBuyerId);
+        Assert.Contains(cacheKey, distributedLock.ResourceKeys);
+
+        var replay = await Assert.ThrowsAsync<UcpException>(() => service.RestoreHandoff(new UcpHandoffRestoreRequest
+        {
+            UcpSession = token,
+        }, TestContext.Current.CancellationToken));
+        Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, replay.Code);
+    }
+
+    [Fact]
+    public async Task CreateCheckout_IgnoresBuyerIdFromBuyerPayload()
+    {
+        var service = CreateService(new StubCartService(CreateCart()));
+
+        var response = await service.CreateCheckout(new UcpCheckoutRequest
+        {
+            CartId = "cart-1",
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+            Buyer = new UcpCheckoutBuyer { Id = "forged-buyer", Email = "buyer@example.com" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("buyer-1", response.Checkout.Buyer.Id);
+        Assert.Equal("buyer@example.com", response.Checkout.Buyer.Email);
+    }
+
+    [Fact]
+    public async Task RestoreHandoff_AuthenticatedPayloadRejectsDifferentPlatformBuyer()
+    {
+        var cart = CreateCart();
+        cart.BuyerId = "user-1";
+        cart.OrganizationId = "org-1";
+        cart.Addresses.Add(CreateShippingAddress());
+        var httpContextAccessor = new HttpContextAccessor { HttpContext = new DefaultHttpContext() };
+        httpContextAccessor.HttpContext.User = CreateAuthenticatedPrincipal("user-1", "org-1");
+        var service = new UcpCheckoutService(
+            new StubCartService(cart),
+            new StubDistributedCache(),
+            new TestDistributedLockService(),
+            httpContextAccessor,
+            Options.Create(new UcpOptions
+            {
+                DefaultStoreId = "store-acme",
+                DefaultCurrency = "USD",
+                DefaultCultureName = "en-US",
+                HandoffUrlTemplate = "https://storefront.example/checkout?ucp_session={token}",
+            }),
+            buyerContextAccessor: new UcpBuyerContextAccessor(httpContextAccessor));
+        var handoff = await service.HandoffCheckout("cart-1", new UcpCheckoutRequest
+        {
+            Context = new UcpCartContext
+            {
+                BuyerId = "user-1",
+                OrganizationId = "org-1",
+                StoreId = "store-acme",
+                Currency = "USD",
+                Language = "en-US",
+            },
+        }, TestContext.Current.CancellationToken);
+        var token = Uri.UnescapeDataString(handoff.Checkout.ContinueUrl.Split("ucp_session=").Last());
+        httpContextAccessor.HttpContext.User = CreateAuthenticatedPrincipal("user-2", "org-1");
+
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.RestoreHandoff(new UcpHandoffRestoreRequest
+        {
+            UcpSession = token,
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.BuyerContextMismatch, exception.Code);
+        Assert.Equal(StatusCodes.Status403Forbidden, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task RestoreHandoff_AuthenticatedPayloadRequiresPlatformBuyer()
+    {
+        var cart = CreateCart();
+        cart.BuyerId = "user-1";
+        cart.OrganizationId = "org-1";
+        cart.Addresses.Add(CreateShippingAddress());
+        var httpContextAccessor = new HttpContextAccessor { HttpContext = new DefaultHttpContext() };
+        httpContextAccessor.HttpContext.User = CreateAuthenticatedPrincipal("user-1", "org-1");
+        var service = new UcpCheckoutService(
+            new StubCartService(cart),
+            new StubDistributedCache(),
+            new TestDistributedLockService(),
+            httpContextAccessor,
+            Options.Create(new UcpOptions
+            {
+                DefaultStoreId = "store-acme",
+                DefaultCurrency = "USD",
+                DefaultCultureName = "en-US",
+                HandoffUrlTemplate = "https://storefront.example/checkout?ucp_session={token}",
+            }),
+            buyerContextAccessor: new UcpBuyerContextAccessor(httpContextAccessor));
+        var handoff = await service.HandoffCheckout("cart-1", new UcpCheckoutRequest
+        {
+            Context = new UcpCartContext
+            {
+                BuyerId = "user-1",
+                OrganizationId = "org-1",
+                StoreId = "store-acme",
+                Currency = "USD",
+                Language = "en-US",
+            },
+        }, TestContext.Current.CancellationToken);
+        var token = Uri.UnescapeDataString(handoff.Checkout.ContinueUrl.Split("ucp_session=").Last());
+        httpContextAccessor.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity());
+
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.RestoreHandoff(new UcpHandoffRestoreRequest
+        {
+            UcpSession = token,
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.IdentityRequired, exception.Code);
+        Assert.Equal(StatusCodes.Status401Unauthorized, exception.StatusCode);
     }
 
     [Fact]
@@ -103,7 +232,7 @@ public class UcpCheckoutServiceTests
         var cache = new StubDistributedCache();
         if (payloadJson != null)
         {
-            cache.SetRaw($"UCP:Handoff:{token}", payloadJson);
+            cache.SetRaw(GetHandoffCacheKey(token), payloadJson);
         }
         var service = CreateService(new StubCartService(CreateCart()), cache);
 
@@ -367,7 +496,10 @@ public class UcpCheckoutServiceTests
         Assert.Contains("shipping_address.first_name", exception.Message);
     }
 
-    private static UcpCheckoutService CreateService(IUcpCartService cartService, IDistributedCache distributedCache = null)
+    private static UcpCheckoutService CreateService(
+        IUcpCartService cartService,
+        IDistributedCache distributedCache = null,
+        IDistributedLockService distributedLock = null)
     {
         var httpContextAccessor = new HttpContextAccessor
         {
@@ -378,6 +510,7 @@ public class UcpCheckoutServiceTests
         return new UcpCheckoutService(
             cartService,
             distributedCache ?? new StubDistributedCache(),
+            distributedLock ?? new TestDistributedLockService(),
             httpContextAccessor,
             Options.Create(new UcpOptions
             {
@@ -386,7 +519,14 @@ public class UcpCheckoutServiceTests
                 DefaultCultureName = "en-US",
                 StorefrontOrigin = "https://storefront.example",
                 HandoffUrlTemplate = "https://storefront.example/checkout?ucp_session={token}",
-            }));
+            }),
+            buyerContextAccessor: new TestBuyerContextAccessor());
+    }
+
+    private static string GetHandoffCacheKey(string sessionToken)
+    {
+        var tokenHash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(sessionToken));
+        return "UCP:Handoff:" + Convert.ToHexString(tokenHash);
     }
 
     private static ActivityListener CreateActivityListener(string parentSourceName, ConcurrentQueue<Activity> stopped)
@@ -424,6 +564,16 @@ public class UcpCheckoutServiceTests
                 Total = new UcpMoney { Amount = 1000, Currency = "USD", FormattedAmount = "$10.00" },
             },
         };
+    }
+
+    private static ClaimsPrincipal CreateAuthenticatedPrincipal(string userId, string organizationId)
+    {
+        return new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", userId),
+            new Claim(ClaimTypes.NameIdentifier, userId),
+            new Claim("organization_id", organizationId),
+        ], "Bearer"));
     }
 
     private static UcpCartAddress CreateShippingAddress()
@@ -543,6 +693,35 @@ public class UcpCheckoutServiceTests
         public void SetRaw(string key, string value)
         {
             _items[key] = Encoding.UTF8.GetBytes(value);
+        }
+    }
+
+    private sealed class TestDistributedLockService : IDistributedLockService
+    {
+        public ConcurrentQueue<string> ResourceKeys { get; } = new();
+
+        public T Execute<T>(
+            string resourceKey,
+            Func<T> resolver,
+            TimeSpan? lockTimeout = null,
+            TimeSpan? tryLockTimeout = null,
+            TimeSpan? retryInterval = null,
+            CancellationToken? cancellationToken = null)
+        {
+            ResourceKeys.Enqueue(resourceKey);
+            return resolver();
+        }
+
+        public Task<T> ExecuteAsync<T>(
+            string resourceKey,
+            Func<Task<T>> resolver,
+            TimeSpan? lockTimeout = null,
+            TimeSpan? tryLockTimeout = null,
+            TimeSpan? retryInterval = null,
+            CancellationToken? cancellationToken = null)
+        {
+            ResourceKeys.Enqueue(resourceKey);
+            return resolver();
         }
     }
 }

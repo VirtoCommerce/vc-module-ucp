@@ -18,6 +18,19 @@ public static class ModuleConstants
         Commerce tools execute local UCP services directly in this platform process.
         Do not use browser/web/search tools to execute UCP operations when MCP tools are available.
         MCP tool calls are stateless. Arguments from earlier calls are never carried automatically.
+        For ordinary public shopping requests, call commerce tools directly without linking an account.
+        When the user explicitly asks to act on their behalf, use their account, personalized prices, organization,
+        saved data, or orders, you MUST call link_buyer_identity before any buyer-sensitive commerce tool.
+        Do not call search_products, get_product, create_cart, list_carts, get_cart, update_cart, checkout, or order tools
+        for that request until link_buyer_identity succeeds. The MCP transport then completes Platform OAuth and retries the same call.
+        A successful anonymous catalog response can include an info message with code identity_optional.
+        If the current user request asks for their account, organization, personalized data, or action on their behalf,
+        treat identity_optional as an instruction to call link_buyer_identity and then repeat the exact catalog operation before any mutation.
+        Buyer and organization identity always come from the validated Platform bearer token. Never send identity headers and never invent buyer or organization identifiers.
+        If the user begins anonymously and later asks to continue on their behalf, call link_buyer_identity,
+        then call update_cart with the saved anonymous buyer_id, cart_id, and the complete desired line_items state.
+        The server verifies anonymous ownership and delegates the idempotent merge to XCart.
+        A request carrying a valid Platform user token is authenticated. To make a genuinely anonymous request after linking, the client must omit that token or reconnect without it to this same MCP URL and tool set.
         Before every tool call, build a fresh argument object, check the tool's required schema, and explicitly repeat every required identifier and nested field.
         For every catalog, cart, or checkout tool that exposes store_id, always pass it. Reuse the exact store_id from the catalog call that returned the selected product and continue using it for cart and checkout calls.
         When store_id, currency, or language are unknown, call get_store_capabilities first and use the returned store metadata.
@@ -35,7 +48,7 @@ public static class ModuleConstants
         Resolve country with resolve_country and, when the country defines regions, resolve region_id with list_regions before checkout. City remains free text.
         Before resolve_country, require query. Before list_regions, require country_id. Before track_order, require at least one of order_id, order_number, or the saved cart_id.
         Treat price.amount as the current sell price and list_price.amount as the pre-discount reference price.
-        list_carts requires an explicit buyer_id. Preserve and reuse cart.buyer_id from cart responses; do not request a global anonymous cart list. buyer_id is buyer scope, not Platform authentication.
+        list_carts requires buyer_id for anonymous continuation. In authenticated mode, buyer identity and organization come only from the Platform token; never invent or request identity fields from the user.
         update_cart accepts the complete desired line_items state, not a delta. Reuse the existing cart_id and buyer_id; never call create_cart as a fallback for changing an existing cart.
         After create_cart or update_cart, inspect line_items and messages. If an expected line is missing, call get_cart once to account for asynchronous settling; do not claim that an item was added unless the re-read contains it.
         XAPI GraphQL errors are returned unchanged in MCP structuredContent. Inspect their codes, paths, locations, extensions, and partial data before deciding what to do.
@@ -78,6 +91,9 @@ public static class ModuleConstants
 
     public static class ErrorCodes
     {
+        public const string IdentityOptional = "identity_optional";
+        public const string IdentityRequired = "identity_required";
+        public const string BuyerContextMismatch = "buyer_context_mismatch";
         public const string MissingStoreId = "missing_store_id";
         public const string ProductNotFound = "product_not_found";
         public const string CartNotFound = "cart_not_found";
@@ -91,6 +107,7 @@ public static class ModuleConstants
     {
         public const string Discovery = "/.well-known/ucp";
         public const string Mcp = "/ucp/mcp";
+        public const string McpProtectedResourceMetadata = "/.well-known/oauth-protected-resource/ucp/mcp";
         public const string CatalogSearch = "/ucp/v1/catalog/search";
         public const string CatalogProduct = "/ucp/v1/catalog/products/{id}";
         public const string CartCreate = "/ucp/v1/carts";
@@ -128,6 +145,7 @@ public static class ModuleConstants
         public const string ResolveCountry = "resolve_country";
         public const string ListRegions = "list_regions";
         public const string RestoreHandoff = "restore_handoff";
+        public const string LinkBuyerIdentity = "link_buyer_identity";
     }
 
     public static class McpTools
@@ -168,6 +186,7 @@ public static class ModuleConstants
         public const string ListCountries = Operations.ListCountries;
         public const string ResolveCountry = Operations.ResolveCountry;
         public const string ListRegions = Operations.ListRegions;
+        public const string LinkBuyerIdentity = Operations.LinkBuyerIdentity;
 
         public static bool IsUcpTool(string name)
         {

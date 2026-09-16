@@ -12,6 +12,8 @@ internal sealed class CheckoutHandoffTokenPayload
     public string CultureName { get; set; }
     public string BuyerId { get; set; }
     public string OrganizationId { get; set; }
+    public bool RequiresAuthentication { get; set; }
+    public DateTimeOffset IssuedAt { get; set; }
     public UcpCheckoutBuyer Buyer { get; set; }
     public UcpCheckoutAddress ShippingAddress { get; set; }
     public UcpCheckoutAddress BillingAddress { get; set; }

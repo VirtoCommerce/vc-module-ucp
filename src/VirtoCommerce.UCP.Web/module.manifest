@@ -4,7 +4,7 @@
   <version>3.1006.0</version>
   <version-tag></version-tag>
 
-  <platformVersion>3.1039.0</platformVersion>
+  <platformVersion>3.1066.0-alpha.13384-vcst-5378-unified-buyer-flow</platformVersion>
   <dependencies>
     <dependency id="VirtoCommerce.Xapi" version="3.1015.0" />
     <dependency id="VirtoCommerce.XCatalog" version="3.1000.0" />

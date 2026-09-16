@@ -47,6 +47,23 @@ public class UcpMcpCommerceToolsTests
     }
 
     [Fact]
+    public void IdentityLinkingTool_IsSeparateFromCommerceSchemasAndHasNoBuyerSelector()
+    {
+        var method = typeof(UcpMcpIdentityTools).GetMethod(nameof(UcpMcpIdentityTools.LinkBuyerIdentity));
+        var attribute = method?.GetCustomAttribute<McpServerToolAttribute>();
+        var description = method?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description;
+        var parameters = method?.GetParameters().Select(parameter => parameter.Name).ToArray();
+
+        Assert.Equal(ModuleConstants.McpTools.LinkBuyerIdentity, attribute?.Name);
+        Assert.DoesNotContain("buyer_mode", parameters);
+        Assert.DoesNotContain("buyer_id", parameters);
+        Assert.DoesNotContain(ModuleConstants.McpTools.LinkBuyerIdentity, ModuleConstants.McpTools.UcpToolNames);
+        Assert.StartsWith("REQUIRED first step", description);
+        Assert.Contains("Platform OAuth", description);
+        Assert.Contains("for my organization", description);
+    }
+
+    [Fact]
     public void UcpMcpTools_DoNotAcceptStorefrontUrl()
     {
         var parameterNames = typeof(UcpMcpCommerceTools)
@@ -116,11 +133,42 @@ public class UcpMcpCommerceToolsTests
             ?.Description;
 
         Assert.Contains("minor currency units", searchParameters["price_max"].GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
-        Assert.Contains("explicit buyer_id is required", listCartsMethod?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
-        Assert.Contains("Required buyer user id", listCartsBuyerParameter?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
-        Assert.NotNull(listCartsBuyerParameter?.GetCustomAttribute<System.ComponentModel.DataAnnotations.RequiredAttribute>());
+        Assert.Contains("buyer-scoped carts", listCartsMethod?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
+        Assert.Contains("Required for anonymous continuation", listCartsBuyerParameter?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
+        Assert.Null(listCartsBuyerParameter?.GetCustomAttribute<System.ComponentModel.DataAnnotations.RequiredAttribute>());
         Assert.Contains("shipping_address.postal_code", checkoutDescription);
         Assert.Contains("ask the user", checkoutDescription);
+    }
+
+    [Fact]
+    public void BuyerSensitiveToolDescriptions_RouteAccountIntentThroughIdentityLinking()
+    {
+        var methods = new[]
+        {
+            nameof(UcpMcpCommerceTools.SearchProducts),
+            nameof(UcpMcpCommerceTools.GetProduct),
+            nameof(UcpMcpCommerceTools.CreateCart),
+            nameof(UcpMcpCommerceTools.ListCarts),
+            nameof(UcpMcpCommerceTools.GetCart),
+            nameof(UcpMcpCommerceTools.UpdateCart),
+            nameof(UcpMcpCommerceTools.CreateCheckout),
+            nameof(UcpMcpCommerceTools.UpdateCheckout),
+            nameof(UcpMcpCommerceTools.GetPaymentHandlers),
+            nameof(UcpMcpCommerceTools.CheckoutAndHandoff),
+            nameof(UcpMcpCommerceTools.HandoffCheckout),
+            nameof(UcpMcpCommerceTools.TrackOrder),
+        };
+
+        foreach (var methodName in methods)
+        {
+            var description = typeof(UcpMcpCommerceTools)
+                .GetMethod(methodName)
+                ?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()
+                ?.Description;
+
+            Assert.Contains(ModuleConstants.McpTools.LinkBuyerIdentity, description);
+            Assert.Contains("do not call", description, System.StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [Fact]
@@ -135,7 +183,7 @@ public class UcpMcpCommerceToolsTests
     }
 
     [Fact]
-    public void McpToolSchemas_RequireBuyerIdAndKeepPricesNumeric()
+    public void McpToolSchemas_DoNotExposeBuyerModeAndKeepPricesNumeric()
     {
         using var services = new ServiceCollection()
             .AddSingleton<IUcpProfileService>(_ => null)
@@ -157,16 +205,17 @@ public class UcpMcpCommerceToolsTests
             options);
 
         var searchProperties = searchTool.ProtocolTool.InputSchema.GetProperty("properties");
-        var listCartsRequired = listCartsTool.ProtocolTool.InputSchema.GetProperty("required")
-            .EnumerateArray()
-            .Select(element => element.GetString())
-            .ToArray();
+        var listCartsSchema = listCartsTool.ProtocolTool.InputSchema;
+        var listCartsRequired = listCartsSchema.TryGetProperty("required", out var required)
+            ? required.EnumerateArray().Select(element => element.GetString()).ToArray()
+            : [];
 
         Assert.Contains("integer", GetSchemaTypes(searchProperties.GetProperty("price_min")));
         Assert.Contains("integer", GetSchemaTypes(searchProperties.GetProperty("price_max")));
         Assert.DoesNotContain("string", GetSchemaTypes(searchProperties.GetProperty("price_min")));
         Assert.DoesNotContain("string", GetSchemaTypes(searchProperties.GetProperty("price_max")));
-        Assert.Contains("buyer_id", listCartsRequired);
+        Assert.DoesNotContain("buyer_mode", listCartsSchema.GetProperty("properties").EnumerateObject().Select(property => property.Name));
+        Assert.DoesNotContain("buyer_id", listCartsRequired);
     }
 
     [Fact]
@@ -188,15 +237,15 @@ public class UcpMcpCommerceToolsTests
         {
             [nameof(UcpMcpCommerceTools.SearchProducts)] = ["query", "store_id", "currency", "language", "price_min", "price_max", "limit"],
             [nameof(UcpMcpCommerceTools.GetProduct)] = ["id", "product_id", "store_id", "currency", "language"],
-            [nameof(UcpMcpCommerceTools.CreateCart)] = ["line_items", "store_id", "currency", "language", "buyer_id", "organization_id", "cart_name", "cart_type", "coupons"],
-            [nameof(UcpMcpCommerceTools.ListCarts)] = ["store_id", "currency", "language", "buyer_id", "organization_id", "cart_name", "cart_type", "cursor", "limit", "sort"],
-            [nameof(UcpMcpCommerceTools.GetCart)] = ["cart_id", "store_id", "currency", "language", "buyer_id", "organization_id"],
-            [nameof(UcpMcpCommerceTools.UpdateCart)] = ["cart_id", "line_items", "store_id", "currency", "language", "buyer_id", "organization_id", "cart_name", "cart_type", "coupons"],
-            [nameof(UcpMcpCommerceTools.CreateCheckout)] = ["cart_id", "store_id", "currency", "language", "buyer_id", "organization_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
-            [nameof(UcpMcpCommerceTools.UpdateCheckout)] = ["checkout_id", "cart_id", "store_id", "currency", "language", "buyer_id", "organization_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
-            [nameof(UcpMcpCommerceTools.CheckoutAndHandoff)] = ["cart_id", "store_id", "currency", "language", "buyer_id", "organization_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
-            [nameof(UcpMcpCommerceTools.HandoffCheckout)] = ["checkout_id", "cart_id", "store_id", "currency", "language", "buyer_id", "organization_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
-            [nameof(UcpMcpCommerceTools.TrackOrder)] = ["order_id", "order_number", "cart_id", "store_id", "currency", "language", "buyer_id", "organization_id"],
+            [nameof(UcpMcpCommerceTools.CreateCart)] = ["line_items", "store_id", "currency", "language", "buyer_id", "cart_name", "cart_type", "coupons"],
+            [nameof(UcpMcpCommerceTools.ListCarts)] = ["store_id", "currency", "language", "buyer_id", "cart_name", "cart_type", "cursor", "limit", "sort"],
+            [nameof(UcpMcpCommerceTools.GetCart)] = ["cart_id", "store_id", "currency", "language", "buyer_id"],
+            [nameof(UcpMcpCommerceTools.UpdateCart)] = ["cart_id", "line_items", "store_id", "currency", "language", "buyer_id", "cart_name", "cart_type", "coupons"],
+            [nameof(UcpMcpCommerceTools.CreateCheckout)] = ["cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
+            [nameof(UcpMcpCommerceTools.UpdateCheckout)] = ["checkout_id", "cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
+            [nameof(UcpMcpCommerceTools.CheckoutAndHandoff)] = ["cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
+            [nameof(UcpMcpCommerceTools.HandoffCheckout)] = ["checkout_id", "cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
+            [nameof(UcpMcpCommerceTools.TrackOrder)] = ["order_id", "order_number", "cart_id", "store_id", "currency", "language", "buyer_id"],
         };
 
         foreach (var (methodName, expectedProperties) in expectedSchemas)
@@ -224,8 +273,13 @@ public class UcpMcpCommerceToolsTests
         Assert.Contains("complete desired line_items state", ModuleConstants.McpInstructions);
         Assert.Contains("never call create_cart as a fallback", ModuleConstants.McpInstructions);
         Assert.Contains("saved cart_id and buyer_id", ModuleConstants.McpInstructions);
-        Assert.Contains("list_carts requires an explicit buyer_id", ModuleConstants.McpInstructions);
-        Assert.Contains("buyer scope, not Platform authentication", ModuleConstants.McpInstructions);
+        Assert.Contains("list_carts requires buyer_id for anonymous continuation", ModuleConstants.McpInstructions);
+        Assert.Contains("buyer identity and organization come only from the Platform token", ModuleConstants.McpInstructions);
+        Assert.Contains("call link_buyer_identity", ModuleConstants.McpInstructions);
+        Assert.Contains("you MUST call link_buyer_identity", ModuleConstants.McpInstructions);
+        Assert.Contains(ModuleConstants.ErrorCodes.IdentityOptional, ModuleConstants.McpInstructions);
+        Assert.Contains("repeat the exact catalog operation", ModuleConstants.McpInstructions);
+        Assert.DoesNotContain("buyer_mode", ModuleConstants.McpInstructions);
         Assert.Contains("MCP tool calls are stateless", ModuleConstants.McpInstructions);
         Assert.Contains("build a fresh argument object", ModuleConstants.McpInstructions);
         Assert.Contains("every new line item requires product_id and quantity greater than zero", ModuleConstants.McpInstructions);
@@ -237,17 +291,18 @@ public class UcpMcpCommerceToolsTests
     }
 
     [Fact]
-    public async Task ListCarts_MissingBuyerId_ThrowsUcpExceptionForTransportFilter()
+    public async Task ListCarts_MissingBuyerId_IsResolvedByUnifiedBuyerContext()
     {
-        var exception = await Assert.ThrowsAsync<UcpException>(() => UcpMcpCommerceTools.ListCarts(
-            null,
-            null,
-            buyer_id: null,
-            cancellationToken: TestContext.Current.CancellationToken));
+        var cartService = new CaptureCartService();
 
-        Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, exception.Code);
-        Assert.Equal(400, exception.StatusCode);
-        Assert.Equal("buyer_id is required to list carts.", exception.Message);
+        await UcpMcpCommerceTools.ListCarts(
+            new StubProfileService(new UcpProfile()),
+            cartService,
+            buyer_id: null,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(cartService.LastListRequest);
+        Assert.Null(cartService.LastListRequest.Context.BuyerId);
     }
 
     [Fact]
@@ -397,6 +452,37 @@ public class UcpMcpCommerceToolsTests
         {
             LastRequest = request;
             return Task.FromResult(new UcpProductResponse());
+        }
+    }
+
+    private sealed class CaptureCartService : IUcpCartService
+    {
+        public UcpCartListRequest LastListRequest { get; private set; }
+
+        public Task<UcpCartResponse> CreateCart(UcpCartRequest request, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<UcpCartResponse>(null);
+        }
+
+        public Task<UcpCartListResponse> ListCarts(UcpCartListRequest request, CancellationToken cancellationToken = default)
+        {
+            LastListRequest = request;
+            return Task.FromResult(new UcpCartListResponse());
+        }
+
+        public Task<UcpCartResponse> GetCart(string cartId, UcpCartRequest request, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<UcpCartResponse>(null);
+        }
+
+        public Task<UcpCartResponse> UpdateCart(string cartId, UcpCartRequest request, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<UcpCartResponse>(null);
+        }
+
+        public Task<UcpCartResponse> ApplyCheckoutData(string cartId, UcpCheckoutRequest request, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<UcpCartResponse>(null);
         }
     }
 

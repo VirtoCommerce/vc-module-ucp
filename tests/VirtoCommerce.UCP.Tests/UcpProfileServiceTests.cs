@@ -82,7 +82,16 @@ public class UcpProfileServiceTests
         Assert.Contains(profile.Endpoints.Operations, x => x.Name == ModuleConstants.McpTools.ListRegions && x.Status == "available" && x.Description.Contains("City remains free text", System.StringComparison.Ordinal));
         Assert.Equal(ModuleConstants.Headers.CorrelationId, profile.Headers.CorrelationId);
         Assert.Equal(ModuleConstants.Headers.TraceId, profile.Headers.TraceId);
+        Assert.Empty(profile.Headers.BuyerContext);
+        Assert.Equal("platform_oauth_bearer", profile.Auth.BuyerDelegation);
+        Assert.Equal("platform_claims_principal", profile.Auth.BuyerIdentitySource);
+        Assert.Equal("https://acme.example/", profile.Auth.AuthorizationServer);
+        Assert.Equal("https://acme.example/.well-known/oauth-protected-resource/ucp/mcp", profile.Auth.ProtectedResourceMetadata);
+        Assert.Equal(["openid", "profile", "offline_access"], profile.Auth.Scopes);
         Assert.Contains(ModuleConstants.ErrorCodes.XApiInvalidResponse, profile.Errors.Codes);
+        Assert.Contains(ModuleConstants.ErrorCodes.IdentityRequired, profile.Errors.Codes);
+        Assert.Contains(ModuleConstants.McpTools.LinkBuyerIdentity, profile.McpTools);
+        Assert.Contains(ModuleConstants.ErrorCodes.BuyerContextMismatch, profile.Errors.Codes);
         Assert.Contains(ModuleConstants.ErrorCodes.OrderNotFound, profile.Errors.Codes);
         Assert.DoesNotContain(profile.Endpoints.Operations, x => x.Path?.Contains("api_key") == true);
 

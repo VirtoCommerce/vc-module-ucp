@@ -9,4 +9,7 @@ public class UcpHandoffRestoreResponse
 
     [JsonProperty("checkout")]
     public UcpCheckout Checkout { get; set; }
+
+    [JsonProperty("anonymous_buyer_id")]
+    public string AnonymousBuyerId { get; set; }
 }

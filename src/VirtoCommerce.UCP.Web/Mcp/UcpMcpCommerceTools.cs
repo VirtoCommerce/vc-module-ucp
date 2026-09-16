@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.ComponentModel.DataAnnotations;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,7 +26,10 @@ public static class UcpMcpCommerceTools
     }
 
     [McpServerTool(Name = ModuleConstants.McpTools.SearchProducts, ReadOnly = true, Destructive = false)]
-    [Description("Search products in this Virto Commerce storefront.")]
+    [Description(
+        "Search products in this Virto Commerce storefront. Without a Platform bearer token this search is anonymous. " +
+        "If the user asks to use their account, act on their behalf, or use their organization or personalized prices, " +
+        "do not call this tool until link_buyer_identity succeeds; then call this tool with the same search arguments.")]
     public static Task<object> SearchProducts(
         IUcpProfileService profileService,
         IUcpCatalogService catalogService,
@@ -73,7 +76,7 @@ public static class UcpMcpCommerceTools
     }
 
     [McpServerTool(Name = ModuleConstants.McpTools.GetProduct, ReadOnly = true, Destructive = false)]
-    [Description("Get one product in this Virto Commerce storefront.")]
+    [Description("Get one product in this Virto Commerce storefront. Without a Platform bearer token this lookup is anonymous. If the user asks to use their account, act on their behalf, or use their organization or personalized prices, do not call this tool until link_buyer_identity succeeds.")]
     public static Task<object> GetProduct(
         IUcpProfileService profileService,
         IUcpCatalogService catalogService,
@@ -111,7 +114,10 @@ public static class UcpMcpCommerceTools
     }
 
     [McpServerTool(Name = ModuleConstants.McpTools.CreateCart, ReadOnly = false, Destructive = false)]
-    [Description("Create a cart in this Virto Commerce storefront.")]
+    [Description(
+        "Create a cart in this Virto Commerce storefront. Without a Platform bearer token this creates an anonymous cart. " +
+        "If the user asks for 'my cart', to act on their behalf, or to use their account or organization, do not call this tool " +
+        "until link_buyer_identity succeeds. Buyer and organization then come only from the validated Platform token; never invent them.")]
     public static Task<object> CreateCart(
         IUcpProfileService profileService,
         IUcpCartService cartService,
@@ -120,7 +126,6 @@ public static class UcpMcpCommerceTools
         string currency = null,
         string language = null,
         [Description("Stable buyer identifier. Preserve and reuse the cart.buyer_id returned by this tool for later cart and checkout calls.")] string buyer_id = null,
-        string organization_id = null,
         [Description("Stable cart name used together with buyer_id and store_id.")] string cart_name = null,
         string cart_type = null,
         IList<string> coupons = null,
@@ -134,7 +139,6 @@ public static class UcpMcpCommerceTools
                 Currency = currency,
                 Language = language,
                 BuyerId = buyer_id,
-                OrganizationId = organization_id,
                 CartName = cart_name,
                 CartType = cart_type,
                 LineItems = line_items,
@@ -147,16 +151,18 @@ public static class UcpMcpCommerceTools
     }
 
     [McpServerTool(Name = ModuleConstants.McpTools.ListCarts, ReadOnly = true, Destructive = false)]
-    [Description("List buyer-scoped carts in this Virto Commerce storefront. An explicit buyer_id is required; global anonymous cart listing is not allowed.")]
+    [Description(
+        "List buyer-scoped carts in this Virto Commerce storefront. Anonymous continuation requires buyer_id. " +
+        "For the user's account, organization, or saved carts, do not call this tool until link_buyer_identity succeeds; " +
+        "buyer and organization then come from the Platform token. Global cart listing is not allowed.")]
+    [SuppressMessage("Maintainability", "S107", Justification = "Parameters define the public MCP tool schema.")]
     public static Task<object> ListCarts(
         IUcpProfileService profileService,
         IUcpCartService cartService,
         string store_id = null,
         string currency = null,
         string language = null,
-        [Required]
-        [Description("Required buyer user id whose carts should be listed. Preserve and reuse cart.buyer_id returned by cart operations.")] string buyer_id = null,
-        string organization_id = null,
+        [Description("Required for anonymous continuation; authenticated mode derives buyer identity from the Platform token.")] string buyer_id = null,
         string cart_name = null,
         string cart_type = null,
         string cursor = null,
@@ -166,16 +172,11 @@ public static class UcpMcpCommerceTools
     {
         return Execute(async () =>
         {
-            if (string.IsNullOrWhiteSpace(buyer_id))
-            {
-                throw new UcpException(ModuleConstants.ErrorCodes.InvalidRequest, "buyer_id is required to list carts.");
-            }
-
             var request = new UcpCartListRequest
             {
                 Pagination = new UcpPaginationRequest { Cursor = cursor, Limit = limit },
                 Sort = sort,
-                Context = CreateCartContext(store_id, currency, language, buyer_id, organization_id, cart_name, cart_type),
+                Context = CreateCartContext(store_id, currency, language, buyer_id, cart_name, cart_type),
             };
             ApplyCartContextDefaults(request.Context, await profileService.GetProfile(cancellationToken));
 
@@ -184,7 +185,7 @@ public static class UcpMcpCommerceTools
     }
 
     [McpServerTool(Name = ModuleConstants.McpTools.GetCart, ReadOnly = true, Destructive = false)]
-    [Description("Get cart in this Virto Commerce storefront.")]
+    [Description("Get a cart in this Virto Commerce storefront. For the user's account, organization, or saved cart, do not call this tool until link_buyer_identity succeeds; authenticated buyer identity comes from the Platform token.")]
     public static Task<object> GetCart(
         IUcpProfileService profileService,
         IUcpCartService cartService,
@@ -193,7 +194,6 @@ public static class UcpMcpCommerceTools
         string currency = null,
         string language = null,
         string buyer_id = null,
-        string organization_id = null,
         CancellationToken cancellationToken = default)
     {
         return Execute(async () =>
@@ -204,7 +204,6 @@ public static class UcpMcpCommerceTools
                 Currency = currency,
                 Language = language,
                 BuyerId = buyer_id,
-                OrganizationId = organization_id,
             });
             ApplyCartDefaults(request, await profileService.GetProfile(cancellationToken));
 
@@ -213,7 +212,7 @@ public static class UcpMcpCommerceTools
     }
 
     [McpServerTool(Name = ModuleConstants.McpTools.UpdateCart, ReadOnly = false, Destructive = false)]
-    [Description("Update cart state in this Virto Commerce storefront.")]
+    [Description("Update cart state in this Virto Commerce storefront. For the user's account, organization, or cart, do not call this tool until link_buyer_identity succeeds; authenticated buyer identity comes from the Platform token.")]
     public static Task<object> UpdateCart(
         IUcpProfileService profileService,
         IUcpCartService cartService,
@@ -223,7 +222,6 @@ public static class UcpMcpCommerceTools
         string currency = null,
         string language = null,
         string buyer_id = null,
-        string organization_id = null,
         string cart_name = null,
         string cart_type = null,
         IList<string> coupons = null,
@@ -237,7 +235,6 @@ public static class UcpMcpCommerceTools
                 Currency = currency,
                 Language = language,
                 BuyerId = buyer_id,
-                OrganizationId = organization_id,
                 CartName = cart_name,
                 CartType = cart_type,
                 LineItems = line_items,
@@ -250,7 +247,10 @@ public static class UcpMcpCommerceTools
     }
 
     [McpServerTool(Name = ModuleConstants.McpTools.CreateCheckout, ReadOnly = false, Destructive = false)]
-    [Description("Create checkout in this Virto Commerce storefront. For physical goods, do not call until shipping_address.first_name, shipping_address.last_name, and shipping_address.postal_code are provided; ask the user for missing values.")]
+    [Description(
+        "Create checkout in this Virto Commerce storefront. For the user's account or organization, do not call this tool " +
+        "until link_buyer_identity succeeds. For physical goods, do not call until shipping_address.first_name, " +
+        "shipping_address.last_name, and shipping_address.postal_code are provided; ask the user for missing values.")]
     public static Task<object> CreateCheckout(
         IUcpProfileService profileService,
         IUcpCheckoutService checkoutService,
@@ -259,7 +259,6 @@ public static class UcpMcpCommerceTools
         string currency = null,
         string language = null,
         string buyer_id = null,
-        string organization_id = null,
         UcpCheckoutBuyer buyer = null,
         string buyer_email = null,
         string buyer_name = null,
@@ -279,7 +278,6 @@ public static class UcpMcpCommerceTools
                 Currency = currency,
                 Language = language,
                 BuyerId = buyer_id,
-                OrganizationId = organization_id,
                 Buyer = buyer,
                 BuyerEmail = buyer_email,
                 BuyerName = buyer_name,
@@ -296,7 +294,7 @@ public static class UcpMcpCommerceTools
     }
 
     [McpServerTool(Name = ModuleConstants.McpTools.UpdateCheckout, ReadOnly = false, Destructive = false)]
-    [Description("Update checkout address or buyer data in this Virto Commerce storefront.")]
+    [Description("Update checkout address or buyer data in this Virto Commerce storefront. For the user's account or organization, do not call this tool until link_buyer_identity succeeds.")]
     public static Task<object> UpdateCheckout(
         IUcpProfileService profileService,
         IUcpCheckoutService checkoutService,
@@ -306,7 +304,6 @@ public static class UcpMcpCommerceTools
         string currency = null,
         string language = null,
         string buyer_id = null,
-        string organization_id = null,
         UcpCheckoutBuyer buyer = null,
         string buyer_email = null,
         string buyer_name = null,
@@ -326,7 +323,6 @@ public static class UcpMcpCommerceTools
                 Currency = currency,
                 Language = language,
                 BuyerId = buyer_id,
-                OrganizationId = organization_id,
                 Buyer = buyer,
                 BuyerEmail = buyer_email,
                 BuyerName = buyer_name,
@@ -354,7 +350,7 @@ public static class UcpMcpCommerceTools
     }
 
     [McpServerTool(Name = ModuleConstants.McpTools.GetPaymentHandlers, ReadOnly = true, Destructive = false)]
-    [Description("Get payment handlers for a checkout in this Virto Commerce storefront.")]
+    [Description("Get payment handlers for a checkout in this Virto Commerce storefront. For the user's account or organization, do not call this tool until link_buyer_identity succeeds. This only discovers handlers; it does not execute a payment.")]
     public static Task<object> GetPaymentHandlers(
         IUcpCheckoutService checkoutService,
         string checkout_id,
@@ -364,7 +360,11 @@ public static class UcpMcpCommerceTools
     }
 
     [McpServerTool(Name = ModuleConstants.McpTools.CheckoutAndHandoff, ReadOnly = false, Destructive = false)]
-    [Description("Create checkout and immediately create a hosted checkout handoff URL. For physical goods, do not call until shipping_address.first_name, shipping_address.last_name, and shipping_address.postal_code are provided; ask the user for missing values.")]
+    [Description(
+        "Create checkout and immediately create a hosted checkout handoff URL. For the user's account or organization, " +
+        "do not call this tool until link_buyer_identity succeeds. For physical goods, do not call until shipping_address.first_name, " +
+        "shipping_address.last_name, and shipping_address.postal_code are provided; ask the user for missing values. " +
+        "This does not execute a payment.")]
     public static Task<object> CheckoutAndHandoff(
         IUcpProfileService profileService,
         IUcpCheckoutService checkoutService,
@@ -373,7 +373,6 @@ public static class UcpMcpCommerceTools
         string currency = null,
         string language = null,
         string buyer_id = null,
-        string organization_id = null,
         UcpCheckoutBuyer buyer = null,
         string buyer_email = null,
         string buyer_name = null,
@@ -393,7 +392,6 @@ public static class UcpMcpCommerceTools
                 Currency = currency,
                 Language = language,
                 BuyerId = buyer_id,
-                OrganizationId = organization_id,
                 Buyer = buyer,
                 BuyerEmail = buyer_email,
                 BuyerName = buyer_name,
@@ -418,7 +416,11 @@ public static class UcpMcpCommerceTools
     }
 
     [McpServerTool(Name = ModuleConstants.McpTools.HandoffCheckout, ReadOnly = false, Destructive = false)]
-    [Description("Create a hosted checkout handoff URL. For physical goods, do not call until shipping_address.first_name, shipping_address.last_name, and shipping_address.postal_code are provided; ask the user for missing values.")]
+    [Description(
+        "Create a hosted checkout handoff URL. For the user's account or organization, do not call this tool until " +
+        "link_buyer_identity succeeds. For physical goods, do not call until shipping_address.first_name, " +
+        "shipping_address.last_name, and shipping_address.postal_code are provided; ask the user for missing values. " +
+        "This does not execute a payment.")]
     public static Task<object> HandoffCheckout(
         IUcpProfileService profileService,
         IUcpCheckoutService checkoutService,
@@ -428,7 +430,6 @@ public static class UcpMcpCommerceTools
         string currency = null,
         string language = null,
         string buyer_id = null,
-        string organization_id = null,
         UcpCheckoutBuyer buyer = null,
         string buyer_email = null,
         string buyer_name = null,
@@ -448,7 +449,6 @@ public static class UcpMcpCommerceTools
                 Currency = currency,
                 Language = language,
                 BuyerId = buyer_id,
-                OrganizationId = organization_id,
                 Buyer = buyer,
                 BuyerEmail = buyer_email,
                 BuyerName = buyer_name,
@@ -478,7 +478,7 @@ public static class UcpMcpCommerceTools
                 NextStepAfterPayment = new UcpMcpNextToolStep
                 {
                     Tool = ModuleConstants.McpTools.TrackOrder,
-                    Arguments = CreateTrackOrderArguments(request.CartId, effectiveBuyerId, request.OrganizationId, effectiveLanguage),
+                    Arguments = CreateTrackOrderArguments(request.CartId, effectiveBuyerId, effectiveLanguage),
                 },
             };
         });
@@ -516,7 +516,7 @@ public static class UcpMcpCommerceTools
     }
 
     [McpServerTool(Name = ModuleConstants.McpTools.TrackOrder, ReadOnly = true, Destructive = false)]
-    [Description("Track order by order id, order number, or cart id in this Virto Commerce storefront.")]
+    [Description("Track order by order id, order number, or cart id in this Virto Commerce storefront. For the user's account, organization, or orders, do not call this tool until link_buyer_identity succeeds.")]
     public static Task<object> TrackOrder(
         IUcpProfileService profileService,
         IUcpOrderService orderService,
@@ -527,7 +527,6 @@ public static class UcpMcpCommerceTools
         string currency = null,
         string language = null,
         string buyer_id = null,
-        string organization_id = null,
         CancellationToken cancellationToken = default)
     {
         return Execute(async () =>
@@ -537,7 +536,7 @@ public static class UcpMcpCommerceTools
                 OrderId = order_id,
                 OrderNumber = order_number,
                 CartId = cart_id,
-                Context = CreateCartContext(store_id, currency, language, buyer_id, organization_id, null, null),
+                Context = CreateCartContext(store_id, currency, language, buyer_id, null, null),
             };
             ApplyCartContextDefaults(request.Context, await profileService.GetProfile(cancellationToken));
 
@@ -568,7 +567,6 @@ public static class UcpMcpCommerceTools
                 arguments.Currency,
                 arguments.Language,
                 arguments.BuyerId,
-                arguments.OrganizationId,
                 arguments.CartName,
                 arguments.CartType),
         };
@@ -601,7 +599,6 @@ public static class UcpMcpCommerceTools
                 arguments.Currency,
                 arguments.Language,
                 arguments.BuyerId,
-                arguments.OrganizationId,
                 null,
                 null),
         };
@@ -669,17 +666,16 @@ public static class UcpMcpCommerceTools
             NextStepAfterPayment = new UcpMcpNextToolStep
             {
                 Tool = ModuleConstants.McpTools.TrackOrder,
-                Arguments = CreateTrackOrderArguments(request.CartId, buyerId, request.OrganizationId, language),
+                Arguments = CreateTrackOrderArguments(request.CartId, buyerId, language),
             },
         };
     }
 
-    private static Dictionary<string, object> CreateTrackOrderArguments(string cartId, string buyerId, string organizationId, string language)
+    private static Dictionary<string, object> CreateTrackOrderArguments(string cartId, string buyerId, string language)
     {
         var arguments = new Dictionary<string, object>();
         AddNextStepString(arguments, "cart_id", cartId);
         AddNextStepString(arguments, "buyer_id", buyerId);
-        AddNextStepString(arguments, "organization_id", organizationId);
         AddNextStepString(arguments, "language", language);
 
         return arguments;
@@ -694,7 +690,6 @@ public static class UcpMcpCommerceTools
         AddNextStepString(arguments, "currency", request.Currency);
         AddNextStepString(arguments, "language", request.Language);
         AddNextStepString(arguments, "buyer_id", request.BuyerId);
-        AddNextStepString(arguments, "organization_id", request.OrganizationId);
         AddNextStepObject(arguments, "shipping_address", request.ShippingAddress);
         AddNextStepObject(arguments, "billing_address", request.BillingAddress ?? request.ShippingAddress);
         AddNextStepString(arguments, "payment_handler", FirstNotEmpty(request.PaymentHandler, ModuleConstants.PaymentHandlers.HostedCheckout));
@@ -723,7 +718,6 @@ public static class UcpMcpCommerceTools
         string currency,
         string language,
         string buyerId,
-        string organizationId,
         string cartName,
         string cartType)
     {
@@ -733,7 +727,6 @@ public static class UcpMcpCommerceTools
             Currency = currency,
             Language = language,
             BuyerId = buyerId,
-            OrganizationId = organizationId,
             CartName = cartName,
             CartType = cartType,
         };
