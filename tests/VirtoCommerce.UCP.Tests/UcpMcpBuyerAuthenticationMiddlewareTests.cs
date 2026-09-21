@@ -5,6 +5,8 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Options;
+using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Web.Mcp;
 using Xunit;
 
@@ -13,6 +15,37 @@ namespace VirtoCommerce.UCP.Tests;
 [Trait("Category", "Unit")]
 public class UcpMcpBuyerAuthenticationMiddlewareTests
 {
+    [Theory]
+    [InlineData("https://shop.example/ucp/mcp", true)]
+    [InlineData("https://backend.example/ucp/mcp", false)]
+    public async Task InvokeAsync_CanonicalResourceControlsAudienceAndChallenge(string audience, bool accepted)
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        }, Options.Create(new UcpOptions { PublicOrigin = "https://shop.example" }));
+        var context = CreateToolCall("link_buyer_identity");
+        context.Request.Host = new HostString("backend.example");
+        context.Request.Headers.Authorization = "Bearer platform-token";
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", "user-1"),
+            new Claim("aud", audience),
+        ], "Bearer"));
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Equal(accepted, nextCalled);
+        if (!accepted)
+        {
+            Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+            Assert.Contains("https://shop.example/.well-known/oauth-protected-resource/ucp/mcp", context.Response.Headers.WWWAuthenticate.ToString());
+            Assert.DoesNotContain("backend.example", context.Response.Headers.WWWAuthenticate.ToString());
+        }
+    }
+
     [Theory]
     [InlineData("123")]
     [InlineData("true")]

@@ -61,7 +61,7 @@ public class UcpCheckoutServiceTests
 
         Assert.Equal("requires_escalation", handoff.Checkout.Status);
         Assert.Contains("ucp_session=", handoff.Checkout.ContinueUrl);
-        Assert.Contains(handoff.Messages, x => x.Code == "shipping_required");
+        Assert.Contains(handoff.Messages, x => x.Code == "hosted_checkout_required" && x.Severity == "requires_buyer_review");
 
         var token = handoff.Checkout.ContinueUrl.Split("ucp_session=").Last();
         var cacheKey = GetHandoffCacheKey(token);
@@ -152,6 +152,58 @@ public class UcpCheckoutServiceTests
 
         Assert.Equal(ModuleConstants.ErrorCodes.BuyerContextMismatch, exception.Code);
         Assert.Equal(StatusCodes.Status403Forbidden, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task HandoffLifecycle_CorrelatesCacheSpansWithoutExposingSessionToken()
+    {
+        const string sourceName = "UCP.Tests.HandoffLifecycle";
+        var stopped = new ConcurrentQueue<Activity>();
+        using var listener = CreateActivityListener(sourceName, stopped);
+        using var source = new ActivitySource(sourceName);
+        using var parent = source.StartActivity("handoff lifecycle");
+        var cart = CreateCart();
+        cart.Addresses.Add(CreateShippingAddress());
+        var service = CreateService(new StubCartService(cart));
+        var handoff = await service.HandoffCheckout(cart.Id, new UcpCheckoutRequest(), TestContext.Current.CancellationToken);
+        var token = Uri.UnescapeDataString(handoff.Checkout.ContinueUrl.Split("ucp_session=").Last());
+
+        await service.RestoreHandoff(new UcpHandoffRestoreRequest { UcpSession = token }, TestContext.Current.CancellationToken);
+
+        foreach (var operation in new[] { "SetHandoffSession", "GetHandoffSession", "RemoveHandoffSession" })
+        {
+            var span = Assert.Single(stopped, activity => activity.TraceId == parent.TraceId
+                && activity.DisplayName == "VC distributed-cache " + operation);
+            Assert.Equal(GetHandoffCacheKey(token)["UCP:Handoff:".Length..], span.GetTagItem("vc.ucp.handoff.key_hash"));
+            Assert.DoesNotContain(token, string.Join(",", span.TagObjects));
+        }
+    }
+
+    [Fact]
+    public async Task RestoreHandoff_AnonymousPayloadRejectsAuthenticatedBuyerWithoutConsumingSession()
+    {
+        var cart = CreateCart();
+        cart.BuyerId = "ucp-anonymous-" + new string('a', 32);
+        cart.Addresses.Add(CreateShippingAddress());
+        var accessor = new HttpContextAccessor { HttpContext = new DefaultHttpContext() };
+        var service = new UcpCheckoutService(new StubCartService(cart), new StubDistributedCache(),
+            new TestDistributedLockService(), accessor,
+            Options.Create(new UcpOptions { StorefrontOrigin = "https://store.example" }));
+        var handoff = await service.HandoffCheckout(cart.Id, new UcpCheckoutRequest
+        {
+            Context = new UcpCartContext { BuyerId = cart.BuyerId },
+        }, TestContext.Current.CancellationToken);
+        var request = new UcpHandoffRestoreRequest { UcpSession = handoff.Checkout.ContinueUrl.Split("ucp_session=").Last() };
+
+        accessor.HttpContext.User = CreateAuthenticatedPrincipal("other-buyer", "other-org");
+        var error = await Assert.ThrowsAsync<UcpException>(() => service.RestoreHandoff(request, TestContext.Current.CancellationToken));
+        Assert.Equal(403, error.StatusCode);
+        Assert.Equal(ModuleConstants.ErrorCodes.BuyerContextMismatch, error.Code);
+
+        accessor.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity());
+        var restored = await service.RestoreHandoff(request, TestContext.Current.CancellationToken);
+        Assert.Equal(cart.BuyerId, restored.AnonymousBuyerId);
+        await Assert.ThrowsAsync<UcpException>(() => service.RestoreHandoff(request, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -253,6 +305,8 @@ public class UcpCheckoutServiceTests
             activity.DisplayName == "VC distributed-cache GetHandoffSession" &&
             activity.TraceId == parent.TraceId);
         Assert.Equal(expectedOutcome, dependency.GetTagItem("vc.dependency.outcome"));
+        Assert.Equal(GetHandoffCacheKey(token)["UCP:Handoff:".Length..], dependency.GetTagItem("vc.ucp.handoff.key_hash"));
+        Assert.DoesNotContain(token, string.Join(",", dependency.TagObjects));
     }
 
     [Fact]

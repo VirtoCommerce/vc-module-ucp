@@ -5,10 +5,13 @@ using System.Security.Claims;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Options;
 using Microsoft.Net.Http.Headers;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using VirtoCommerce.UCP.Core;
+using VirtoCommerce.UCP.Core.Options;
+using VirtoCommerce.UCP.Data.Services;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
 
@@ -21,10 +24,12 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
     private static readonly string[] _buyerIdClaimTypes = ["sub", ClaimTypes.NameIdentifier];
 
     private readonly RequestDelegate _next;
+    private readonly UcpOptions _options;
 
-    public UcpMcpBuyerAuthenticationMiddleware(RequestDelegate next)
+    public UcpMcpBuyerAuthenticationMiddleware(RequestDelegate next, IOptions<UcpOptions> options = null)
     {
         _next = next;
+        _options = options?.Value;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -89,7 +94,7 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
             context.User?.Identities.Any(identity => identity.IsAuthenticated) == true;
     }
 
-    private static bool HasExpectedAudience(HttpContext context)
+    private bool HasExpectedAudience(HttpContext context)
     {
         var expected = new Uri(GetOrigin(context.Request) + ModuleConstants.Endpoints.Mcp);
 
@@ -237,7 +242,7 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
         }), context.RequestAborted);
     }
 
-    private static async Task WriteChallenge(HttpContext context, string error, string message)
+    private async Task WriteChallenge(HttpContext context, string error, string message)
     {
         var origin = GetOrigin(context.Request);
         var metadataUrl = origin + ModuleConstants.Endpoints.McpProtectedResourceMetadata;
@@ -266,9 +271,9 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
         }, context.RequestAborted);
     }
 
-    private static string GetOrigin(HttpRequest request)
+    private string GetOrigin(HttpRequest request)
     {
-        return $"{request.Scheme}://{request.Host}{request.PathBase}".TrimEnd('/');
+        return UcpPublicEndpoints.GetOrigin(_options, request);
     }
 
     private static string Escape(string value)

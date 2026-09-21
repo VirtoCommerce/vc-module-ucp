@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
+using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Web.Controllers.Api;
 using VirtoCommerce.UCP.Web.Models;
 using Xunit;
@@ -9,6 +11,21 @@ namespace VirtoCommerce.UCP.Tests;
 [Trait("Category", "Unit")]
 public class UcpOAuthMetadataControllerTests
 {
+    [Fact]
+    public void GetProtectedResourceMetadata_UsesCanonicalPublicOriginOnBackendHost()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Scheme = "https";
+        context.Request.Host = new HostString("backend.example");
+        var controller = new UcpOAuthMetadataController(Options.Create(new UcpOptions { PublicOrigin = "https://shop.example/" }))
+        {
+            ControllerContext = new ControllerContext { HttpContext = context },
+        };
+        var metadata = Assert.IsType<UcpProtectedResourceMetadata>(Assert.IsType<OkObjectResult>(controller.GetProtectedResourceMetadata().Result).Value);
+        Assert.Equal("https://shop.example/ucp/mcp", metadata.Resource);
+        Assert.Equal(["https://shop.example/"], metadata.AuthorizationServers);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("/platform")]

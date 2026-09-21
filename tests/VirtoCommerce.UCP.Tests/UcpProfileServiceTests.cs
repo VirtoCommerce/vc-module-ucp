@@ -18,6 +18,24 @@ namespace VirtoCommerce.UCP.Tests;
 public class UcpProfileServiceTests
 {
     [Fact]
+    public async Task GetProfile_UsesCanonicalPublicOriginThroughBackendHost()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Scheme = "http";
+        context.Request.Host = new HostString("backend.internal");
+        var service = new UcpProfileService(
+            Options.Create(new UcpOptions { PublicOrigin = "https://shop.example/" }),
+            new HttpContextAccessor { HttpContext = context });
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Equal("https://shop.example/ucp/mcp", Assert.Single(profile.Ucp.Services[ModuleConstants.Discovery.Service]).Endpoint);
+        Assert.Equal("https://shop.example/ucp/v1", profile.Endpoints.UcpBaseUrl);
+        Assert.Equal("https://shop.example/", profile.Auth.AuthorizationServer);
+        Assert.Equal("https://shop.example/.well-known/oauth-protected-resource/ucp/mcp", profile.Auth.ProtectedResourceMetadata);
+    }
+
+    [Fact]
     public async Task GetProfile_ReturnsDiscoveryContract()
     {
         var httpContextAccessor = new HttpContextAccessor

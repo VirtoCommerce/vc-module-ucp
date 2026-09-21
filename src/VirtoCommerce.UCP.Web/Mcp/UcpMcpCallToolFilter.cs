@@ -1,12 +1,16 @@
 using System;
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using VirtoCommerce.Platform.Core.Common;
+using VirtoCommerce.StoreModule.Core.Services;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Services;
@@ -62,6 +66,8 @@ public sealed class UcpMcpCallToolFilter
             : parentActivity?.TraceId.ToString();
         try
         {
+            ValidateRequiredArguments(context);
+            await ValidateStore(context);
             var result = await next(context, cancellationToken);
             MarkRejectedResult(result, telemetryStarted);
 
@@ -93,6 +99,42 @@ public sealed class UcpMcpCallToolFilter
             {
                 _operationTelemetry.Complete();
             }
+        }
+    }
+
+    private static void ValidateRequiredArguments(RequestContext<CallToolRequestParams> context)
+    {
+        if (context.MatchedPrimitive is not McpServerTool tool
+            || !tool.ProtocolTool.InputSchema.TryGetProperty("required", out var required))
+        {
+            return;
+        }
+
+        foreach (var property in required.EnumerateArray())
+        {
+            var name = property.GetString();
+            if (context.Params?.Arguments == null
+                || !context.Params.Arguments.TryGetValue(name, out var value)
+                || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            {
+                throw new UcpException(ModuleConstants.ErrorCodes.InvalidRequest, $"{name} is required.");
+            }
+        }
+    }
+
+    private static async Task ValidateStore(RequestContext<CallToolRequestParams> context)
+    {
+        if (context.Params?.Arguments?.TryGetValue("store_id", out var storeId) != true
+            || storeId.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(storeId.GetString()))
+        {
+            return;
+        }
+
+        var storeService = context.Services.GetRequiredService<IStoreService>();
+        var store = await UcpDiagnostics.ExecuteDependency("stores", "GetStore", () => storeService.GetNoCloneAsync(storeId.GetString()));
+        if (store == null)
+        {
+            throw new UcpException(ModuleConstants.ErrorCodes.InvalidRequest, "store_id does not identify an existing store.");
         }
     }
 

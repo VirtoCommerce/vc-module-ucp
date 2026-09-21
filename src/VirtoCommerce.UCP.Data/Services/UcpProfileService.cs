@@ -72,6 +72,7 @@ public class UcpProfileService : IUcpProfileService
         "Address changes after checkout or handoff require update_checkout followed by a new handoff_checkout URL.",
         "When the buyer is ready to pay or continue to hosted checkout, prefer checkout_and_handoff so the response includes the final continue_url.",
         "After hosted checkout, track_order can use the original cart_id before an order_id is available.",
+        "requires_escalation means the buyer must continue in hosted checkout; it does not mean an order approval rule was triggered. Approval rules and payment terms are enforced by the existing storefront checkout.",
         "For ordinary shopping, call commerce tools directly without linking an account.",
         "When the user explicitly asks to act on their behalf or use their account, organization, personalized prices, saved data, or orders, call link_buyer_identity before buyer-sensitive commerce tools.",
         "Authenticated buyer and organization identity come only from the validated Platform OAuth token. Never send user or organization identity headers.",
@@ -172,7 +173,7 @@ public class UcpProfileService : IUcpProfileService
                 AnonymousCatalog = _options.AnonymousCatalog,
                 BuyerDelegation = "platform_oauth_bearer",
                 BuyerIdentitySource = "platform_claims_principal",
-                AuthorizationServer = request == null ? null : $"{GetRequestOrigin(request)}{request.PathBase}/",
+                AuthorizationServer = GetRequestOrigin(request) is { } publicOrigin ? publicOrigin + "/" : null,
                 ProtectedResourceMetadata = BuildProtectedResourceMetadataUrl(request),
             },
             Headers = new UcpHeaderProfile
@@ -431,13 +432,16 @@ public class UcpProfileService : IUcpProfileService
 
     protected virtual string GetRequestOrigin(HttpRequest request)
     {
-        return request == null
-            ? null
-            : $"{request.Scheme}://{request.Host}".TrimEnd('/');
+        return UcpPublicEndpoints.GetOrigin(_options, request);
     }
 
     protected virtual string BuildUcpBaseUrl(HttpRequest request)
     {
+        if (!string.IsNullOrWhiteSpace(_options.PublicOrigin))
+        {
+            return GetRequestOrigin(request) + "/ucp/v1";
+        }
+
         if (!string.IsNullOrWhiteSpace(_options.UcpBaseUrl))
         {
             return _options.UcpBaseUrl.TrimEnd('/');
@@ -466,7 +470,7 @@ public class UcpProfileService : IUcpProfileService
         var origin = GetRequestOrigin(request);
         return string.IsNullOrWhiteSpace(origin)
             ? ModuleConstants.Endpoints.McpProtectedResourceMetadata
-            : origin + request.PathBase + ModuleConstants.Endpoints.McpProtectedResourceMetadata;
+            : origin + ModuleConstants.Endpoints.McpProtectedResourceMetadata;
     }
 
     protected virtual string GetHandoffTemplate(string origin)

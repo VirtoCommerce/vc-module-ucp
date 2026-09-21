@@ -16,7 +16,7 @@ Canonical public UCP endpoints are published without the `/api` prefix.
 * **UCP discovery profile** — `/.well-known/ucp` publishes supported capabilities, default store metadata, endpoint metadata, headers, auth shape, integration guidance, payment handlers, and structured error codes
 * **Catalog search and product details** — catalog search and product detail lookup through in-process XCatalog GraphQL
 * **Cart assembly** — create, buyer-scoped list, get, and full-state update through XCart GraphQL with UCP replacement semantics
-* **Checkout handoff** — checkout snapshot and hosted handoff with address prefill; temporary handoff sessions stored through `IDistributedCache` with TTL (Redis is recommended for production; an in-memory fallback is registered for local and single-node deployments)
+* **Checkout handoff** — checkout snapshot and hosted handoff with address prefill; temporary handoff sessions stored through `IDistributedCache` with TTL. Multiple instances require shared cache and distributed locks; the memory fallback is only suitable for a single process.
 * **Order tracking** — order status, totals, line items, and shipment tracking by order id, order number, or cart id after handoff
 * **Geography lookup** — country and region resolution through the platform `ICountriesService` for checkout address normalization
 * **Streamable HTTP MCP server** — `/ucp/mcp` with typed UCP commerce tools for the installed storefront/platform, built on the official C# MCP SDK
@@ -25,6 +25,20 @@ Canonical public UCP endpoints are published without the `/api` prefix.
 * **Structured UCP errors** — machine-readable error codes with correlation id support
 
 > **Authentication:** UCP is an OAuth protected resource only. Virto Commerce Platform/OpenIddict owns login, consent, authorization-code/PKCE, token issuance, validation, users, organizations, and registered OAuth clients.
+
+### Multiple instances and public OAuth identity
+
+UCP consumes the host's `IDistributedCache` and Platform `IDistributedLockService` through dependency injection. It does not select a Redis provider or require a Redis connection. `AddDistributedMemoryCache()` supplies a fallback only when no `IDistributedCache` is registered; an existing host provider is preserved.
+
+When the host supplies shared cache and distributed locking, handoff sessions can be restored across replicas. Without them, the application still starts and uses process-local state with its existing limitations: another process cannot restore that session, and a restart loses it. Merely configuring Redis for Platform cache invalidation or Data Protection does not register an `IDistributedCache` provider.
+
+Declare `UCP:PublicOrigin` as the public storefront URL (for example `https://store.example.com`). Discovery, protected-resource metadata, bearer challenges and MCP audience validation use this same identity even when discovery is read through the backend host. Add `<PublicOrigin>/ucp/mcp` to Platform `Authorization:Resources` and grant `rsrc:<PublicOrigin>/ucp/mcp` to the registered OAuth client. The client must connect to the advertised public MCP endpoint and use the authorization server advertised there. Resource registration and OAuth client permissions remain enforced by Platform/OpenIddict. Without `PublicOrigin`, the existing request-origin behavior is preserved for single-origin installations.
+
+For rollout from process-local sessions, drain existing handoffs on the old deployment before switching traffic, or wait at least `HandoffTokenTtlMinutes` after stopping issuance. A Redis-backed release cannot recover sessions stored only in an old process. Do not mix releases using raw-token cache keys with releases using hashed keys; use a drained cutover. Current releases keep the hashed key format and use one shared lock for each session. Do not add retry-on-400 behavior: a consumed, expired or forged token must remain rejected.
+
+`requires_escalation` means the buyer must continue in hosted checkout, not that approval is required. The response includes `hosted_checkout_required` with `requires_buyer_review`. Merchant approval rules and PO/invoice terms are applied by the existing storefront and commerce modules; UCP does not infer them from the cart amount.
+
+Cache dependency spans include `vc.ucp.handoff.key_hash`, the SHA-256 session-key suffix, on set/get/remove. This allows cross-node correlation without recording the bearer capability. The hash is a trace dimension, never a metric label. Correlate it with `vc.dependency.outcome` and the instance identity to distinguish misses, expiry, corruption and successful consumption.
 
 ## Quickstart: Connect Virto Start Cloud to Claude Desktop
 
@@ -233,6 +247,8 @@ The MCP protected-resource metadata is published at `/.well-known/oauth-protecte
 When Platform is private and OAuth runs through the public storefront, set `Authorization:OAuthLoginPath` to `/oauth/authorize`. The storefront must run the authenticated handoff/OAuth continuation changes and proxy `/connect/authorize`, `/connect/session`, `/connect/token`, `/revoke/token`, the discovery/JWKS endpoints, and the UCP endpoints to Platform, preserving the public host and HTTPS scheme. Leave `OAuthLoginPath` unset when using the existing Platform login page.
 
 When a user explicitly asks to act through their account, the MCP client calls `link_buyer_identity`. Its standard HTTP 401 bearer challenge starts Platform OAuth; after linking, the ordinary commerce tools are called unchanged. To transfer an existing anonymous cart, call `update_cart` with the saved anonymous `buyer_id`, `cart_id`, and complete desired line state. UCP verifies the anonymous owner and calls XCart `mergeCart`; it does not implement a second cart merge algorithm.
+
+With a valid bearer token, `link_buyer_identity` returns the current buyer and organization without starting another login. Signing in or out of the storefront does not switch the MCP connection's account. To switch buyers, reconnect the MCP client with a new OAuth authorization, then call `link_buyer_identity` and verify the returned identity before continuing. Repeating the tool call with the same token does not force reauthorization.
 
 ## Module Structure
 

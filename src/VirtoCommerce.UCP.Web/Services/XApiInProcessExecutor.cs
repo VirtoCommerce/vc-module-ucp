@@ -220,10 +220,8 @@ public class XApiInProcessExecutor : IXApiInProcessExecutor
         }
 
         var originalContentType = httpContext.Request.ContentType;
-        if (originalContentType == null)
-        {
-            httpContext.Request.ContentType = "application/json";
-        }
+        // XAPI validates the internal GraphQL media type independently of the outer REST/MCP transport.
+        httpContext.Request.ContentType = "application/json";
 
         return new ContentTypeState(httpContext, originalContentType);
     }

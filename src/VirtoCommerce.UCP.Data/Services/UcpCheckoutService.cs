@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -145,9 +146,9 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         checkout.Messages.Add(new UcpMessage
         {
             Type = "info",
-            Code = "shipping_required",
-            Content = "Hosted checkout is ready. Provided shipping and billing addresses are already applied to the cart.",
-            Severity = "info",
+            Code = "hosted_checkout_required",
+            Content = "The buyer must continue in the storefront to review and complete checkout. This status does not indicate an approval requirement. The storefront applies the merchant's approval rules and payment terms.",
+            Severity = "requires_buyer_review",
         });
         AddAddressStateMessages(checkout, request);
 
@@ -187,6 +188,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             "GetHandoffSession",
             async () =>
             {
+                Activity.Current?.SetTag("vc.ucp.handoff.key_hash", cacheKey[HandoffSessionCacheKeyPrefix.Length..]);
                 var payloadJson = await _distributedCache.GetStringAsync(cacheKey, cancellationToken);
                 if (string.IsNullOrWhiteSpace(payloadJson))
                 {
@@ -226,6 +228,14 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             requireBuyer: true,
             requireAuthenticatedBuyer: payload.RequiresAuthentication);
 
+        // Anonymous cart merging is allowed by the buyer accessor, but restore must keep the minted identity.
+        if (!string.Equals(buyerContext.PublicBuyerId, payload.BuyerId, StringComparison.Ordinal)
+            || !string.Equals(buyerContext.OrganizationId, payload.OrganizationId, StringComparison.OrdinalIgnoreCase))
+        {
+            throw CreateException(ModuleConstants.ErrorCodes.BuyerContextMismatch,
+                "The handoff belongs to a different buyer or organization.", StatusCodes.Status403Forbidden);
+        }
+
         var context = new UcpCartContext
         {
             StoreId = payload.StoreId,
@@ -240,7 +250,11 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             "cache",
             "distributed-cache",
             "RemoveHandoffSession",
-            () => _distributedCache.RemoveAsync(cacheKey, cancellationToken));
+            () =>
+            {
+                Activity.Current?.SetTag("vc.ucp.handoff.key_hash", cacheKey[HandoffSessionCacheKeyPrefix.Length..]);
+                return _distributedCache.RemoveAsync(cacheKey, cancellationToken);
+            });
         var checkout = new UcpCheckout
         {
             Id = payload.CheckoutId,
@@ -531,18 +545,23 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             ExpiresAt = expiresAt,
         };
 
+        var cacheKey = GetHandoffSessionCacheKey(sessionToken);
         await UcpDiagnostics.ExecuteDependency(
             "cache",
             "distributed-cache",
             "SetHandoffSession",
-            () => _distributedCache.SetStringAsync(
-                GetHandoffSessionCacheKey(sessionToken),
-                JsonSerializer.Serialize(payload, JsonOptions),
-                new DistributedCacheEntryOptions
-                {
-                    AbsoluteExpiration = expiresAt,
-                },
-                cancellationToken));
+            () =>
+            {
+                Activity.Current?.SetTag("vc.ucp.handoff.key_hash", cacheKey[HandoffSessionCacheKeyPrefix.Length..]);
+                return _distributedCache.SetStringAsync(
+                    cacheKey,
+                    JsonSerializer.Serialize(payload, JsonOptions),
+                    new DistributedCacheEntryOptions
+                    {
+                        AbsoluteExpiration = expiresAt,
+                    },
+                    cancellationToken);
+            });
 
         return sessionToken;
     }

@@ -22,7 +22,12 @@ public static class ModuleConstants
         When the user explicitly asks to act on their behalf, use their account, personalized prices, organization,
         saved data, or orders, you MUST call link_buyer_identity before any buyer-sensitive commerce tool.
         Do not call search_products, get_product, create_cart, list_carts, get_cart, update_cart, checkout, or order tools
-        for that request until link_buyer_identity succeeds. The MCP transport then completes Platform OAuth and retries the same call.
+        for that request until link_buyer_identity succeeds. When no valid bearer token is available, the MCP transport completes Platform OAuth and retries the same call.
+        With a valid token, link_buyer_identity only returns the current buyer and organization. It does not sign out, switch accounts, or force a browser login.
+        A storefront login or logout does not replace the MCP client's OAuth token. To switch buyers, the client must reconnect with a new OAuth authorization.
+        Verify the returned buyer and organization after reconnecting. If they do not match the requested account, stop buyer-sensitive operations and explain that the connection has not switched; do not keep retrying link_buyer_identity to force login.
+        Checkout status requires_escalation means the buyer must continue in the hosted storefront. It is not proof that an approval rule or spending limit was triggered.
+        Approval rules, purchase orders and payment terms remain the responsibility of the existing merchant storefront checkout.
         A successful anonymous catalog response can include an info message with code identity_optional.
         If the current user request asks for their account, organization, personalized data, or action on their behalf,
         treat identity_optional as an instruction to call link_buyer_identity and then repeat the exact catalog operation before any mutation.

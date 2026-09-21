@@ -814,6 +814,36 @@ public class UcpObservabilityContractTests
         return context;
     }
 
+    [Theory]
+    [InlineData(nameof(UcpMcpCommerceTools.CreateCart), "line_items")]
+    [InlineData(nameof(UcpMcpCommerceTools.GetPaymentHandlers), "checkout_id")]
+    [InlineData(nameof(UcpMcpCommerceTools.ListRegions), "country_id")]
+    public async Task McpMissingRequiredArgument_ReturnsActionableErrorBeforeInvokingTool(string methodName, string requiredArgument)
+    {
+        using var services = new ServiceCollection()
+            .AddSingleton<IUcpProfileService>(_ => null)
+            .AddSingleton<IUcpCartService>(_ => null)
+            .AddSingleton<IUcpCheckoutService>(_ => null)
+            .AddSingleton<IUcpGeographyService>(_ => null)
+            .BuildServiceProvider();
+        var tool = McpServerTool.Create(typeof(UcpMcpCommerceTools).GetMethod(methodName), target: null,
+            new McpServerToolCreateOptions { Services = services, SerializerOptions = UcpMcpSerialization.Options });
+        var context = CreateCallToolContext(tool.ProtocolTool.Name);
+        context.MatchedPrimitive = tool;
+        var filter = new UcpMcpCallToolFilter(new UcpOperationTelemetry(new CapturingTelemetryLogger()), NullLogger<UcpMcpCallToolFilter>.Instance);
+        var invoked = false;
+        var result = await filter.InvokeAsync((_, _) =>
+        {
+            invoked = true;
+            return ValueTask.FromResult(new CallToolResult());
+        }, context, TestContext.Current.CancellationToken);
+
+        Assert.False(invoked);
+        Assert.True(result.IsError);
+        Assert.Equal("invalid_request", result.StructuredContent.Value.GetProperty("code").GetString());
+        Assert.Equal($"{requiredArgument} is required.", result.StructuredContent.Value.GetProperty("message").GetString());
+    }
+
     private static MessageContext CreateMessageContext(string toolName)
     {
         // The message filter contract only consumes JsonRpcMessage. Avoid transport/session setup.
