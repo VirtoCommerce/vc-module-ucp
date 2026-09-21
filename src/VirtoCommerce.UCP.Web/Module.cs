@@ -37,7 +37,6 @@ public class Module : IModule, IHasConfiguration
             .Get<UcpObservabilityOptions>() ?? new UcpObservabilityOptions();
 
         serviceCollection.AddHttpContextAccessor();
-        serviceCollection.AddDistributedMemoryCache();
         serviceCollection.Configure<UcpOptions>(Configuration.GetSection("UCP"));
         serviceCollection.Configure<MvcOptions>(options =>
         {
