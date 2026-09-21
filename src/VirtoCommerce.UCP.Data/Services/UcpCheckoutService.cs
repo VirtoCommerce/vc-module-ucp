@@ -182,45 +182,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
 
     private async Task<UcpHandoffRestoreResponse> RestoreHandoffCore(string cacheKey, CancellationToken cancellationToken)
     {
-        var cacheResult = await UcpDiagnostics.ExecuteDependency(
-            "cache",
-            "distributed-cache",
-            "GetHandoffSession",
-            async () =>
-            {
-                Activity.Current?.SetTag("vc.ucp.handoff.key_hash", cacheKey[HandoffSessionCacheKeyPrefix.Length..]);
-                var payloadJson = await _distributedCache.GetStringAsync(cacheKey, cancellationToken);
-                if (string.IsNullOrWhiteSpace(payloadJson))
-                {
-                    return (Payload: (CheckoutHandoffTokenPayload)null, Outcome: "miss");
-                }
-
-                CheckoutHandoffTokenPayload payload;
-                try
-                {
-                    payload = JsonSerializer.Deserialize<CheckoutHandoffTokenPayload>(payloadJson, JsonOptions);
-                }
-                catch (JsonException)
-                {
-                    return (Payload: (CheckoutHandoffTokenPayload)null, Outcome: "corrupt");
-                }
-
-                if (payload == null)
-                {
-                    return (Payload: (CheckoutHandoffTokenPayload)null, Outcome: "corrupt");
-                }
-
-                return payload.ExpiresAt <= DateTimeOffset.UtcNow
-                    ? (Payload: (CheckoutHandoffTokenPayload)null, Outcome: "expired")
-                    : (Payload: payload, Outcome: "hit");
-            },
-            result => result.Outcome);
-
-        var payload = cacheResult.Payload;
-        if (payload == null)
-        {
-            throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "ucp_session is invalid or expired.");
-        }
+        var payload = await GetHandoffSession(cacheKey, cancellationToken);
 
         var buyerContext = ResolveBuyerContext(
             requestedBuyerIds: [payload.BuyerId],
@@ -276,6 +238,51 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             Checkout = checkout,
             AnonymousBuyerId = buyerContext.IsAuthenticated ? null : buyerContext.PublicBuyerId,
         };
+    }
+
+    private async Task<CheckoutHandoffTokenPayload> GetHandoffSession(string cacheKey, CancellationToken cancellationToken)
+    {
+        var cacheResult = await UcpDiagnostics.ExecuteDependency(
+            "cache",
+            "distributed-cache",
+            "GetHandoffSession",
+            async () =>
+            {
+                Activity.Current?.SetTag("vc.ucp.handoff.key_hash", cacheKey[HandoffSessionCacheKeyPrefix.Length..]);
+                var payloadJson = await _distributedCache.GetStringAsync(cacheKey, cancellationToken);
+                if (string.IsNullOrWhiteSpace(payloadJson))
+                {
+                    return (Payload: (CheckoutHandoffTokenPayload)null, Outcome: "miss");
+                }
+
+                CheckoutHandoffTokenPayload payload;
+                try
+                {
+                    payload = JsonSerializer.Deserialize<CheckoutHandoffTokenPayload>(payloadJson, JsonOptions);
+                }
+                catch (JsonException)
+                {
+                    return (Payload: (CheckoutHandoffTokenPayload)null, Outcome: "corrupt");
+                }
+
+                if (payload == null)
+                {
+                    return (Payload: (CheckoutHandoffTokenPayload)null, Outcome: "corrupt");
+                }
+
+                return payload.ExpiresAt <= DateTimeOffset.UtcNow
+                    ? (Payload: (CheckoutHandoffTokenPayload)null, Outcome: "expired")
+                    : (Payload: payload, Outcome: "hit");
+            },
+            result => result.Outcome);
+
+        var payload = cacheResult.Payload;
+        if (payload == null)
+        {
+            throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "ucp_session is invalid or expired.");
+        }
+
+        return payload;
     }
 
     protected virtual async Task<UcpCart> GetCartForCheckout(string cartId, UcpCartContext context, CancellationToken cancellationToken)
