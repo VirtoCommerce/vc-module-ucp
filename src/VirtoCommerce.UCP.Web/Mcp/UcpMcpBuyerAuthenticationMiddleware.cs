@@ -43,7 +43,6 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
             context.User = RemoveUnboundBuyerIdentities(context.User);
         }
 
-        var hasValidBearerPrincipal = HasValidBearerPrincipal(context, hasBearerHeader);
         var (requiresAuthenticatedBuyer, isLogout, requestError) = await InspectRequest(context.Request);
         if (requestError.HasValue)
         {
@@ -51,35 +50,9 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
             return;
         }
 
-        if (HasAuthorizationHeader(context.Request) && !hasValidBearerPrincipal)
+        if (!await ValidateBearerPrincipal(context, hasBearerHeader, isLogout))
         {
-            if (isLogout)
-            {
-                context.User = new ClaimsPrincipal(new ClaimsIdentity());
-                await _next(context);
-                return;
-            }
-
-            await WriteChallenge(context, "invalid_token", "The Platform access token is invalid or does not identify a buyer.");
             return;
-        }
-
-        if (hasValidBearerPrincipal && !HasExpectedAudience(context))
-        {
-            await WriteChallenge(context, "invalid_token", "The Platform access token was not issued for this MCP resource.");
-            return;
-        }
-
-        if (hasValidBearerPrincipal &&
-            !await context.RequestServices.GetRequiredService<UcpMcpSessionService>().IsActive(context.User, context.RequestAborted))
-        {
-            if (!isLogout)
-            {
-                await WriteChallenge(context, "invalid_token", "The Platform OAuth session has ended. Sign in again to continue.");
-                return;
-            }
-
-            context.User = new ClaimsPrincipal(new ClaimsIdentity());
         }
 
         if (requiresAuthenticatedBuyer && !HasAuthenticatedBuyerPrincipal(context.User))
@@ -89,6 +62,42 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
         }
 
         await _next(context);
+    }
+
+    private async Task<bool> ValidateBearerPrincipal(HttpContext context, bool hasBearerHeader, bool isLogout)
+    {
+        var hasValidBearerPrincipal = HasValidBearerPrincipal(context, hasBearerHeader);
+        if (HasAuthorizationHeader(context.Request) && !hasValidBearerPrincipal)
+        {
+            if (isLogout)
+            {
+                context.User = new ClaimsPrincipal(new ClaimsIdentity());
+                return true;
+            }
+
+            await WriteChallenge(context, "invalid_token", "The Platform access token is invalid or does not identify a buyer.");
+            return false;
+        }
+
+        if (hasValidBearerPrincipal && !HasExpectedAudience(context))
+        {
+            await WriteChallenge(context, "invalid_token", "The Platform access token was not issued for this MCP resource.");
+            return false;
+        }
+
+        if (hasValidBearerPrincipal &&
+            !await context.RequestServices.GetRequiredService<UcpMcpSessionService>().IsActive(context.User, context.RequestAborted))
+        {
+            if (!isLogout)
+            {
+                await WriteChallenge(context, "invalid_token", "The Platform OAuth session has ended. Sign in again to continue.");
+                return false;
+            }
+
+            context.User = new ClaimsPrincipal(new ClaimsIdentity());
+        }
+
+        return true;
     }
 
     private static bool HasAuthorizationHeader(HttpRequest request)
