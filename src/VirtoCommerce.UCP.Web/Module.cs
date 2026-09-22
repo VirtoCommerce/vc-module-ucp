@@ -77,6 +77,7 @@ public class Module : IModule, IHasConfiguration
                     context.Services.GetRequiredService<UcpMcpCallToolFilter>().InvokeAsync(next, context, cancellationToken));
             });
 
+        serviceCollection.AddTransient<IUcpPublicOriginResolver, UcpPublicOriginResolver>();
         serviceCollection.AddTransient<IUcpProfileService, UcpProfileService>();
         serviceCollection.AddScoped<IUcpBuyerContextAccessor, UcpBuyerContextAccessor>();
         serviceCollection.AddScoped<UcpMcpSessionService>();

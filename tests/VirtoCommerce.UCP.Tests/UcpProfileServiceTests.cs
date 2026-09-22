@@ -17,20 +17,31 @@ namespace VirtoCommerce.UCP.Tests;
 [Trait("Category", "Unit")]
 public class UcpProfileServiceTests
 {
-    [Fact]
-    public async Task GetProfile_UsesCanonicalPublicOriginThroughBackendHost()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetProfile_UsesCanonicalPublicOriginThroughBackendHost(bool publicOverride)
     {
         var context = new DefaultHttpContext();
         context.Request.Scheme = "http";
         context.Request.Host = new HostString("backend.internal");
+        var options = new UcpOptions
+        {
+            PublicOrigin = publicOverride ? "https://shop.example/" : null,
+            StorefrontOrigin = publicOverride ? "https://other.example" : null,
+            UcpBaseUrl = publicOverride ? "https://other.example/ucp/v1" : null,
+        };
         var service = new UcpProfileService(
-            Options.Create(new UcpOptions { PublicOrigin = "https://shop.example/" }),
-            new HttpContextAccessor { HttpContext = context });
+            Options.Create(options),
+            UcpPublicOriginResolverTests.CreateResolver(new HttpContextAccessor { HttpContext = context }, options,
+                new Store { SecureUrl = publicOverride ? "https://other.example" : "https://shop.example/" }));
 
         var profile = await service.GetProfile(TestContext.Current.CancellationToken);
 
         Assert.Equal("https://shop.example/ucp/mcp", Assert.Single(profile.Ucp.Services[ModuleConstants.Discovery.Service]).Endpoint);
         Assert.Equal("https://shop.example/ucp/v1", profile.Endpoints.UcpBaseUrl);
+        Assert.Equal("https://shop.example", profile.StorefrontOrigin);
+        Assert.Equal("https://shop.example/checkout?ucp_session={token}", profile.Endpoints.HandoffUrlTemplate);
         Assert.Equal("https://shop.example/", profile.Auth.AuthorizationServer);
         Assert.Equal("https://shop.example/.well-known/oauth-protected-resource/ucp/mcp", profile.Auth.ProtectedResourceMetadata);
     }
@@ -47,7 +58,7 @@ public class UcpProfileServiceTests
 
         var service = new UcpProfileService(
             Options.Create(new UcpOptions()),
-            httpContextAccessor);
+            UcpPublicOriginResolverTests.CreateResolver(httpContextAccessor));
 
         var profile = await service.GetProfile(TestContext.Current.CancellationToken);
 
@@ -131,7 +142,7 @@ public class UcpProfileServiceTests
                 StorefrontOrigin = "https://storefront.example/",
                 UcpBaseUrl = "https://api.example/ucp/v1/",
             }),
-            new HttpContextAccessor());
+            UcpPublicOriginResolverTests.CreateResolver(new HttpContextAccessor()));
 
         var profile = await service.GetProfile(TestContext.Current.CancellationToken);
 
@@ -271,7 +282,7 @@ public class UcpProfileServiceTests
         private readonly List<Store> _stores;
 
         public TestUcpProfileService(IOptions<UcpOptions> options, IHttpContextAccessor httpContextAccessor, Store store = null, IEnumerable<Store> stores = null)
-            : base(options, httpContextAccessor)
+            : base(options, UcpPublicOriginResolverTests.CreateResolver(httpContextAccessor, options.Value, store))
         {
             _store = store;
             _stores = stores?.ToList() ?? new List<Store>();

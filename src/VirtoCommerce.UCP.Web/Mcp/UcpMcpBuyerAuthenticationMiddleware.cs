@@ -6,13 +6,11 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
 using Microsoft.Net.Http.Headers;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
 using VirtoCommerce.UCP.Core;
-using VirtoCommerce.UCP.Core.Options;
-using VirtoCommerce.UCP.Data.Services;
+using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Services;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
@@ -26,12 +24,10 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
     private static readonly string[] _buyerIdClaimTypes = ["sub", ClaimTypes.NameIdentifier];
 
     private readonly RequestDelegate _next;
-    private readonly UcpOptions _options;
 
-    public UcpMcpBuyerAuthenticationMiddleware(RequestDelegate next, IOptions<UcpOptions> options = null)
+    public UcpMcpBuyerAuthenticationMiddleware(RequestDelegate next)
     {
         _next = next;
-        _options = options?.Value;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -64,7 +60,7 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
         await _next(context);
     }
 
-    private async Task<bool> ValidateBearerPrincipal(HttpContext context, bool hasBearerHeader, bool isLogout)
+    private static async Task<bool> ValidateBearerPrincipal(HttpContext context, bool hasBearerHeader, bool isLogout)
     {
         var hasValidBearerPrincipal = HasValidBearerPrincipal(context, hasBearerHeader);
         if (HasAuthorizationHeader(context.Request) && !hasValidBearerPrincipal)
@@ -79,7 +75,7 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
             return false;
         }
 
-        if (hasValidBearerPrincipal && !HasExpectedAudience(context))
+        if (hasValidBearerPrincipal && !await HasExpectedAudience(context))
         {
             await WriteChallenge(context, "invalid_token", "The Platform access token was not issued for this MCP resource.");
             return false;
@@ -124,9 +120,9 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
             context.User?.Identities.Any(identity => identity.IsAuthenticated) == true;
     }
 
-    private bool HasExpectedAudience(HttpContext context)
+    private static async Task<bool> HasExpectedAudience(HttpContext context)
     {
-        var expected = new Uri(GetOrigin(context.Request) + ModuleConstants.Endpoints.Mcp);
+        var expected = new Uri(await GetOriginAsync(context) + ModuleConstants.Endpoints.Mcp);
 
         return context.User.Claims
             .Where(claim => string.Equals(claim.Type, "aud", StringComparison.Ordinal))
@@ -273,9 +269,9 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
         }), context.RequestAborted);
     }
 
-    private async Task WriteChallenge(HttpContext context, string error, string message)
+    private static async Task WriteChallenge(HttpContext context, string error, string message)
     {
-        var origin = GetOrigin(context.Request);
+        var origin = await GetOriginAsync(context);
         var metadataUrl = origin + ModuleConstants.Endpoints.McpProtectedResourceMetadata;
         var challenge = $"Bearer realm=\"{Escape(origin)}\", resource_metadata=\"{Escape(metadataUrl)}\", scope=\"{_requiredScopes}\"";
         if (!string.IsNullOrWhiteSpace(error))
@@ -302,9 +298,9 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
         }, context.RequestAborted);
     }
 
-    private string GetOrigin(HttpRequest request)
+    private static Task<string> GetOriginAsync(HttpContext context)
     {
-        return UcpPublicEndpoints.GetOrigin(_options, request);
+        return context.RequestServices.GetRequiredService<IUcpPublicOriginResolver>().GetOriginAsync();
     }
 
     private static string Escape(string value)

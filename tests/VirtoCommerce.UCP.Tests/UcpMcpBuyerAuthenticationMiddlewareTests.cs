@@ -7,8 +7,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Options;
 using VirtoCommerce.UCP.Core.Options;
+using VirtoCommerce.UCP.Core.Services;
+using VirtoCommerce.StoreModule.Core.Model;
 using VirtoCommerce.UCP.Web.Mcp;
 using VirtoCommerce.UCP.Web.Services;
 using Xunit;
@@ -19,18 +20,28 @@ namespace VirtoCommerce.UCP.Tests;
 public class UcpMcpBuyerAuthenticationMiddlewareTests
 {
     [Theory]
-    [InlineData("https://shop.example/ucp/mcp", true)]
-    [InlineData("https://backend.example/ucp/mcp", false)]
-    public async Task InvokeAsync_CanonicalResourceControlsAudienceAndChallenge(string audience, bool accepted)
+    [InlineData("https://shop.example/ucp/mcp", true, true)]
+    [InlineData("https://backend.example/ucp/mcp", false, true)]
+    [InlineData("https://shop.example/ucp/mcp", true, false)]
+    [InlineData("https://backend.example/ucp/mcp", false, false)]
+    public async Task InvokeAsync_CanonicalResourceControlsAudienceAndChallenge(string audience, bool accepted, bool publicOverride)
     {
         var nextCalled = false;
         var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ =>
         {
             nextCalled = true;
             return Task.CompletedTask;
-        }, Options.Create(new UcpOptions { PublicOrigin = "https://shop.example" }));
+        });
         var context = CreateToolCall("link_buyer_identity");
         context.Request.Host = new HostString("backend.example");
+        using var services = new ServiceCollection()
+            .AddSingleton<UcpMcpSessionService>(new ActiveSessionService())
+            .AddSingleton<IUcpPublicOriginResolver>(UcpPublicOriginResolverTests.CreateResolver(
+                new HttpContextAccessor { HttpContext = context },
+                new UcpOptions { PublicOrigin = publicOverride ? "https://shop.example" : null },
+                new Store { SecureUrl = publicOverride ? "https://other.example" : "https://shop.example" }))
+            .BuildServiceProvider();
+        context.RequestServices = services;
         context.Request.Headers.Authorization = "Bearer platform-token";
         context.User = new ClaimsPrincipal(new ClaimsIdentity(
         [
@@ -277,6 +288,7 @@ public class UcpMcpBuyerAuthenticationMiddlewareTests
         var context = new DefaultHttpContext();
         context.RequestServices = new ServiceCollection()
             .AddSingleton<UcpMcpSessionService>(new ActiveSessionService())
+            .AddSingleton<IUcpPublicOriginResolver>(UcpPublicOriginResolverTests.CreateResolver(new HttpContextAccessor { HttpContext = context }))
             .BuildServiceProvider();
         context.Request.Scheme = "https";
         context.Request.Host = new HostString("store.example");
@@ -314,6 +326,7 @@ public class UcpMcpBuyerAuthenticationMiddlewareTests
         context.User = CreateBuyerPrincipal();
         context.Request.Headers.Authorization = "Bearer revoked-token";
         using var services = new ServiceCollection()
+            .AddSingleton<IUcpPublicOriginResolver>(UcpPublicOriginResolverTests.CreateResolver(new HttpContextAccessor { HttpContext = context }))
             .AddSingleton<UcpMcpSessionService>(new ActiveSessionService { Active = false })
             .BuildServiceProvider();
         context.RequestServices = services;

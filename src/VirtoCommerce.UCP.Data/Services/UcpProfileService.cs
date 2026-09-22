@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using VirtoCommerce.Platform.Core.Common;
 using VirtoCommerce.StoreModule.Core.Model;
@@ -131,32 +130,34 @@ public class UcpProfileService : IUcpProfileService
     ];
 
     private readonly UcpOptions _options;
-    private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly IUcpPublicOriginResolver _publicOriginResolver;
     private readonly IStoreService _storeService;
     private readonly IStoreSearchService _storeSearchService;
 
     public UcpProfileService(
         IOptions<UcpOptions> options,
-        IHttpContextAccessor httpContextAccessor,
+        IUcpPublicOriginResolver publicOriginResolver,
         IStoreService storeService = null,
         IStoreSearchService storeSearchService = null)
     {
         _options = options.Value;
-        _httpContextAccessor = httpContextAccessor;
+        _publicOriginResolver = publicOriginResolver;
         _storeService = storeService;
         _storeSearchService = storeSearchService;
     }
 
     public virtual async Task<UcpProfile> GetProfile(CancellationToken cancellationToken = default)
     {
-        var request = _httpContextAccessor.HttpContext?.Request;
+        var publicOrigin = await _publicOriginResolver.GetOriginAsync();
         var storeProfiles = await GetStoreProfiles();
         var storeProfile = storeProfiles.FirstOrDefault(x => x.IsDefault);
-        var origin = GetConfiguredStorefrontOrigin(storeProfile) ?? GetRequestOrigin(request);
+        var origin = !string.IsNullOrWhiteSpace(_options.PublicOrigin)
+            ? publicOrigin
+            : GetConfiguredStorefrontOrigin(storeProfile) ?? publicOrigin;
 
         var result = new UcpProfile
         {
-            Ucp = CreateDiscoveryProfile(request),
+            Ucp = CreateDiscoveryProfile(publicOrigin),
             UcpVersion = ModuleConstants.UcpVersion,
             Platform = ModuleConstants.Platform,
             StorefrontOrigin = origin,
@@ -164,7 +165,7 @@ public class UcpProfileService : IUcpProfileService
             Store = storeProfile,
             Endpoints = new UcpEndpointProfile
             {
-                UcpBaseUrl = BuildUcpBaseUrl(request),
+                UcpBaseUrl = BuildUcpBaseUrl(publicOrigin),
                 HandoffUrlTemplate = GetHandoffTemplate(origin),
             },
             Auth = new UcpProfileAuth
@@ -173,8 +174,8 @@ public class UcpProfileService : IUcpProfileService
                 AnonymousCatalog = _options.AnonymousCatalog,
                 BuyerDelegation = "platform_oauth_bearer",
                 BuyerIdentitySource = "platform_claims_principal",
-                AuthorizationServer = GetRequestOrigin(request) is { } publicOrigin ? publicOrigin + "/" : null,
-                ProtectedResourceMetadata = BuildProtectedResourceMetadataUrl(request),
+                AuthorizationServer = publicOrigin == null ? null : publicOrigin + "/",
+                ProtectedResourceMetadata = BuildProtectedResourceMetadataUrl(publicOrigin),
             },
             Headers = new UcpHeaderProfile
             {
@@ -227,7 +228,7 @@ public class UcpProfileService : IUcpProfileService
         return result;
     }
 
-    protected virtual UcpDiscoveryProfile CreateDiscoveryProfile(HttpRequest request)
+    protected virtual UcpDiscoveryProfile CreateDiscoveryProfile(string origin)
     {
         var result = new UcpDiscoveryProfile
         {
@@ -235,7 +236,7 @@ public class UcpProfileService : IUcpProfileService
             Status = "success",
         };
 
-        AddDiscoveryService(result, "mcp", BuildMcpUrl(request));
+        AddDiscoveryService(result, "mcp", BuildMcpUrl(origin));
 
         foreach (var capability in SupportedCapabilities)
         {
@@ -430,31 +431,18 @@ public class UcpProfileService : IUcpProfileService
         return null;
     }
 
-    protected virtual string GetRequestOrigin(HttpRequest request)
+    protected virtual string BuildUcpBaseUrl(string origin)
     {
-        return UcpPublicEndpoints.GetOrigin(_options, request);
-    }
-
-    protected virtual string BuildUcpBaseUrl(HttpRequest request)
-    {
-        if (!string.IsNullOrWhiteSpace(_options.PublicOrigin))
-        {
-            return GetRequestOrigin(request) + "/ucp/v1";
-        }
-
-        if (!string.IsNullOrWhiteSpace(_options.UcpBaseUrl))
+        if (string.IsNullOrWhiteSpace(_options.PublicOrigin) && !string.IsNullOrWhiteSpace(_options.UcpBaseUrl))
         {
             return _options.UcpBaseUrl.TrimEnd('/');
         }
 
-        return request == null
-            ? "/ucp/v1"
-            : $"{request.Scheme}://{request.Host}/ucp/v1".TrimEnd('/');
+        return origin + "/ucp/v1";
     }
 
-    protected virtual string BuildMcpUrl(HttpRequest request)
+    protected virtual string BuildMcpUrl(string origin)
     {
-        var origin = GetRequestOrigin(request);
         if (string.IsNullOrWhiteSpace(origin) && Uri.TryCreate(_options.UcpBaseUrl, UriKind.Absolute, out var ucpBaseUri))
         {
             origin = ucpBaseUri.GetLeftPart(UriPartial.Authority);
@@ -465,9 +453,8 @@ public class UcpProfileService : IUcpProfileService
             : $"{origin}{ModuleConstants.Endpoints.Mcp}";
     }
 
-    protected virtual string BuildProtectedResourceMetadataUrl(HttpRequest request)
+    protected virtual string BuildProtectedResourceMetadataUrl(string origin)
     {
-        var origin = GetRequestOrigin(request);
         return string.IsNullOrWhiteSpace(origin)
             ? ModuleConstants.Endpoints.McpProtectedResourceMetadata
             : origin + ModuleConstants.Endpoints.McpProtectedResourceMetadata;

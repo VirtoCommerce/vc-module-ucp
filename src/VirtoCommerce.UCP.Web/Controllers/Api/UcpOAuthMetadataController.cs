@@ -1,10 +1,9 @@
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Options;
 using VirtoCommerce.UCP.Core;
-using VirtoCommerce.UCP.Core.Options;
-using VirtoCommerce.UCP.Data.Services;
+using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Models;
 
 namespace VirtoCommerce.UCP.Web.Controllers.Api;
@@ -13,18 +12,18 @@ namespace VirtoCommerce.UCP.Web.Controllers.Api;
 [AllowAnonymous]
 public sealed class UcpOAuthMetadataController : ControllerBase
 {
-    private readonly UcpOptions _options;
+    private readonly IUcpPublicOriginResolver _publicOriginResolver;
 
-    public UcpOAuthMetadataController(IOptions<UcpOptions> options = null)
+    public UcpOAuthMetadataController(IUcpPublicOriginResolver publicOriginResolver)
     {
-        _options = options?.Value;
+        _publicOriginResolver = publicOriginResolver;
     }
 
     [HttpGet(ModuleConstants.Endpoints.McpProtectedResourceMetadata)]
     [ProducesResponseType(typeof(UcpProtectedResourceMetadata), StatusCodes.Status200OK)]
-    public ActionResult<UcpProtectedResourceMetadata> GetProtectedResourceMetadata()
+    public async Task<ActionResult<UcpProtectedResourceMetadata>> GetProtectedResourceMetadata()
     {
-        var origin = UcpPublicEndpoints.GetOrigin(_options, Request);
+        var origin = await _publicOriginResolver.GetOriginAsync();
         return Ok(new UcpProtectedResourceMetadata
         {
             Resource = origin + ModuleConstants.Endpoints.Mcp,
