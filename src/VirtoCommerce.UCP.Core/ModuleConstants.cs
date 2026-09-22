@@ -24,6 +24,8 @@ public static class ModuleConstants
         Do not call search_products, get_product, create_cart, list_carts, get_cart, update_cart, checkout, or order tools
         for that request until link_buyer_identity succeeds. When no valid bearer token is available, the MCP transport completes Platform OAuth and retries the same call.
         With a valid token, link_buyer_identity only returns the current buyer and organization. It does not sign out, switch accounts, or force a browser login.
+        When the user asks to log out, call logout_buyer. After logout, stop using saved buyer, organization, cart, and checkout identifiers.
+        Do not call link_buyer_identity until the user explicitly asks to sign in again.
         A storefront login or logout does not replace the MCP client's OAuth token. To switch buyers, the client must reconnect with a new OAuth authorization.
         Verify the returned buyer and organization after reconnecting. If they do not match the requested account, stop buyer-sensitive operations and explain that the connection has not switched; do not keep retrying link_buyer_identity to force login.
         Checkout status requires_escalation means the buyer must continue in the hosted storefront. It is not proof that an approval rule or spending limit was triggered.
@@ -192,6 +194,7 @@ public static class ModuleConstants
         public const string ResolveCountry = Operations.ResolveCountry;
         public const string ListRegions = Operations.ListRegions;
         public const string LinkBuyerIdentity = Operations.LinkBuyerIdentity;
+        public const string LogoutBuyer = "logout_buyer";
 
         public static bool IsUcpTool(string name)
         {

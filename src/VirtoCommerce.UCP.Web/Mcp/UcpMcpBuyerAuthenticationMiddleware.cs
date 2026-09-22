@@ -5,6 +5,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Microsoft.Net.Http.Headers;
 using ModelContextProtocol;
@@ -12,6 +13,7 @@ using ModelContextProtocol.Protocol;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Data.Services;
+using VirtoCommerce.UCP.Web.Services;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
 
@@ -42,7 +44,7 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
         }
 
         var hasValidBearerPrincipal = HasValidBearerPrincipal(context, hasBearerHeader);
-        var (requiresAuthenticatedBuyer, requestError) = await InspectRequest(context.Request);
+        var (requiresAuthenticatedBuyer, isLogout, requestError) = await InspectRequest(context.Request);
         if (requestError.HasValue)
         {
             await WriteRequestError(context, requestError.Value);
@@ -51,6 +53,13 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
 
         if (HasAuthorizationHeader(context.Request) && !hasValidBearerPrincipal)
         {
+            if (isLogout)
+            {
+                context.User = new ClaimsPrincipal(new ClaimsIdentity());
+                await _next(context);
+                return;
+            }
+
             await WriteChallenge(context, "invalid_token", "The Platform access token is invalid or does not identify a buyer.");
             return;
         }
@@ -59,6 +68,18 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
         {
             await WriteChallenge(context, "invalid_token", "The Platform access token was not issued for this MCP resource.");
             return;
+        }
+
+        if (hasValidBearerPrincipal &&
+            !await context.RequestServices.GetRequiredService<UcpMcpSessionService>().IsActive(context.User, context.RequestAborted))
+        {
+            if (!isLogout)
+            {
+                await WriteChallenge(context, "invalid_token", "The Platform OAuth session has ended. Sign in again to continue.");
+                return;
+            }
+
+            context.User = new ClaimsPrincipal(new ClaimsIdentity());
         }
 
         if (requiresAuthenticatedBuyer && !HasAuthenticatedBuyerPrincipal(context.User))
@@ -160,11 +181,11 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
         return new ClaimsPrincipal(identities);
     }
 
-    private static async Task<(bool RequiresIdentityLinking, McpErrorCode? Error)> InspectRequest(HttpRequest request)
+    private static async Task<(bool RequiresIdentityLinking, bool IsLogout, McpErrorCode? Error)> InspectRequest(HttpRequest request)
     {
         if (!HttpMethods.IsPost(request.Method) || !request.HasJsonContentType())
         {
-            return (false, null);
+            return (false, false, null);
         }
 
         request.EnableBuffering();
@@ -174,18 +195,19 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
             var root = document.RootElement;
             if (!IsValidMessage(root))
             {
-                return (false, McpErrorCode.InvalidRequest);
+                return (false, false, McpErrorCode.InvalidRequest);
             }
 
-            return (RequestsIdentityLinking(root), null);
+            return (RequestsTool(root, ModuleConstants.McpTools.LinkBuyerIdentity),
+                RequestsTool(root, ModuleConstants.McpTools.LogoutBuyer), null);
         }
         catch (JsonException)
         {
-            return (false, McpErrorCode.ParseError);
+            return (false, false, McpErrorCode.ParseError);
         }
         catch (IOException)
         {
-            return (false, McpErrorCode.ParseError);
+            return (false, false, McpErrorCode.ParseError);
         }
         finally
         {
@@ -193,7 +215,7 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
         }
     }
 
-    private static bool RequestsIdentityLinking(JsonElement root)
+    private static bool RequestsTool(JsonElement root, string toolName)
     {
         if (root.ValueKind != JsonValueKind.Object ||
             !root.TryGetProperty("method", out var method) ||
@@ -211,7 +233,7 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
         }
 
         return name.ValueKind == JsonValueKind.String &&
-            string.Equals(name.GetString(), ModuleConstants.McpTools.LinkBuyerIdentity, StringComparison.Ordinal);
+            string.Equals(name.GetString(), toolName, StringComparison.Ordinal);
     }
 
     private static bool IsValidMessage(JsonElement root)

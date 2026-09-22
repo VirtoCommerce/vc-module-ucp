@@ -1,10 +1,12 @@
 using System.ComponentModel;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http;
 using ModelContextProtocol.Server;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Services;
+using VirtoCommerce.UCP.Web.Services;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
 
@@ -39,5 +41,31 @@ public static class UcpMcpIdentityTools
             organization_id = context.OrganizationId,
             identity_source = "platform_oauth",
         });
+    }
+
+    [McpServerTool(Name = ModuleConstants.McpTools.LogoutBuyer, ReadOnly = false, Destructive = true, Idempotent = true)]
+    [Description(
+        "Sign out the current buyer from this MCP OAuth application. Call when the user asks to log out. " +
+        "Revokes the current Platform OAuth authorization and its access/refresh tokens, including other connections sharing that authorization. " +
+        "Does not sign out other applications or clear browser cookies. After success, stop using saved buyer, organization, cart, and checkout identifiers. " +
+        "Do not call link_buyer_identity until the user explicitly asks to sign in again. Never ask for passwords or tokens in chat.")]
+    public static async Task<object> LogoutBuyer(
+        IHttpContextAccessor httpContextAccessor,
+        UcpMcpSessionService sessionService,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var principal = httpContextAccessor.HttpContext.User;
+        if (principal.Identity?.IsAuthenticated == true)
+        {
+            await sessionService.Logout(principal, cancellationToken);
+        }
+
+        return new
+        {
+            logged_out = true,
+            instructions = "Stop using the previous buyer, organization, cart, and checkout identifiers. " +
+                "Do not start a new login until the user explicitly asks to sign in again.",
+        };
     }
 }

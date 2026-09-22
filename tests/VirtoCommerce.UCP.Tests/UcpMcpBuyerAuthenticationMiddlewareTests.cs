@@ -3,11 +3,14 @@ using System.IO;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Web.Mcp;
+using VirtoCommerce.UCP.Web.Services;
 using Xunit;
 
 namespace VirtoCommerce.UCP.Tests;
@@ -272,6 +275,9 @@ public class UcpMcpBuyerAuthenticationMiddlewareTests
     private static DefaultHttpContext CreateJsonRequest(string json)
     {
         var context = new DefaultHttpContext();
+        context.RequestServices = new ServiceCollection()
+            .AddSingleton<UcpMcpSessionService>(new ActiveSessionService())
+            .BuildServiceProvider();
         context.Request.Scheme = "https";
         context.Request.Host = new HostString("store.example");
         context.Request.Method = HttpMethods.Post;
@@ -289,6 +295,68 @@ public class UcpMcpBuyerAuthenticationMiddlewareTests
             new Claim("client_id", "desktop-client"),
             new Claim("aud", "https://store.example/ucp/mcp"),
         ], "Bearer"));
+    }
+
+    [Theory]
+    [InlineData("link_buyer_identity", 401)]
+    [InlineData("search_products", 401)]
+    [InlineData("logout_buyer", 200)]
+    public async Task InvokeAsync_RevokedSessionCannotShopOrLinkButCanRepeatLogout(string tool, int expectedStatus)
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(context =>
+        {
+            nextCalled = true;
+            Assert.False(context.User.Identity.IsAuthenticated);
+            return Task.CompletedTask;
+        });
+        var context = CreateToolCall(tool);
+        context.User = CreateBuyerPrincipal();
+        context.Request.Headers.Authorization = "Bearer revoked-token";
+        using var services = new ServiceCollection()
+            .AddSingleton<UcpMcpSessionService>(new ActiveSessionService { Active = false })
+            .BuildServiceProvider();
+        context.RequestServices = services;
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Equal(expectedStatus, context.Response.StatusCode);
+        Assert.Equal(expectedStatus == 200, nextCalled);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("Bearer expired-token")]
+    public async Task InvokeAsync_LogoutWithoutValidBearerDoesNotStartLogin(string authorization)
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var context = CreateToolCall("logout_buyer");
+        context.Request.Headers.Authorization = authorization;
+
+        await middleware.InvokeAsync(context);
+
+        Assert.True(nextCalled);
+        Assert.Equal(200, context.Response.StatusCode);
+        Assert.Equal(0, context.Response.Headers.WWWAuthenticate.Count);
+    }
+
+    private sealed class ActiveSessionService : UcpMcpSessionService
+    {
+        public ActiveSessionService() : base(null, null)
+        {
+        }
+
+        public bool Active { get; init; } = true;
+
+        public override Task<bool> IsActive(ClaimsPrincipal principal, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(Active);
+        }
     }
 
     private static ClaimsPrincipal CreateBuyerPrincipal()
