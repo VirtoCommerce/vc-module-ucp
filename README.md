@@ -1,4 +1,4 @@
-# Virto Commerce UCP Module (Preview)
+# Virto Commerce UCP Module 
 
 The Virto Commerce UCP module exposes HTTP APIs for Universal Commerce Protocol (UCP) on top of existing Virto Commerce Platform capabilities.
 
