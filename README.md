@@ -11,6 +11,59 @@ It also exposes a Streamable HTTP MCP endpoint at `/ucp/mcp`.
 
 Canonical public UCP endpoints are published without the `/api` prefix.
 
+## How signed-in buyers shop through an AI assistant
+
+This section is for merchants and business users. It describes what a buyer experiences when an AI assistant, such as Claude or ChatGPT, shops your store through UCP. Setup steps for IT are in [Enable signed-in buyers in Virto Cloud](#enable-signed-in-buyers-in-virto-cloud).
+
+```mermaid
+sequenceDiagram
+    actor Buyer
+    participant Assistant as AI assistant
+    participant Store as Your Virto Commerce store
+    Buyer->>Assistant: "Find a printer and add it to my cart"
+    Assistant->>Store: Search and add to cart (anonymous)
+    Buyer->>Assistant: "Use my company account"
+    Assistant->>Buyer: Opens the store sign-in page in the browser
+    Buyer->>Store: Signs in with the usual store account
+    Assistant->>Store: Same tools, now as the buyer and their organization
+    Assistant->>Buyer: Checkout link
+    Buyer->>Store: Opens the link, reviews, pays in the storefront
+```
+
+**Anonymous by default.** A buyer can search products and build a cart without signing in. The assistant does not ask for an account until the buyer needs one.
+
+**Signing in.** When the buyer asks the assistant to use their account, order for their company, or see their orders, the assistant asks them to sign in. Your store's own sign-in page opens in the browser. The buyer signs in with their usual store account, and the assistant continues from where it stopped. The assistant never sees the buyer's password.
+
+**What signing in unlocks.** After signing in, the assistant works with the buyer's own data:
+
+- the buyer's prices, including organization contract pricing;
+- the products available to the buyer's organization;
+- the buyer's saved carts and orders.
+
+**The anonymous cart carries over.** Items the buyer added before signing in are merged into their account cart.
+
+**Checkout stays in your storefront.** The assistant prepares the cart and gives the buyer a checkout link. The buyer opens it, reviews the order, chooses delivery and payment, and places the order in your normal storefront. Approval rules, purchase orders and invoice terms apply there exactly as they do today. When the assistant says the checkout "requires review", it means "continue in the store", not "this order needs approval".
+
+**The checkout link is short-lived and personal.**
+
+- It works once and expires after 15 minutes by default.
+- Only the buyer it was created for can use it; another signed-in buyer is refused.
+- If the link expires, ask the assistant for a new one. The cart itself is kept.
+
+**Signing out and switching accounts.**
+
+- Asking the assistant to log out ends its session with your store.
+- Signing out of the storefront in the browser does not sign the assistant out.
+- To shop as a different account, the buyer must disconnect and reconnect the store connector in the assistant.
+
+**What the assistant cannot do.** It cannot take payment, place orders, or see another buyer's carts, orders or prices.
+
+### Known limitations
+
+- Logging out does not cancel checkout links issued before logout, and an issued link cannot be revoked early. It stops working after it is used or expires.
+- For a signed-in buyer, creating a cart adds items to the buyer's existing default cart instead of starting a new, empty cart.
+- A shipping address given to the assistant can update the matching address saved on the buyer's account.
+
 ## Key Features
 
 * **UCP discovery profile** — `/.well-known/ucp` publishes supported capabilities, default store metadata, endpoint metadata, headers, auth shape, integration guidance, payment handlers, and structured error codes
@@ -147,6 +200,138 @@ Claude should call `get_store_capabilities` and then `search_products` without a
 | Search returns no products | Confirm that the store is open, the catalog is assigned to the store, prices and inventory exist, and the search index has been built. |
 | Checkout opens the wrong host | Configure `Store.SecureUrl` / `Store.Url`, or set `UCP__StorefrontOrigin` and `UCP__HandoffUrlTemplate`. |
 | A Team or Enterprise user cannot add the connector | Ask an organization Owner to add the custom connector first. |
+
+## Enable signed-in buyers in Virto Cloud
+
+The [quickstart](#quickstart-connect-virto-start-cloud-to-claude-desktop) above sets up anonymous shopping. The steps below let buyers sign in, so the assistant can shop with their prices, organization, carts and orders. The examples use `B2B-store` as the Store ID and `https://store.example.com` as the public Storefront host.
+
+UCP does not sign buyers in itself. Virto Commerce Platform (OpenIddict) handles sign-in, consent and tokens; the Storefront hosts the sign-in page. The Storefront host therefore acts as both the MCP endpoint and the OAuth authorization server.
+
+### 1. Check the prerequisites
+
+| Component | Requirement |
+| --- | --- |
+| Platform | `3.1072.0` or later, for OAuth resource indicators and Storefront sign-in ([vc-platform#3108](https://github.com/VirtoCommerce/vc-platform/pull/3108)). |
+| UCP module | A release that includes the authenticated buyer flow ([vc-module-ucp#7](https://github.com/VirtoCommerce/vc-module-ucp/pull/7)). |
+| Storefront | A `vc-frontend` release that includes the `/oauth/authorize` sign-in page and authenticated handoff restore ([vc-frontend#2467](https://github.com/VirtoCommerce/vc-frontend/pull/2467)). |
+| Redis | Required when the Platform runs more than one replica. See step 3. |
+
+### 2. Update the Platform configuration
+
+Add these values under `platform.config` in `infra/environments.yml`, next to the UCP values from the quickstart:
+
+```yaml
+platform:
+  config:
+    UCP__DefaultStoreId: B2B-store
+    UCP__PublicOrigin: "https://store.example.com"
+    Authorization__Resources__0: "https://store.example.com/ucp/mcp"
+    Authorization__OAuthLoginPath: /oauth/authorize
+```
+
+- `UCP__PublicOrigin` is the host that UCP advertises for discovery, MCP and OAuth.
+- `Authorization__Resources__0` allows Platform to issue tokens for the UCP MCP endpoint. If `Authorization:Resources` already lists other addresses, add this one with the next index instead of replacing them.
+- `Authorization__OAuthLoginPath` sends buyers to the Storefront sign-in page instead of the Platform back-office sign-in page.
+
+All of these values, the OAuth client permission in step 5, and the existing `UCP__StorefrontOrigin`, `UCP__UcpBaseUrl` and `UCP__HandoffUrlTemplate` values must use the **same host**. Mixing the Platform host and the Storefront host produces tokens that UCP rejects.
+
+### 3. Provide Redis when the Platform has more than one replica
+
+Checkout links and their single-use protection are shared between Platform replicas through Redis. Without Redis, each replica keeps its own links, so a link opened on another replica is reported as expired or already used. In QA with two replicas and no Redis, about half of anonymous and about three quarters of signed-in checkout links failed on the first attempt.
+
+Platform reads Redis from `ConnectionStrings__RedisConnectionString`. In Virto Cloud this connection string is a secret, not a plain `platform.config` value. Ask Virto Cloud support to provision Redis for the environment. *To verify: the exact provisioning steps for Virto Cloud environments.*
+
+A single-replica environment works without Redis, but open checkout links are lost when the Platform restarts.
+
+### 4. Route the OAuth paths to the Platform
+
+The quickstart routes `/ucp` and `/.well-known/ucp`. Signed-in buyers also need the OAuth endpoints on the Storefront host, because the Storefront sign-in page calls them on its own host and AI assistants discover them from there:
+
+```yaml
+routes:
+  - host: store.example.com
+    root: B2B-store
+    paths:
+      - path: /ucp
+        route: platform
+      - path: /.well-known/ucp
+        route: platform
+      - path: /.well-known/oauth-protected-resource
+        route: platform
+      - path: /.well-known/openid-configuration
+        route: platform
+      - path: /connect
+        route: platform
+```
+
+- `/.well-known/oauth-protected-resource` tells the assistant which authorization server protects `/ucp/mcp`.
+- `/.well-known/openid-configuration` publishes the authorization server metadata.
+- `/connect` covers sign-in (`/connect/authorize`), tokens (`/connect/token`), sessions (`/connect/session`) and sign-out.
+
+Keep `/oauth/authorize` routed to the Storefront; it is the sign-in page. *To verify: whether an AI client in use also requests `/.well-known/oauth-authorization-server`; if it does, route it to the Platform too.*
+
+Deploy the updated environment.
+
+### 5. Register an OAuth client for the AI assistant
+
+Each AI assistant signs buyers in through a registered OAuth client:
+
+| Field | Value |
+| --- | --- |
+| Client type | `public` (no client secret) |
+| Consent type | `systematic` |
+| Redirect URI | The callback URL of the AI assistant. For Claude custom connectors this is `https://claude.ai/api/mcp/auth_callback` (*to verify against the current Anthropic documentation*). |
+| Permissions | `rsrc:https://store.example.com/ucp/mcp` |
+
+The **Security > OAuth applications** screen has no field for `rsrc:` permissions. Create the client through the Platform API instead, for example from the browser console while signed in to the Platform Manager as an administrator:
+
+```javascript
+(async () => {
+  const api = angular.element(document.body).injector().get("platformWebApp.oauthapps");
+  const app = await api.new().$promise;
+  app.displayName = "Claude";
+  app.clientType = "public";
+  app.clientSecret = null;
+  app.consentType = "systematic";
+  app.redirectUris = ["https://claude.ai/api/mcp/auth_callback"];
+  app.permissions = ["rsrc:https://store.example.com/ucp/mcp"];
+  const saved = await api.save({}, app).$promise;
+  console.log("CLIENT_ID:", saved.clientId, "PERMISSIONS:", saved.permissions);
+})().catch(console.error);
+```
+
+Check that the printed permissions contain `rsrc:https://store.example.com/ucp/mcp`, and give the printed `CLIENT_ID` to whoever sets up the assistant. Later edits to the client on the OAuth applications screen keep the `rsrc:` permission.
+
+### 6. Connect the AI assistant
+
+**Claude.** Add the custom connector as in the [quickstart](#4-add-the-connector-to-claude-desktop), with the remote MCP server URL `https://store.example.com/ucp/mcp`. Under **Advanced settings**, enter the OAuth client ID from step 5.
+
+**ChatGPT.** Full MCP connectors require a ChatGPT Business or Enterprise/Edu workspace with developer mode enabled. Create one app under **Settings > Apps > Create** with the URL `https://store.example.com/ucp/mcp` and OAuth authentication. See the [OpenAI developer mode guide](https://help.openai.com/en/articles/12584461-developer-mode-apps-and-full-mcp-connectors-in-chatgpt-beta).
+
+Use one connector for both anonymous and signed-in shopping. Do not add a second connector for signed-in buyers.
+
+### 7. Verify the setup
+
+1. Open `https://store.example.com/.well-known/ucp`, and the same path on the Platform host. Both must report the same MCP endpoint, `https://store.example.com/ucp/mcp`.
+2. Open `https://store.example.com/.well-known/oauth-protected-resource/ucp/mcp`. `resource` must be `https://store.example.com/ucp/mcp`, and `authorization_servers` must be `["https://store.example.com/"]`.
+3. In a new conversation, ask the assistant to use your account. It must call `link_buyer_identity`, open the Storefront sign-in page, and then report `linked: true` with your buyer and organization.
+4. Ask it to add a product to your cart and prepare checkout. Open the checkout link: the Storefront must show your cart, prices and organization.
+
+### 8. Keep checkout links out of analytics
+
+The checkout link carries its one-time token in the `ucp_session` query parameter. Until [VCST-6053](https://virtocommerce.atlassian.net/browse/VCST-6053) is fixed, the token can be sent to Google Analytics as part of the page URL and stored in Application Insights telemetry. Remove `ucp_session` from page URLs in your analytics configuration.
+
+### Troubleshooting signed-in buyers
+
+| Symptom | Check |
+| --- | --- |
+| Token request fails with `invalid_target` | `Authorization__Resources__0` contains `https://store.example.com/ucp/mcp`, and the OAuth client has the permission `rsrc:https://store.example.com/ucp/mcp`. |
+| `link_buyer_identity` returns `401 invalid_token` after sign-in | The MCP URL, `UCP__PublicOrigin`, the resource and the OAuth client permission all use the Storefront host. |
+| Sign-in opens the Platform back-office page | `Authorization__OAuthLoginPath` is set to `/oauth/authorize`, and the Storefront includes the sign-in page. |
+| Sign-in page cannot complete, or the assistant never receives a token | `/connect` and `/.well-known/openid-configuration` are routed to `platform` on the Storefront host. |
+| Checkout links are reported as expired or already used on the first try | The Platform has more than one replica and no Redis. See step 3. |
+| `403 buyer_context_mismatch` | The link was opened by a different buyer, or a client sent a legacy `X-Buyer-*` header. |
+| The assistant keeps using the previous account | Signing out of the Storefront does not change the assistant's token. Disconnect and reconnect the connector. |
 
 ## Configuration
 
