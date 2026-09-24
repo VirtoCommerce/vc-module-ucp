@@ -9,15 +9,14 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
-using VirtoCommerce.Platform.Core.DistributedLock;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Data.Services;
+using VirtoCommerce.Xapi.Core.Infrastructure;
 using Xunit;
 
 namespace VirtoCommerce.UCP.Tests;
@@ -49,7 +48,7 @@ public class UcpCheckoutServiceTests
     {
         var cart = CreateCart();
         cart.Addresses.Add(CreateShippingAddress());
-        var cache = new StubDistributedCache();
+        var cache = new StubHandoffSessionStore();
         var distributedLock = new TestDistributedLockService();
         var service = CreateService(new StubCartService(cart), cache, distributedLock);
 
@@ -66,7 +65,7 @@ public class UcpCheckoutServiceTests
         var token = handoff.Checkout.ContinueUrl.Split("ucp_session=").Last();
         var cacheKey = GetHandoffCacheKey(token);
         Assert.DoesNotContain(token, cacheKey, StringComparison.Ordinal);
-        var payloadJson = Encoding.UTF8.GetString(cache.Get(cacheKey));
+        var payloadJson = cache.Get(cacheKey);
         using (var payload = JsonDocument.Parse(payloadJson))
         {
             Assert.True(payload.RootElement.TryGetProperty("issued_at", out _));
@@ -91,6 +90,28 @@ public class UcpCheckoutServiceTests
             UcpSession = token,
         }, TestContext.Current.CancellationToken));
         Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, replay.Code);
+    }
+
+    [Fact]
+    public async Task RestoreHandoff_BusyLockReturnsRetryableConflictAndKeepsSession()
+    {
+        var cache = new StubHandoffSessionStore();
+        var distributedLock = new TestDistributedLockService { IsBusy = true };
+        var service = CreateService(new StubCartService(CreateCart()), cache, distributedLock);
+        const string token = "busy-session";
+        var cacheKey = GetHandoffCacheKey(token);
+        cache.SetRaw(cacheKey, "{}");
+
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.RestoreHandoff(new UcpHandoffRestoreRequest
+        {
+            UcpSession = token,
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.HandoffInProgress, exception.Code);
+        Assert.Equal(StatusCodes.Status409Conflict, exception.StatusCode);
+        Assert.IsType<LockError>(exception.InnerException);
+        Assert.Contains(cacheKey, distributedLock.ResourceKeys);
+        Assert.NotNull(cache.Get(cacheKey));
     }
 
     [Fact]
@@ -120,7 +141,7 @@ public class UcpCheckoutServiceTests
         httpContextAccessor.HttpContext.User = CreateAuthenticatedPrincipal("user-1", "org-1");
         var service = new UcpCheckoutService(
             new StubCartService(cart),
-            new StubDistributedCache(),
+            new StubHandoffSessionStore(),
             new TestDistributedLockService(),
             httpContextAccessor,
             Options.Create(new UcpOptions
@@ -173,8 +194,8 @@ public class UcpCheckoutServiceTests
         foreach (var operation in new[] { "SetHandoffSession", "GetHandoffSession", "RemoveHandoffSession" })
         {
             var span = Assert.Single(stopped, activity => activity.TraceId == parent.TraceId
-                && activity.DisplayName == "VC distributed-cache " + operation);
-            Assert.Equal(GetHandoffCacheKey(token)["UCP:Handoff:".Length..], span.GetTagItem("vc.ucp.handoff.key_hash"));
+                && activity.DisplayName == "VC handoff-session-store " + operation);
+            Assert.Equal(GetHandoffCacheKey(token)["vc:ucp:handoff:".Length..], span.GetTagItem("vc.ucp.handoff.key_hash"));
             Assert.DoesNotContain(token, string.Join(",", span.TagObjects));
         }
     }
@@ -186,7 +207,7 @@ public class UcpCheckoutServiceTests
         cart.BuyerId = "ucp-anonymous-" + new string('a', 32);
         cart.Addresses.Add(CreateShippingAddress());
         var accessor = new HttpContextAccessor { HttpContext = new DefaultHttpContext() };
-        var service = new UcpCheckoutService(new StubCartService(cart), new StubDistributedCache(),
+        var service = new UcpCheckoutService(new StubCartService(cart), new StubHandoffSessionStore(),
             new TestDistributedLockService(), accessor,
             Options.Create(new UcpOptions { StorefrontOrigin = "https://store.example" }));
         var handoff = await service.HandoffCheckout(cart.Id, new UcpCheckoutRequest
@@ -217,7 +238,7 @@ public class UcpCheckoutServiceTests
         httpContextAccessor.HttpContext.User = CreateAuthenticatedPrincipal("user-1", "org-1");
         var service = new UcpCheckoutService(
             new StubCartService(cart),
-            new StubDistributedCache(),
+            new StubHandoffSessionStore(),
             new TestDistributedLockService(),
             httpContextAccessor,
             Options.Create(new UcpOptions
@@ -257,7 +278,7 @@ public class UcpCheckoutServiceTests
         var expected = new JsonException("cache provider failure");
         var service = CreateService(
             new StubCartService(CreateCart()),
-            new StubDistributedCache(expected));
+            new StubHandoffSessionStore(expected));
 
         var actual = await Assert.ThrowsAsync<JsonException>(() => service.RestoreHandoff(
             new UcpHandoffRestoreRequest { UcpSession = "valid-shape-token" },
@@ -281,7 +302,7 @@ public class UcpCheckoutServiceTests
         using var parent = parentSource.StartActivity("POST ucp/v1/internal/handoff/restore", ActivityKind.Server);
         Assert.NotNull(parent);
 
-        var cache = new StubDistributedCache();
+        var cache = new StubHandoffSessionStore();
         if (payloadJson != null)
         {
             cache.SetRaw(GetHandoffCacheKey(token), payloadJson);
@@ -302,10 +323,10 @@ public class UcpCheckoutServiceTests
         }
 
         var dependency = Assert.Single(stopped, activity =>
-            activity.DisplayName == "VC distributed-cache GetHandoffSession" &&
+            activity.DisplayName == "VC handoff-session-store GetHandoffSession" &&
             activity.TraceId == parent.TraceId);
         Assert.Equal(expectedOutcome, dependency.GetTagItem("vc.dependency.outcome"));
-        Assert.Equal(GetHandoffCacheKey(token)["UCP:Handoff:".Length..], dependency.GetTagItem("vc.ucp.handoff.key_hash"));
+        Assert.Equal(GetHandoffCacheKey(token)["vc:ucp:handoff:".Length..], dependency.GetTagItem("vc.ucp.handoff.key_hash"));
         Assert.DoesNotContain(token, string.Join(",", dependency.TagObjects));
     }
 
@@ -552,7 +573,7 @@ public class UcpCheckoutServiceTests
 
     private static UcpCheckoutService CreateService(
         IUcpCartService cartService,
-        IDistributedCache distributedCache = null,
+        IUcpHandoffSessionStore handoffSessionStore = null,
         IDistributedLockService distributedLock = null)
     {
         var httpContextAccessor = new HttpContextAccessor
@@ -563,7 +584,7 @@ public class UcpCheckoutServiceTests
 
         return new UcpCheckoutService(
             cartService,
-            distributedCache ?? new StubDistributedCache(),
+            handoffSessionStore ?? new StubHandoffSessionStore(),
             distributedLock ?? new TestDistributedLockService(),
             httpContextAccessor,
             Options.Create(new UcpOptions
@@ -580,7 +601,7 @@ public class UcpCheckoutServiceTests
     private static string GetHandoffCacheKey(string sessionToken)
     {
         var tokenHash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(sessionToken));
-        return "UCP:Handoff:" + Convert.ToHexString(tokenHash);
+        return "vc:ucp:handoff:" + Convert.ToHexString(tokenHash);
     }
 
     private static ActivityListener CreateActivityListener(string parentSourceName, ConcurrentQueue<Activity> stopped)
@@ -683,70 +704,43 @@ public class UcpCheckoutServiceTests
         }
     }
 
-    private sealed class StubDistributedCache : IDistributedCache
+    private sealed class StubHandoffSessionStore : IUcpHandoffSessionStore
     {
-        private readonly Dictionary<string, byte[]> _items = [];
+        private readonly Dictionary<string, string> _items = [];
         private readonly System.Exception _getException;
 
-        public StubDistributedCache(System.Exception getException = null)
+        public StubHandoffSessionStore(System.Exception getException = null)
         {
             _getException = getException;
         }
 
-        public byte[] Get(string key)
+        public string Get(string key)
         {
-            if (_getException != null)
-            {
-                throw _getException;
-            }
-
             return _items.GetValueOrDefault(key);
-        }
-
-        public Task<byte[]> GetAsync(string key, CancellationToken token = default)
-        {
-            if (_getException != null)
-            {
-                return Task.FromException<byte[]>(_getException);
-            }
-
-            return Task.FromResult(Get(key));
-        }
-
-        public void Refresh(string key)
-        {
-        }
-
-        public Task RefreshAsync(string key, CancellationToken token = default)
-        {
-            return Task.CompletedTask;
-        }
-
-        public void Remove(string key)
-        {
-            _items.Remove(key);
-        }
-
-        public Task RemoveAsync(string key, CancellationToken token = default)
-        {
-            Remove(key);
-            return Task.CompletedTask;
-        }
-
-        public void Set(string key, byte[] value, DistributedCacheEntryOptions options)
-        {
-            _items[key] = value;
-        }
-
-        public Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token = default)
-        {
-            Set(key, value, options);
-            return Task.CompletedTask;
         }
 
         public void SetRaw(string key, string value)
         {
-            _items[key] = Encoding.UTF8.GetBytes(value);
+            _items[key] = value;
+        }
+
+        public Task SetAsync(string key, string payload, DateTimeOffset expiresAt, CancellationToken cancellationToken = default)
+        {
+            _items[key] = payload;
+            return Task.CompletedTask;
+        }
+
+        public Task<string> GetAsync(string key, CancellationToken cancellationToken = default)
+        {
+            return _getException != null
+                ? Task.FromException<string>(_getException)
+                : Task.FromResult(Get(key));
+        }
+
+        public Task RemoveAsync(string key, CancellationToken cancellationToken = default)
+        {
+            _items.Remove(key);
+            return Task.CompletedTask;
         }
     }
 
@@ -754,28 +748,18 @@ public class UcpCheckoutServiceTests
     {
         public ConcurrentQueue<string> ResourceKeys { get; } = new();
 
-        public T Execute<T>(
-            string resourceKey,
-            Func<T> resolver,
-            TimeSpan? lockTimeout = null,
-            TimeSpan? tryLockTimeout = null,
-            TimeSpan? retryInterval = null,
-            CancellationToken? cancellationToken = null)
+        public bool IsBusy { get; init; }
+
+        public T Execute<T>(string resourceKey, Func<T> resolver)
         {
             ResourceKeys.Enqueue(resourceKey);
-            return resolver();
+            return IsBusy ? throw new LockError("Service is busy.") : resolver();
         }
 
-        public Task<T> ExecuteAsync<T>(
-            string resourceKey,
-            Func<Task<T>> resolver,
-            TimeSpan? lockTimeout = null,
-            TimeSpan? tryLockTimeout = null,
-            TimeSpan? retryInterval = null,
-            CancellationToken? cancellationToken = null)
+        public Task<T> ExecuteAsync<T>(string resourceKey, Func<Task<T>> resolver)
         {
             ResourceKeys.Enqueue(resourceKey);
-            return resolver();
+            return IsBusy ? throw new LockError("Service is busy.") : resolver();
         }
     }
 }

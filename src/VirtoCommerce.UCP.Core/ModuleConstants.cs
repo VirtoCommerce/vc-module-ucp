@@ -101,6 +101,7 @@ public static class ModuleConstants
         public const string IdentityOptional = "identity_optional";
         public const string IdentityRequired = "identity_required";
         public const string BuyerContextMismatch = "buyer_context_mismatch";
+        public const string HandoffInProgress = "handoff_in_progress";
         public const string MissingStoreId = "missing_store_id";
         public const string ProductNotFound = "product_not_found";
         public const string CartNotFound = "cart_not_found";

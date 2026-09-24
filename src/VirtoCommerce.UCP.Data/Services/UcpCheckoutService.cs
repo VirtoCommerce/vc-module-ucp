@@ -9,10 +9,8 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
 using VirtoCommerce.Platform.Core.Common;
-using VirtoCommerce.Platform.Core.DistributedLock;
 using VirtoCommerce.StoreModule.Core.Services;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
@@ -20,13 +18,14 @@ using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Data.Models;
+using VirtoCommerce.Xapi.Core.Infrastructure;
 
 namespace VirtoCommerce.UCP.Data.Services;
 
 public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
 {
     private const int HandoffSessionTokenBytes = 32;
-    private const string HandoffSessionCacheKeyPrefix = "UCP:Handoff:";
+    private const string HandoffSessionCacheKeyPrefix = "vc:ucp:handoff:";
     private const string StatusIncomplete = "incomplete";
     private const string StatusRequiresEscalation = "requires_escalation";
     private const string CheckoutCapability = "dev.ucp.shopping.checkout";
@@ -39,14 +38,14 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
     };
 
     private readonly IUcpCartService _cartService;
-    private readonly IDistributedCache _distributedCache;
+    private readonly IUcpHandoffSessionStore _handoffSessionStore;
     private readonly IDistributedLockService _distributedLock;
     private readonly IStoreService _storeService;
     private readonly UcpOptions _options;
 
     public UcpCheckoutService(
         IUcpCartService cartService,
-        IDistributedCache distributedCache,
+        IUcpHandoffSessionStore handoffSessionStore,
         IDistributedLockService distributedLock,
         IHttpContextAccessor httpContextAccessor,
         IOptions<UcpOptions> options,
@@ -55,7 +54,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         : base(httpContextAccessor, buyerContextAccessor)
     {
         _cartService = cartService;
-        _distributedCache = distributedCache;
+        _handoffSessionStore = handoffSessionStore;
         _distributedLock = distributedLock;
         _options = options.Value;
         _storeService = storeService;
@@ -168,15 +167,15 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         }
 
         var cacheKey = GetHandoffSessionCacheKey(request.UcpSession);
-        using (await AsyncLock.GetLockByKey(cacheKey).LockAsync())
+        try
         {
-            return await _distributedLock.ExecuteAsync(
-                cacheKey,
-                () => RestoreHandoffCore(cacheKey, cancellationToken),
-                lockTimeout: TimeSpan.FromSeconds(30),
-                tryLockTimeout: TimeSpan.FromSeconds(5),
-                retryInterval: TimeSpan.FromMilliseconds(50),
-                cancellationToken: cancellationToken);
+            return await _distributedLock.ExecuteAsync(cacheKey, () => RestoreHandoffCore(cacheKey, cancellationToken));
+        }
+        catch (LockError exception)
+        {
+            // Busy does not mean consumed: the lock holder may still reject the session and leave it valid.
+            throw CreateException(ModuleConstants.ErrorCodes.HandoffInProgress,
+                "ucp_session is being restored by another request. Retry the request.", StatusCodes.Status409Conflict, exception);
         }
     }
 
@@ -210,12 +209,12 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         var cart = await GetCartForCheckout(payload.CartId, context, cancellationToken);
         await UcpDiagnostics.ExecuteDependency(
             "cache",
-            "distributed-cache",
+            "handoff-session-store",
             "RemoveHandoffSession",
             () =>
             {
                 Activity.Current?.SetTag("vc.ucp.handoff.key_hash", cacheKey[HandoffSessionCacheKeyPrefix.Length..]);
-                return _distributedCache.RemoveAsync(cacheKey, cancellationToken);
+                return _handoffSessionStore.RemoveAsync(cacheKey, cancellationToken);
             });
         var checkout = new UcpCheckout
         {
@@ -244,12 +243,12 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
     {
         var cacheResult = await UcpDiagnostics.ExecuteDependency(
             "cache",
-            "distributed-cache",
+            "handoff-session-store",
             "GetHandoffSession",
             async () =>
             {
                 Activity.Current?.SetTag("vc.ucp.handoff.key_hash", cacheKey[HandoffSessionCacheKeyPrefix.Length..]);
-                var payloadJson = await _distributedCache.GetStringAsync(cacheKey, cancellationToken);
+                var payloadJson = await _handoffSessionStore.GetAsync(cacheKey, cancellationToken);
                 if (string.IsNullOrWhiteSpace(payloadJson))
                 {
                     return (Payload: (CheckoutHandoffTokenPayload)null, Outcome: "miss");
@@ -555,18 +554,15 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         var cacheKey = GetHandoffSessionCacheKey(sessionToken);
         await UcpDiagnostics.ExecuteDependency(
             "cache",
-            "distributed-cache",
+            "handoff-session-store",
             "SetHandoffSession",
             () =>
             {
                 Activity.Current?.SetTag("vc.ucp.handoff.key_hash", cacheKey[HandoffSessionCacheKeyPrefix.Length..]);
-                return _distributedCache.SetStringAsync(
+                return _handoffSessionStore.SetAsync(
                     cacheKey,
                     JsonSerializer.Serialize(payload, JsonOptions),
-                    new DistributedCacheEntryOptions
-                    {
-                        AbsoluteExpiration = expiresAt,
-                    },
+                    expiresAt,
                     cancellationToken);
             });
 

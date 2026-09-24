@@ -16,7 +16,7 @@ Canonical public UCP endpoints are published without the `/api` prefix.
 * **UCP discovery profile** — `/.well-known/ucp` publishes supported capabilities, default store metadata, endpoint metadata, headers, auth shape, integration guidance, payment handlers, and structured error codes
 * **Catalog search and product details** — catalog search and product detail lookup through in-process XCatalog GraphQL
 * **Cart assembly** — create, buyer-scoped list, get, and full-state update through XCart GraphQL with UCP replacement semantics
-* **Checkout handoff** — checkout snapshot and hosted handoff with address prefill; temporary handoff sessions stored through `IDistributedCache` with TTL. Multiple instances require shared cache and distributed locks; the memory fallback is only suitable for a single process.
+* **Checkout handoff** — checkout snapshot and hosted handoff with address prefill; temporary handoff sessions stored in Redis with TTL when the Platform Redis connection is configured. Without Redis, sessions are kept in process memory, which is only suitable for a single instance.
 * **Order tracking** — order status, totals, line items, and shipment tracking by order id, order number, or cart id after handoff
 * **Geography lookup** — country and region resolution through the platform `ICountriesService` for checkout address normalization
 * **Streamable HTTP MCP server** — `/ucp/mcp` with typed UCP commerce tools for the installed storefront/platform, built on the official C# MCP SDK
@@ -28,19 +28,21 @@ Canonical public UCP endpoints are published without the `/api` prefix.
 
 ### Multiple instances and public OAuth identity
 
-UCP consumes the host's `IDistributedCache` and Platform `IDistributedLockService` through dependency injection. It does not register a cache provider, select Redis, or require a Redis connection. The host must supply `IDistributedCache`; an existing host provider is preserved.
+Handoff sessions are stored through the UCP `IUcpHandoffSessionStore`. When `ConnectionStrings:RedisConnectionString` is configured, UCP uses the Platform Redis connection (`IConnectionMultiplexer`) and stores each session as a Redis string under `vc:ucp:handoff:<sha256>` with a TTL of `UCP:HandoffTokenTtlMinutes`. Without Redis, UCP uses a process-local memory store. UCP does not open its own Redis connection and does not register or replace `IDistributedCache`. A host can supply its own `IUcpHandoffSessionStore`; UCP registers its store only when none is registered.
 
-When the host supplies shared cache and distributed locking, handoff sessions can be restored across replicas. Platform versions with distributed cache provider selection use Redis when `ConnectionStrings:RedisConnectionString` is configured and local memory otherwise. Replicas must share the Redis database and `Caching:Redis:ChannelName`. On older Platform versions, Redis for cache invalidation or Data Protection alone does not supply shared `IDistributedCache` storage. With a memory provider, another process cannot restore the session, and a restart loses it.
+Restore is serialized per session through the XAPI `IDistributedLockService` (`VirtoCommerce.Xapi.Core.Infrastructure`), which also uses Redis when `ConnectionStrings:RedisConnectionString` is configured and an in-process lock otherwise. The store and the lock therefore always use the same backend.
+
+To restore handoff sessions across replicas, configure the same `ConnectionStrings:RedisConnectionString` (and Redis database) on every replica. With the memory store, another process cannot restore the session, and a restart loses it.
 
 UCP resolves its public origin through XApi `IStoreDomainResolverService`, using `UCP:DefaultStoreId` when set, otherwise the request domain and the existing `VirtoCommerce:Stores` domain mappings and `DefaultStore`. It prefers the resolved store's `SecureUrl`, then `Url`, and falls back to the request origin when neither is available. Set `UCP:PublicOrigin` to explicitly override this resolution (for example `https://store.example.com`).
 
 Discovery, protected-resource metadata, bearer challenges and MCP audience validation use this same origin even when discovery is read through the backend host. Add `<resolved-origin>/ucp/mcp` to Platform `Authorization:Resources` and grant `rsrc:<resolved-origin>/ucp/mcp` to the registered OAuth client. The client must connect to the advertised public MCP endpoint and use the authorization server advertised there. Resource registration and OAuth client permissions remain enforced by Platform/OpenIddict.
 
-For rollout from process-local sessions, drain existing handoffs on the old deployment before switching traffic, or wait at least `HandoffTokenTtlMinutes` after stopping issuance. A Redis-backed release cannot recover sessions stored only in an old process. Do not mix releases using raw-token cache keys with releases using hashed keys; use a drained cutover. Current releases keep the hashed key format and use one shared lock for each session. Do not add retry-on-400 behavior: a consumed, expired or forged token must remain rejected.
+For rollout from process-local sessions, drain existing handoffs on the old deployment before switching traffic, or wait at least `HandoffTokenTtlMinutes` after stopping issuance. A Redis-backed release cannot recover sessions stored only in an old process. Do not mix releases using raw-token cache keys with releases using hashed keys; use a drained cutover. Current releases keep the hashed key format and use one shared lock for each session. If a concurrent restore holds that lock, UCP returns `409` with `handoff_in_progress`; the session is not consumed and the client may retry. Do not add retry-on-400 behavior: a consumed, expired or forged token must remain rejected.
 
 `requires_escalation` means the buyer must continue in hosted checkout, not that approval is required. The response includes `hosted_checkout_required` with `requires_buyer_review`. Merchant approval rules and PO/invoice terms are applied by the existing storefront and commerce modules; UCP does not infer them from the cart amount.
 
-Cache dependency spans include `vc.ucp.handoff.key_hash`, the SHA-256 session-key suffix, on set/get/remove. This allows cross-node correlation without recording the bearer capability. The hash is a trace dimension, never a metric label. Correlate it with `vc.dependency.outcome` and the instance identity to distinguish misses, expiry, corruption and successful consumption.
+Handoff store dependency spans (`VC handoff-session-store SetHandoffSession`, `GetHandoffSession`, `RemoveHandoffSession`) include `vc.ucp.handoff.key_hash`, the SHA-256 session-key suffix, on set/get/remove. This allows cross-node correlation without recording the bearer capability. The hash is a trace dimension, never a metric label. Correlate it with `vc.dependency.outcome` and the instance identity to distinguish misses, expiry, corruption and successful consumption.
 
 ## Quickstart: Connect Virto Start Cloud to Claude Desktop
 
@@ -178,7 +180,7 @@ Configuration is read from the `UCP` section:
 | `UCP:StorefrontOrigin` | String | — | Fallback storefront origin for hosted checkout URLs in environments without Store URLs. |
 | `UCP:PublicOrigin` | String | — | Overrides the public origin used by discovery and MCP OAuth. Otherwise resolved through XApi from the store's `SecureUrl` / `Url`, then the request origin. |
 | `UCP:HandoffUrlTemplate` | String | — | Explicit override for the hosted checkout handoff URL. `{token}` is replaced with the `ucp_session` token. |
-| `UCP:HandoffTokenTtlMinutes` | Integer | `15` | Absolute expiration of temporary checkout handoff sessions in the distributed cache. |
+| `UCP:HandoffTokenTtlMinutes` | Integer | `15` | Absolute expiration of temporary checkout handoff sessions in the handoff session store. |
 | `UCP:AnonymousCatalog` | Boolean | `true` | Allows anonymous catalog search and product detail requests. |
 | `UCP:Observability:InputCaptureMode` | Enum | `ErrorsOnly` | Controls the bounded allowlisted operation input in logs and span attributes: `None`, `ErrorsOnly`, or `Always`. Trace correlation, safe context attributes, and counters remain enabled in every mode. |
 | `UCP:Observability:EnableApplicationInsightsCompatibilityBridge` | Boolean | `true` | Exports UCP activities through the classic Virto Commerce Application Insights module. Disable it when OpenTelemetry already exports the same traces to the target Application Insights resource. |
@@ -218,7 +220,7 @@ flowchart LR
     UcpHttp["UCP HTTP API<br/>/.well-known/ucp<br/>/ucp/v1/*<br/>/ucp/mcp"]
     Controllers["ASP.NET Core controllers"]
     Services["UCP services<br/>VirtoCommerce.UCP.Data"]
-    Cache["Distributed cache<br/>Redis-backed or in-memory fallback<br/>handoff sessions"]
+    Cache["Handoff session store<br/>Platform Redis or in-memory fallback<br/>handoff sessions"]
     Executor["IXApiInProcessExecutor"]
     XApi["Virto Commerce XAPI<br/>scoped schema: ucp"]
     Modules["Commerce modules<br/>XCatalog, XCart, Orders,<br/>Marketing, Store, Pricing, Inventory"]
@@ -395,10 +397,10 @@ The current checkout flow is hosted-only:
 - `update_checkout` updates address hints before payment and applies addresses to XCart.
 - `checkout_and_handoff` creates the checkout snapshot and immediately returns the hosted checkout `continue_url`; MCP clients should prefer it when the buyer is ready to pay or continue to storefront checkout.
 - `handoff_checkout` returns a `continue_url` with an opaque `ucp_session`.
-- `storefront_restore` validates `ucp_session`, reads the session payload from distributed cache, checks expiration, and returns cart and checkout context to the storefront.
+- `storefront_restore` validates `ucp_session`, reads the session payload from the handoff session store, checks expiration, and returns cart and checkout context to the storefront.
 - Shipping method and payment details are completed in storefront checkout.
 
-`ucp_session` is an opaque random session token. The checkout/cart context, address snapshot, payment hint, and expiration timestamp are stored server-side through `IDistributedCache` with absolute expiration based on `UCP:HandoffTokenTtlMinutes`. The module registers `AddDistributedMemoryCache()` as a fallback, so handoff works without Redis in local or single-node deployments. In production multi-node deployments, the platform distributed cache should be Redis-backed so handoff restore works across nodes and sessions survive process restarts.
+`ucp_session` is an opaque random session token. The checkout/cart context, address snapshot, payment hint, and expiration timestamp are stored server-side in the handoff session store with absolute expiration based on `UCP:HandoffTokenTtlMinutes`. Without Redis, the store keeps sessions in process memory, so handoff works in local or single-node deployments. In production multi-node deployments, configure `ConnectionStrings:RedisConnectionString` so handoff restore works across nodes and sessions survive process restarts.
 
 `shipping_address` and `billing_address` are applied to the cart through XCart `addOrUpdateCartAddress` and are also stored in the temporary handoff session payload. Before writing an address, UCP normalizes `country_code` through the platform `ICountriesService`. If the selected country has regions, `region` / `region_id` are normalized through `GetCountryRegionsAsync`.
 
@@ -500,6 +502,7 @@ This follows the hosted-commerce MCP pattern: install or configure the MCP remot
 Known UCP error codes:
 
 - `invalid_request`
+- `handoff_in_progress` — another request is restoring the same `ucp_session`; retryable (`409`)
 - `missing_store_id`
 - `product_not_found`
 - `cart_not_found`
