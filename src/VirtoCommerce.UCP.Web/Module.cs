@@ -13,6 +13,7 @@ using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
+using VirtoCommerce.UCP.Data.Caching;
 using VirtoCommerce.UCP.Data.Services;
 using VirtoCommerce.UCP.ExperienceApi;
 using VirtoCommerce.UCP.Web.Diagnostics;
@@ -37,7 +38,6 @@ public class Module : IModule, IHasConfiguration
             .Get<UcpObservabilityOptions>() ?? new UcpObservabilityOptions();
 
         serviceCollection.AddHttpContextAccessor();
-        serviceCollection.AddDistributedMemoryCache();
         serviceCollection.Configure<UcpOptions>(Configuration.GetSection("UCP"));
         serviceCollection.Configure<MvcOptions>(options =>
         {
@@ -78,9 +78,13 @@ public class Module : IModule, IHasConfiguration
                     context.Services.GetRequiredService<UcpMcpCallToolFilter>().InvokeAsync(next, context, cancellationToken));
             });
 
+        serviceCollection.AddTransient<IUcpPublicOriginResolver, UcpPublicOriginResolver>();
         serviceCollection.AddTransient<IUcpProfileService, UcpProfileService>();
+        serviceCollection.AddScoped<IUcpBuyerContextAccessor, UcpBuyerContextAccessor>();
+        serviceCollection.AddScoped<UcpMcpSessionService>();
         serviceCollection.AddTransient<IUcpCatalogService, UcpCatalogService>();
         serviceCollection.AddTransient<IUcpCartService, UcpCartService>();
+        serviceCollection.AddUcpHandoffSessionStore();
         serviceCollection.AddTransient<IUcpCheckoutService, UcpCheckoutService>();
         serviceCollection.AddTransient<IUcpOrderService, UcpOrderService>();
         serviceCollection.AddTransient<IUcpGeographyService, UcpGeographyService>();

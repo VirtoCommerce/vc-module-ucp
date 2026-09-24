@@ -1,13 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
 using VirtoCommerce.Platform.Core.Common;
 using VirtoCommerce.StoreModule.Core.Services;
@@ -17,13 +18,14 @@ using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Data.Models;
+using VirtoCommerce.Xapi.Core.Infrastructure;
 
 namespace VirtoCommerce.UCP.Data.Services;
 
 public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
 {
     private const int HandoffSessionTokenBytes = 32;
-    private const string HandoffSessionCacheKeyPrefix = "UCP:Handoff:";
+    private const string HandoffSessionCacheKeyPrefix = "vc:ucp:handoff:";
     private const string StatusIncomplete = "incomplete";
     private const string StatusRequiresEscalation = "requires_escalation";
     private const string CheckoutCapability = "dev.ucp.shopping.checkout";
@@ -36,20 +38,24 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
     };
 
     private readonly IUcpCartService _cartService;
-    private readonly IDistributedCache _distributedCache;
+    private readonly IUcpHandoffSessionStore _handoffSessionStore;
+    private readonly IDistributedLockService _distributedLock;
     private readonly IStoreService _storeService;
     private readonly UcpOptions _options;
 
     public UcpCheckoutService(
         IUcpCartService cartService,
-        IDistributedCache distributedCache,
+        IUcpHandoffSessionStore handoffSessionStore,
+        IDistributedLockService distributedLock,
         IHttpContextAccessor httpContextAccessor,
         IOptions<UcpOptions> options,
-        IStoreService storeService = null)
-        : base(httpContextAccessor)
+        IStoreService storeService = null,
+        IUcpBuyerContextAccessor buyerContextAccessor = null)
+        : base(httpContextAccessor, buyerContextAccessor)
     {
         _cartService = cartService;
-        _distributedCache = distributedCache;
+        _handoffSessionStore = handoffSessionStore;
+        _distributedLock = distributedLock;
         _options = options.Value;
         _storeService = storeService;
     }
@@ -139,9 +145,9 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         checkout.Messages.Add(new UcpMessage
         {
             Type = "info",
-            Code = "shipping_required",
-            Content = "Hosted checkout is ready. Provided shipping and billing addresses are already applied to the cart.",
-            Severity = "info",
+            Code = "hosted_checkout_required",
+            Content = "The buyer must continue in the storefront to review and complete checkout. This status does not indicate an approval requirement. The storefront applies the merchant's approval rules and payment terms.",
+            Severity = "requires_buyer_review",
         });
         AddAddressStateMessages(checkout, request);
 
@@ -160,13 +166,89 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "ucp_session is required.");
         }
 
+        var cacheKey = GetHandoffSessionCacheKey(request.UcpSession);
+        try
+        {
+            return await _distributedLock.ExecuteAsync(cacheKey, () => RestoreHandoffCore(cacheKey, cancellationToken));
+        }
+        catch (LockError exception)
+        {
+            // Busy does not mean consumed: the lock holder may still reject the session and leave it valid.
+            throw CreateException(ModuleConstants.ErrorCodes.HandoffInProgress,
+                "ucp_session is being restored by another request. Retry the request.", StatusCodes.Status409Conflict, exception);
+        }
+    }
+
+    private async Task<UcpHandoffRestoreResponse> RestoreHandoffCore(string cacheKey, CancellationToken cancellationToken)
+    {
+        var payload = await GetHandoffSession(cacheKey, cancellationToken);
+
+        var buyerContext = ResolveBuyerContext(
+            requestedBuyerIds: [payload.BuyerId],
+            requestedOrganizationIds: [payload.OrganizationId],
+            requireBuyer: true,
+            requireAuthenticatedBuyer: payload.RequiresAuthentication);
+
+        // Anonymous cart merging is allowed by the buyer accessor, but restore must keep the minted identity.
+        if (!string.Equals(buyerContext.PublicBuyerId, payload.BuyerId, StringComparison.Ordinal)
+            || !string.Equals(buyerContext.OrganizationId, payload.OrganizationId, StringComparison.OrdinalIgnoreCase))
+        {
+            throw CreateException(ModuleConstants.ErrorCodes.BuyerContextMismatch,
+                "The handoff belongs to a different buyer or organization.", StatusCodes.Status403Forbidden);
+        }
+
+        var context = new UcpCartContext
+        {
+            StoreId = payload.StoreId,
+            Currency = payload.Currency,
+            Language = payload.CultureName,
+            BuyerId = buyerContext.PublicBuyerId,
+            OrganizationId = buyerContext.OrganizationId,
+        };
+
+        var cart = await GetCartForCheckout(payload.CartId, context, cancellationToken);
+        await UcpDiagnostics.ExecuteDependency(
+            "cache",
+            "handoff-session-store",
+            "RemoveHandoffSession",
+            () =>
+            {
+                Activity.Current?.SetTag("vc.ucp.handoff.key_hash", cacheKey[HandoffSessionCacheKeyPrefix.Length..]);
+                return _handoffSessionStore.RemoveAsync(cacheKey, cancellationToken);
+            });
+        var checkout = new UcpCheckout
+        {
+            Id = payload.CheckoutId,
+            CartId = payload.CartId,
+            Status = StatusRequiresEscalation,
+            Cart = cart,
+            PaymentHandlers = UcpPaymentHandlerProfiles.Create(),
+            Buyer = payload.Buyer,
+            ShippingAddress = payload.ShippingAddress,
+            BillingAddress = payload.BillingAddress,
+            ShippingMethodId = payload.ShippingMethodId,
+            PaymentHandler = payload.PaymentHandler,
+            ExpiresAt = payload.ExpiresAt,
+        };
+
+        return new UcpHandoffRestoreResponse
+        {
+            Ucp = CreateMetadata("success", HandoffCapability),
+            Checkout = checkout,
+            AnonymousBuyerId = buyerContext.IsAuthenticated ? null : buyerContext.PublicBuyerId,
+        };
+    }
+
+    private async Task<CheckoutHandoffTokenPayload> GetHandoffSession(string cacheKey, CancellationToken cancellationToken)
+    {
         var cacheResult = await UcpDiagnostics.ExecuteDependency(
             "cache",
-            "distributed-cache",
+            "handoff-session-store",
             "GetHandoffSession",
             async () =>
             {
-                var payloadJson = await _distributedCache.GetStringAsync(GetHandoffSessionCacheKey(request.UcpSession), cancellationToken);
+                Activity.Current?.SetTag("vc.ucp.handoff.key_hash", cacheKey[HandoffSessionCacheKeyPrefix.Length..]);
+                var payloadJson = await _handoffSessionStore.GetAsync(cacheKey, cancellationToken);
                 if (string.IsNullOrWhiteSpace(payloadJson))
                 {
                     return (Payload: (CheckoutHandoffTokenPayload)null, Outcome: "miss");
@@ -199,36 +281,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "ucp_session is invalid or expired.");
         }
 
-        var context = new UcpCartContext
-        {
-            StoreId = payload.StoreId,
-            Currency = payload.Currency,
-            Language = payload.CultureName,
-            BuyerId = payload.BuyerId,
-            OrganizationId = payload.OrganizationId,
-        };
-
-        var cart = await GetCartForCheckout(payload.CartId, context, cancellationToken);
-        var checkout = new UcpCheckout
-        {
-            Id = payload.CheckoutId,
-            CartId = payload.CartId,
-            Status = StatusRequiresEscalation,
-            Cart = cart,
-            PaymentHandlers = UcpPaymentHandlerProfiles.Create(),
-            Buyer = payload.Buyer,
-            ShippingAddress = payload.ShippingAddress,
-            BillingAddress = payload.BillingAddress,
-            ShippingMethodId = payload.ShippingMethodId,
-            PaymentHandler = payload.PaymentHandler,
-            ExpiresAt = payload.ExpiresAt,
-        };
-
-        return new UcpHandoffRestoreResponse
-        {
-            Ucp = CreateMetadata("success", HandoffCapability),
-            Checkout = checkout,
-        };
+        return payload;
     }
 
     protected virtual async Task<UcpCart> GetCartForCheckout(string cartId, UcpCartContext context, CancellationToken cancellationToken)
@@ -474,6 +527,10 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
 
     protected virtual async Task<string> StoreHandoffPayload(UcpCheckout checkout, UcpCartContext context, DateTimeOffset expiresAt, CancellationToken cancellationToken)
     {
+        var buyerContext = ResolveBuyerContext(
+            requestedBuyerIds: [checkout.Buyer?.Id, checkout.Cart?.BuyerId, context?.BuyerId],
+            requestedOrganizationIds: [checkout.Cart?.OrganizationId, context?.OrganizationId],
+            requireBuyer: true);
         var sessionToken = GenerateSessionToken();
         var payload = new CheckoutHandoffTokenPayload
         {
@@ -482,8 +539,10 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             StoreId = checkout.Cart.StoreId,
             Currency = checkout.Cart.Currency,
             CultureName = FirstNotEmpty(context?.Language, _options.DefaultCultureName, "en-US"),
-            BuyerId = checkout.Buyer?.Id,
-            OrganizationId = checkout.Cart.OrganizationId,
+            BuyerId = buyerContext.PublicBuyerId,
+            OrganizationId = buyerContext.OrganizationId,
+            RequiresAuthentication = buyerContext.IsAuthenticated,
+            IssuedAt = DateTimeOffset.UtcNow,
             Buyer = checkout.Buyer,
             ShippingAddress = checkout.ShippingAddress,
             BillingAddress = checkout.BillingAddress,
@@ -492,18 +551,20 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             ExpiresAt = expiresAt,
         };
 
+        var cacheKey = GetHandoffSessionCacheKey(sessionToken);
         await UcpDiagnostics.ExecuteDependency(
             "cache",
-            "distributed-cache",
+            "handoff-session-store",
             "SetHandoffSession",
-            () => _distributedCache.SetStringAsync(
-                GetHandoffSessionCacheKey(sessionToken),
-                JsonSerializer.Serialize(payload, JsonOptions),
-                new DistributedCacheEntryOptions
-                {
-                    AbsoluteExpiration = expiresAt,
-                },
-                cancellationToken));
+            () =>
+            {
+                Activity.Current?.SetTag("vc.ucp.handoff.key_hash", cacheKey[HandoffSessionCacheKeyPrefix.Length..]);
+                return _handoffSessionStore.SetAsync(
+                    cacheKey,
+                    JsonSerializer.Serialize(payload, JsonOptions),
+                    expiresAt,
+                    cancellationToken);
+            });
 
         return sessionToken;
     }
@@ -519,7 +580,9 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
 
     protected virtual string GetHandoffSessionCacheKey(string sessionToken)
     {
-        return HandoffSessionCacheKeyPrefix + sessionToken;
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionToken);
+        var tokenHash = SHA256.HashData(Encoding.UTF8.GetBytes(sessionToken));
+        return HandoffSessionCacheKeyPrefix + Convert.ToHexString(tokenHash);
     }
 
     protected virtual async Task<string> BuildContinueUrl(string token, string storeId)
@@ -551,7 +614,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
     protected virtual UcpCheckoutBuyer MergeBuyer(UcpCheckoutBuyer buyer, UcpCart cart)
     {
         buyer ??= new UcpCheckoutBuyer();
-        buyer.Id = FirstNotEmpty(buyer.Id, cart.BuyerId);
+        buyer.Id = cart.BuyerId;
         return buyer;
     }
 

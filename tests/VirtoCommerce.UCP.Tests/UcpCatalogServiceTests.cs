@@ -43,8 +43,12 @@ public class UcpCatalogServiceTests
             HttpContext = new DefaultHttpContext(),
         };
         httpContextAccessor.HttpContext.TraceIdentifier = "trace-1";
-        httpContextAccessor.HttpContext.Request.Headers[ModuleConstants.Headers.BuyerUserId] = "buyer-1";
-        httpContextAccessor.HttpContext.Request.Headers[ModuleConstants.Headers.BuyerOrganizationId] = "org-1";
+        httpContextAccessor.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", "buyer-1"),
+            new Claim(ClaimTypes.NameIdentifier, "buyer-1"),
+            new Claim("organization_id", "org-1"),
+        ], "Bearer"));
 
         var service = new UcpCatalogService(
             executor,
@@ -87,6 +91,27 @@ public class UcpCatalogServiceTests
         Assert.Equal("price:(TO 150]", executor.LastRequest.Variables["filter"]);
         Assert.Contains(executor.LastRequest.User.Claims, x => x.Type == ClaimTypes.NameIdentifier && x.Value == "buyer-1");
         Assert.Contains(executor.LastRequest.User.Claims, x => x.Type == "organization_id" && x.Value == "org-1");
+        Assert.Empty(response.Messages);
+    }
+
+    [Fact]
+    public async Task SearchProducts_AnonymousResponseInvitesStandardIdentityLinking()
+    {
+        var service = new UcpCatalogService(
+            new StubXApiExecutor(SearchResponseJson),
+            new HttpContextAccessor { HttpContext = new DefaultHttpContext() },
+            Options.Create(new UcpOptions { DefaultStoreId = "acme", DefaultCurrency = "USD" }));
+
+        var response = await service.SearchProducts(
+            new UcpCatalogSearchRequest { Query = "printer" },
+            TestContext.Current.CancellationToken);
+
+        var message = Assert.Single(response.Messages);
+        Assert.Equal("info", message.Type);
+        Assert.Equal("info", message.Severity);
+        Assert.Equal(ModuleConstants.ErrorCodes.IdentityOptional, message.Code);
+        Assert.Contains(ModuleConstants.McpTools.LinkBuyerIdentity, message.Content);
+        Assert.Contains("repeat this operation", message.Content);
     }
 
     [Fact]
@@ -209,6 +234,29 @@ public class UcpCatalogServiceTests
         Assert.Contains(response.Product.Attributes, attribute => attribute.Name == "ReleaseYear" && attribute.Value == null);
         Assert.Equal(nameof(XApiResponseException), degradedTelemetry.ErrorType);
         Assert.Equal("xapi_recoverable_graphql_error", degradedTelemetry.ErrorCode);
+    }
+
+    [Fact]
+    public async Task GetProduct_AnonymousResponseInvitesStandardIdentityLinking()
+    {
+        var executor = new SequenceXApiExecutor(new (string Json, bool Succeeded)[]
+        {
+            (PartialProductResponseJson, true),
+            ("""{"data":{"products":{"items":[{"id":"product-1","variations":[]}]}}}""", true),
+        });
+        var service = new UcpCatalogService(
+            executor,
+            new HttpContextAccessor { HttpContext = new DefaultHttpContext() },
+            Options.Create(new UcpOptions { DefaultStoreId = "acme" }));
+
+        var response = await service.GetProduct(
+            "product-1",
+            new UcpCatalogSearchRequest(),
+            TestContext.Current.CancellationToken);
+
+        var message = Assert.Single(response.Messages);
+        Assert.Equal(ModuleConstants.ErrorCodes.IdentityOptional, message.Code);
+        Assert.Contains(ModuleConstants.McpTools.LinkBuyerIdentity, message.Content);
     }
 
     [Fact]

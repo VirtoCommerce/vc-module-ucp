@@ -27,6 +27,19 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
     private const int BillingAndShippingAddressType = 3;
     private const int PickupAddressType = 4;
 
+    private static readonly Dictionary<string, string> MutationInputNames = new(StringComparer.Ordinal)
+    {
+        ["addItem"] = "AddItem",
+        ["changeCartItemQuantity"] = "ChangeCartItemQuantity",
+        ["removeCartItem"] = "RemoveItem",
+        ["addCoupon"] = "AddCoupon",
+        ["removeCoupon"] = "RemoveCoupon",
+        ["addOrUpdateCartAddress"] = "AddOrUpdateCartAddress",
+        ["addOrUpdateCartShipment"] = "AddOrUpdateCartShipment",
+        ["addOrUpdateCartPayment"] = "AddOrUpdateCartPayment",
+        ["mergeCart"] = "MergeCart",
+    };
+
     private readonly IXApiInProcessExecutor _xApiExecutor;
     private readonly ICountriesService _countriesService;
     private readonly UcpOptions _options;
@@ -35,8 +48,9 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         IXApiInProcessExecutor xApiExecutor,
         IHttpContextAccessor httpContextAccessor,
         IOptions<UcpOptions> options,
-        ICountriesService countriesService = null)
-        : base(httpContextAccessor)
+        ICountriesService countriesService = null,
+        IUcpBuyerContextAccessor buyerContextAccessor = null)
+        : base(httpContextAccessor, buyerContextAccessor)
     {
         _xApiExecutor = xApiExecutor;
         _countriesService = countriesService;
@@ -48,27 +62,31 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         request ??= new UcpCartRequest();
         var cartRequest = BuildCartExecutionRequest(request, generateAnonymousBuyer: true);
 
-        if (request.LineItems.Count == 0)
+        if (request.LineItems == null || request.LineItems.Count == 0)
         {
             throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "line_items must contain at least one item.");
         }
 
+        foreach (var lineItem in request.LineItems)
+        {
+            ValidateLineItemForAdd(lineItem);
+        }
+
         var firstLineItem = request.LineItems[0];
-        ValidateLineItemForAdd(firstLineItem);
         var cartElement = await ExecuteCartMutation(
             "addItem",
             "UcpAddCartItem",
             cartRequest,
             BuildAddItemCommand(cartRequest, null, firstLineItem),
             cancellationToken);
+        cartRequest.CartId = ReadString(cartElement, "id");
 
         foreach (var lineItem in request.LineItems.Skip(1))
         {
-            ValidateLineItemForAdd(lineItem);
             cartElement = await ExecuteCartMutation("addItem", "UcpAddCartItem", cartRequest, BuildAddItemCommand(cartRequest, null, lineItem), cancellationToken);
         }
 
-        if (request.Coupons.Count > 0)
+        if (request.Coupons?.Count > 0)
         {
             cartRequest.CartId = ReadString(cartElement, "id");
             foreach (var coupon in NormalizeCoupons(request.Coupons))
@@ -83,11 +101,13 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
     public virtual async Task<UcpCartListResponse> ListCarts(UcpCartListRequest request, CancellationToken cancellationToken = default)
     {
         request ??= new UcpCartListRequest();
-        var cartRequest = BuildCartExecutionRequest(new UcpCartRequest { Context = request.Context }, allowAnonymousFallback: false);
+        var cartRequest = BuildCartExecutionRequest(
+            new UcpCartRequest { Context = request.Context },
+            requireBuyer: true);
 
         if (string.IsNullOrWhiteSpace(cartRequest.UserId))
         {
-            throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "Buyer context is required to list carts. Provide X-Buyer-User-Id or context.buyer_id.");
+            throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "buyer_id is required for anonymous cart listing; authenticated mode uses the Platform token.");
         }
 
         var variables = new Dictionary<string, object>
@@ -107,11 +127,12 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             Query = ListCartsQuery,
             OperationName = "UcpListCarts",
             Variables = variables,
-            User = BuildBuyerPrincipal(cartRequest.UserId, cartRequest.OrganizationId),
+            User = cartRequest.Principal,
         }, cancellationToken);
 
         using var document = ParseGraphQlResult(result, "XCart");
         var cartsElement = document.RootElement.GetProperty("data").GetProperty("carts");
+        EnsureCartListOwnership(cartsElement, cartRequest);
         var carts = ReadCarts(cartsElement);
 
         return new UcpCartListResponse
@@ -132,7 +153,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         ArgumentException.ThrowIfNullOrWhiteSpace(cartId);
 
         request ??= new UcpCartRequest();
-        var cartRequest = BuildCartExecutionRequest(request, allowAnonymousFallback: false);
+        var cartRequest = BuildCartExecutionRequest(request, requireBuyer: true);
         cartRequest.CartId = cartId;
 
         var cartElement = await ExecuteGetCart(cartRequest, cancellationToken);
@@ -149,25 +170,112 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         ArgumentException.ThrowIfNullOrWhiteSpace(cartId);
 
         request ??= new UcpCartRequest();
-        var cartRequest = BuildCartExecutionRequest(request, allowAnonymousFallback: false);
+        var cartRequest = BuildCartExecutionRequest(request, requireBuyer: true);
         cartRequest.CartId = cartId;
 
-        var currentCart = await ExecuteGetCart(cartRequest, cancellationToken);
+        var desiredItems = (request.LineItems ?? []).Select(x => x == null ? null : new UcpCartLineItemRequest
+        {
+            Id = x.Id,
+            ProductId = x.ProductId,
+            Quantity = x.Quantity,
+        }).ToList();
+        var currentCart = !string.IsNullOrWhiteSpace(cartRequest.SourceAnonymousBuyerId)
+            ? await MergeAnonymousCart(cartRequest, desiredItems, cancellationToken)
+            : await ExecuteGetCart(cartRequest, cancellationToken);
         if (currentCart.ValueKind == JsonValueKind.Null)
         {
             throw CreateException(ModuleConstants.ErrorCodes.CartNotFound, $"Cart '{cartId}' was not found.", StatusCodes.Status404NotFound);
         }
 
-        cartRequest.UserId = FirstNotEmpty(cartRequest.UserId, ReadString(currentCart, "customerId"));
-        cartRequest.OrganizationId = FirstNotEmpty(cartRequest.OrganizationId, ReadString(currentCart, "organizationId"));
-
         var currentItems = ReadCartLineItems(currentCart);
-        var desiredItems = ConsolidateDesiredItems(request.LineItems ?? [], currentItems);
-        var cartElement = await RemoveMissingItems(currentCart, cartRequest, currentItems, desiredItems, cancellationToken);
-        cartElement = await ApplyDesiredItems(cartId, cartElement, cartRequest, currentItems, desiredItems, cancellationToken);
+        cartRequest.CartId = ReadString(currentCart, "id");
+        var consolidatedItems = ValidateDesiredItems(cartRequest.CartId, desiredItems, currentItems);
+        var cartElement = await RemoveMissingItems(currentCart, cartRequest, currentItems, consolidatedItems, cancellationToken);
+        cartElement = await ApplyDesiredItems(cartRequest.CartId, cartElement, cartRequest, currentItems, consolidatedItems, cancellationToken);
         cartElement = await ApplyCoupons(cartElement, cartRequest, currentCart, request.Coupons, cancellationToken);
 
         return CreateResponse(cartElement);
+    }
+
+    private async Task<JsonElement> MergeAnonymousCart(
+        CartExecutionRequest targetRequest,
+        IList<UcpCartLineItemRequest> desiredItems,
+        CancellationToken cancellationToken)
+    {
+        var sourceRequest = new CartExecutionRequest
+        {
+            CartId = targetRequest.CartId,
+            StoreId = targetRequest.StoreId,
+            Currency = targetRequest.Currency,
+            CultureName = targetRequest.CultureName,
+            CartName = targetRequest.CartName,
+            CartType = targetRequest.CartType,
+            UserId = targetRequest.SourceAnonymousBuyerId,
+            Principal = BuildAnonymousBuyerPrincipal(targetRequest.SourceAnonymousBuyerId),
+            IsAuthenticated = false,
+        };
+        var sourceCart = await ExecuteGetCart(sourceRequest, cancellationToken);
+        if (sourceCart.ValueKind == JsonValueKind.Null)
+        {
+            targetRequest.CartId = null;
+            return await ExecuteGetCart(targetRequest, cancellationToken);
+        }
+
+        if (!string.Equals(ReadString(sourceCart, "customerId"), targetRequest.SourceAnonymousBuyerId, StringComparison.Ordinal) ||
+            !string.IsNullOrWhiteSpace(ReadString(sourceCart, "organizationId")))
+        {
+            throw CreateException(
+                ModuleConstants.ErrorCodes.BuyerContextMismatch,
+                "Anonymous cart does not belong to the supplied buyer context.",
+                StatusCodes.Status403Forbidden);
+        }
+
+        var sourceCartId = targetRequest.CartId;
+        var sourceItems = ReadCartLineItems(sourceCart);
+        ValidateDesiredItems(sourceCartId, desiredItems, sourceItems);
+        foreach (var desiredItem in desiredItems)
+        {
+            var sourceItem = FindCurrentItem(sourceCartId, sourceItems, desiredItem);
+            desiredItem.ProductId = FirstNotEmpty(desiredItem.ProductId, sourceItem?.ProductId);
+            // XCart assigns new line identifiers when it merges the source cart.
+            desiredItem.Id = null;
+        }
+
+        targetRequest.CartId = null;
+        var command = BuildBaseCommand(targetRequest);
+        command["secondCartId"] = sourceCartId;
+        command["deleteAfterMerge"] = true;
+
+        var mergedCart = await ExecuteCartMutation("mergeCart", "UcpMergeCart", targetRequest, command, cancellationToken);
+        targetRequest.CartId = ReadString(mergedCart, "id");
+        return mergedCart;
+    }
+
+    private IList<UcpCartLineItemRequest> ValidateDesiredItems(
+        string cartId,
+        IList<UcpCartLineItemRequest> desiredItems,
+        IList<UcpCartLineItem> currentItems)
+    {
+        foreach (var desiredItem in desiredItems)
+        {
+            if (desiredItem == null)
+            {
+                throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "line_items must not contain null items.");
+            }
+
+            var currentItem = FindCurrentItem(cartId, currentItems, desiredItem);
+            if (currentItem == null)
+            {
+                ValidateLineItemForAdd(desiredItem);
+            }
+            else if (!string.IsNullOrWhiteSpace(desiredItem.ProductId) &&
+                !string.Equals(desiredItem.ProductId, currentItem.ProductId, StringComparison.OrdinalIgnoreCase))
+            {
+                throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "Line item and product identifiers do not match.");
+            }
+        }
+
+        return ConsolidateDesiredItems(desiredItems, currentItems);
     }
 
     public virtual async Task<UcpCartResponse> ApplyCheckoutData(string cartId, UcpCheckoutRequest request, CancellationToken cancellationToken = default)
@@ -175,7 +283,9 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         ArgumentException.ThrowIfNullOrWhiteSpace(cartId);
 
         request ??= new UcpCheckoutRequest();
-        var cartRequest = BuildCartExecutionRequest(new UcpCartRequest { Context = request.Context }, allowAnonymousFallback: false);
+        var cartRequest = BuildCartExecutionRequest(
+            new UcpCartRequest { Context = request.Context },
+            requireBuyer: true);
         cartRequest.CartId = cartId;
 
         var cartElement = await ExecuteGetCart(cartRequest, cancellationToken);
@@ -183,9 +293,6 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         {
             throw CreateException(ModuleConstants.ErrorCodes.CartNotFound, $"Cart '{cartId}' was not found.", StatusCodes.Status404NotFound);
         }
-
-        cartRequest.UserId = FirstNotEmpty(cartRequest.UserId, ReadString(cartElement, "customerId"));
-        cartRequest.OrganizationId = FirstNotEmpty(cartRequest.OrganizationId, ReadString(cartElement, "organizationId"));
 
         var currentCart = ReadCart(cartElement);
         var shippingAddress = await PrepareAddress(request.ShippingAddress, request.Buyer, cancellationToken);
@@ -236,9 +343,16 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         return CreateResponse(cartElement);
     }
 
-    private CartExecutionRequest BuildCartExecutionRequest(UcpCartRequest request, bool generateAnonymousBuyer = false, bool allowAnonymousFallback = true)
+    private CartExecutionRequest BuildCartExecutionRequest(
+        UcpCartRequest request,
+        bool generateAnonymousBuyer = false,
+        bool requireBuyer = false)
     {
-        var buyerId = ResolveInitialBuyerId(request, generateAnonymousBuyer);
+        var buyerContext = ResolveBuyerContext(
+            requestedBuyerIds: [request.BuyerId, request.Context?.BuyerId],
+            requestedOrganizationIds: [request.OrganizationId, request.Context?.OrganizationId],
+            createAnonymousBuyer: generateAnonymousBuyer,
+            requireBuyer: requireBuyer);
         var result = new CartExecutionRequest
         {
             StoreId = ResolveStoreId(request),
@@ -246,24 +360,16 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             CultureName = ResolveCultureName(request),
             CartName = ResolveCartName(request),
             CartType = ResolveCartType(request),
-            UserId = ResolveUserId(request, buyerId, allowAnonymousFallback),
-            OrganizationId = ResolveOrganizationId(request),
+            UserId = buyerContext.UserId,
+            SourceAnonymousBuyerId = buyerContext.SourceAnonymousBuyerId,
+            OrganizationId = buyerContext.OrganizationId,
+            Principal = buyerContext.Principal,
+            IsAuthenticated = buyerContext.IsAuthenticated,
         };
 
         ValidateCartExecutionRequest(result);
 
         return result;
-    }
-
-    private string ResolveInitialBuyerId(UcpCartRequest request, bool generateAnonymousBuyer)
-    {
-        var buyerId = FirstNotEmpty(GetBuyerUserId(), request.Context?.BuyerId);
-        if (string.IsNullOrWhiteSpace(buyerId) && generateAnonymousBuyer)
-        {
-            buyerId = $"ucp-anonymous-{Guid.NewGuid():N}";
-        }
-
-        return buyerId;
     }
 
     private string ResolveStoreId(UcpCartRequest request)
@@ -289,18 +395,6 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
     private static string ResolveCartType(UcpCartRequest request)
     {
         return FirstNotEmpty(request.CartType, request.Context?.CartType, DefaultCartType);
-    }
-
-    private static string ResolveUserId(UcpCartRequest request, string buyerId, bool allowAnonymousFallback)
-    {
-        return allowAnonymousFallback
-            ? FirstNotEmpty(request.BuyerId, buyerId, "ucp-anonymous")
-            : FirstNotEmpty(request.BuyerId, buyerId);
-    }
-
-    private string ResolveOrganizationId(UcpCartRequest request)
-    {
-        return FirstNotEmpty(request.OrganizationId, GetBuyerOrganizationId(), request.Context?.OrganizationId);
     }
 
     private void ValidateCartExecutionRequest(CartExecutionRequest request)
@@ -384,11 +478,22 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
                 continue;
             }
 
-            consolidated.Quantity += desiredItem.Quantity;
+            consolidated.Quantity = CombineQuantities(consolidated.Quantity, desiredItem.Quantity);
             consolidated.Id = FirstNotEmpty(consolidated.Id, currentItem?.Id, desiredItem.Id);
         }
 
         return result;
+    }
+
+    private int CombineQuantities(int currentQuantity, int additionalQuantity)
+    {
+        var quantity = (long)currentQuantity + additionalQuantity;
+        if (quantity > int.MaxValue || quantity < int.MinValue)
+        {
+            throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "The combined line item quantity is out of range.");
+        }
+
+        return (int)quantity;
     }
 
     protected virtual UcpCartLineItem ResolveCurrentItemForConsolidation(UcpCartLineItemRequest desiredItem, IEnumerable<UcpCartLineItem> currentItems)
@@ -541,11 +646,13 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             Query = GetCartQuery,
             OperationName = "UcpGetCart",
             Variables = variables,
-            User = BuildBuyerPrincipal(cartRequest.UserId, cartRequest.OrganizationId),
+            User = cartRequest.Principal,
         }, cancellationToken);
 
         using var document = ParseGraphQlResult(result, "XCart");
-        return document.RootElement.GetProperty("data").GetProperty("cart").Clone();
+        var cart = document.RootElement.GetProperty("data").GetProperty("cart").Clone();
+        EnsureCartOwnership(cart, cartRequest);
+        return cart;
     }
 
     private async Task<JsonElement> ExecuteCartMutation(string mutationName, string operationName, CartExecutionRequest cartRequest, IDictionary<string, object> command, CancellationToken cancellationToken)
@@ -555,11 +662,50 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             Query = BuildCartMutation(mutationName, operationName),
             OperationName = operationName,
             Variables = new Dictionary<string, object> { ["command"] = command },
-            User = BuildBuyerPrincipal(cartRequest.UserId, cartRequest.OrganizationId),
+            User = cartRequest.Principal,
         }, cancellationToken);
 
         using var document = ParseGraphQlResult(result, "XCart");
-        return document.RootElement.GetProperty("data").GetProperty(mutationName).Clone();
+        var cart = document.RootElement.GetProperty("data").GetProperty(mutationName).Clone();
+        EnsureCartOwnership(cart, cartRequest);
+        return cart;
+    }
+
+    private void EnsureCartOwnership(JsonElement cart, CartExecutionRequest request)
+    {
+        if (cart.ValueKind == JsonValueKind.Null)
+        {
+            return;
+        }
+
+        var customerId = ReadString(cart, "customerId");
+        var organizationId = ReadString(cart, "organizationId");
+        var ownerMatches = string.Equals(customerId, request.UserId, StringComparison.Ordinal) &&
+            string.Equals(organizationId ?? string.Empty, request.OrganizationId ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        var cartTypeMatches = request.IsAuthenticated
+            ? !ReadBoolean(cart, "isAnonymous")
+            : ReadBoolean(cart, "isAnonymous") && string.IsNullOrWhiteSpace(organizationId);
+
+        if (!ownerMatches || !cartTypeMatches)
+        {
+            throw CreateException(
+                ModuleConstants.ErrorCodes.BuyerContextMismatch,
+                "Cart does not belong to the resolved buyer context.",
+                StatusCodes.Status403Forbidden);
+        }
+    }
+
+    private void EnsureCartListOwnership(JsonElement carts, CartExecutionRequest request)
+    {
+        if (!carts.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (var cart in items.EnumerateArray())
+        {
+            EnsureCartOwnership(cart, request);
+        }
     }
 
     private static Dictionary<string, object> BuildAddItemCommand(CartExecutionRequest request, string cartId, UcpCartLineItemRequest lineItem)
@@ -1134,18 +1280,12 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
 
     protected static string GetMutationInputName(string mutationName)
     {
-        return mutationName switch
+        if (MutationInputNames.TryGetValue(mutationName, out var inputName))
         {
-            "addItem" => "AddItem",
-            "changeCartItemQuantity" => "ChangeCartItemQuantity",
-            "removeCartItem" => "RemoveItem",
-            "addCoupon" => "AddCoupon",
-            "removeCoupon" => "RemoveCoupon",
-            "addOrUpdateCartAddress" => "AddOrUpdateCartAddress",
-            "addOrUpdateCartShipment" => "AddOrUpdateCartShipment",
-            "addOrUpdateCartPayment" => "AddOrUpdateCartPayment",
-            _ => throw new InvalidOperationException($"Unsupported cart mutation '{mutationName}'."),
-        };
+            return inputName;
+        }
+
+        throw new InvalidOperationException($"Unsupported cart mutation '{mutationName}'.");
     }
 
     protected static string ReadFirstArrayObjectString(JsonElement element, string arrayPropertyName, string propertyName)

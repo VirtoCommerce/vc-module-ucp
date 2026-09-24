@@ -4,14 +4,14 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
+using VirtoCommerce.OrdersModule.Core.Model;
+using VirtoCommerce.OrdersModule.Core.Model.Search;
+using VirtoCommerce.OrdersModule.Core.Services;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Data.Services;
-using VirtoCommerce.OrdersModule.Core.Model;
-using VirtoCommerce.OrdersModule.Core.Model.Search;
-using VirtoCommerce.OrdersModule.Core.Services;
 using Xunit;
 
 namespace VirtoCommerce.UCP.Tests;
@@ -76,22 +76,54 @@ public class UcpOrderServiceTests
     }
 
     [Fact]
-    public async Task TrackOrder_ByCartId_FallsBackToShoppingCartIdWhenGuestBuyerChanged()
+    public async Task TrackOrder_ByCartId_RejectsAnotherBuyer()
     {
         var order = CreateOrder("order-1", "cart-1", "storefront-guest");
         var orderSearchService = new StubCustomerOrderSearchService(order);
         var service = CreateService(orderSearchService: orderSearchService);
 
-        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.TrackOrder(new UcpOrderTrackingRequest
         {
             CartId = "cart-1",
             Context = new UcpCartContext { BuyerId = "ucp-anonymous-original" },
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(404, exception.StatusCode);
+        Assert.All(orderSearchService.Criteria, x => Assert.Equal("ucp-anonymous-original", x.CustomerId));
+    }
+
+    [Fact]
+    public async Task TrackOrder_ByCartId_FindsOrderBeyondFirstPage()
+    {
+        var orders = Enumerable.Range(0, 51).Select(x => CreateOrder($"order-{x}", $"cart-{x}", "buyer-1")).ToArray();
+        var searchService = new StubCustomerOrderSearchService(orders);
+        var service = CreateService(orderSearchService: searchService);
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            CartId = "cart-50",
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
         }, TestContext.Current.CancellationToken);
 
-        Assert.Equal("order-1", response.Order.Id);
-        Assert.Equal(2, orderSearchService.Criteria.Count);
-        Assert.Equal("ucp-anonymous-original", orderSearchService.Criteria[0].CustomerId);
-        Assert.Null(orderSearchService.Criteria[1].CustomerId);
+        Assert.Equal("order-50", response.Order.Id);
+        Assert.Equal([0, 50], searchService.Criteria.Select(x => x.Skip));
+        Assert.All(searchService.Criteria, x => Assert.Equal("buyer-1", x.CustomerId));
+    }
+
+    [Fact]
+    public async Task TrackOrder_ByCartId_RejectsAnotherOrganization()
+    {
+        var order = CreateOrder("order-1", "cart-1", "buyer-1");
+        order.OrganizationId = "org-1";
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(order));
+
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            CartId = "cart-1",
+            Context = new UcpCartContext { BuyerId = "buyer-1", OrganizationId = "org-2" },
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(404, exception.StatusCode);
     }
 
     [Fact]
@@ -220,7 +252,8 @@ public class UcpOrderServiceTests
             Options.Create(new UcpOptions
             {
                 DefaultCultureName = "en-US",
-            }));
+            }),
+            new TestBuyerContextAccessor());
     }
 
     private static CustomerOrder CreateOrder(string id, string cartId, string buyerId)
@@ -359,6 +392,7 @@ public class UcpOrderServiceTests
                 OrganizationId = criteria.OrganizationId,
                 Number = criteria.Number,
                 Take = criteria.Take,
+                Skip = criteria.Skip,
                 Sort = criteria.Sort,
                 ResponseGroup = criteria.ResponseGroup,
             });
@@ -367,12 +401,11 @@ public class UcpOrderServiceTests
                 .Where(order => string.IsNullOrWhiteSpace(criteria.CustomerId) || order.CustomerId == criteria.CustomerId)
                 .Where(order => string.IsNullOrWhiteSpace(criteria.OrganizationId) || order.OrganizationId == criteria.OrganizationId)
                 .Where(order => string.IsNullOrWhiteSpace(criteria.Number) || order.Number == criteria.Number)
-                .Take(criteria.Take > 0 ? criteria.Take : _orders.Count)
                 .ToList();
 
             return Task.FromResult(new CustomerOrderSearchResult
             {
-                Results = results,
+                Results = results.Skip(criteria.Skip).Take(criteria.Take > 0 ? criteria.Take : _orders.Count).ToList(),
                 TotalCount = results.Count,
             });
         }

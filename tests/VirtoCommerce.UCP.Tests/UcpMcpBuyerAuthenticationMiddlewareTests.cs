@@ -1,0 +1,383 @@
+using System;
+using System.IO;
+using System.Security.Claims;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using VirtoCommerce.UCP.Core.Options;
+using VirtoCommerce.UCP.Core.Services;
+using VirtoCommerce.StoreModule.Core.Model;
+using VirtoCommerce.UCP.Web.Mcp;
+using VirtoCommerce.UCP.Web.Services;
+using Xunit;
+
+namespace VirtoCommerce.UCP.Tests;
+
+[Trait("Category", "Unit")]
+public class UcpMcpBuyerAuthenticationMiddlewareTests
+{
+    [Theory]
+    [InlineData("https://shop.example/ucp/mcp", true, true)]
+    [InlineData("https://backend.example/ucp/mcp", false, true)]
+    [InlineData("https://shop.example/ucp/mcp", true, false)]
+    [InlineData("https://backend.example/ucp/mcp", false, false)]
+    public async Task InvokeAsync_CanonicalResourceControlsAudienceAndChallenge(string audience, bool accepted, bool publicOverride)
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var context = CreateToolCall("link_buyer_identity");
+        context.Request.Host = new HostString("backend.example");
+        using var services = new ServiceCollection()
+            .AddSingleton<UcpMcpSessionService>(new ActiveSessionService())
+            .AddSingleton<IUcpPublicOriginResolver>(UcpPublicOriginResolverTests.CreateResolver(
+                new HttpContextAccessor { HttpContext = context },
+                new UcpOptions { PublicOrigin = publicOverride ? "https://shop.example" : null },
+                new Store { SecureUrl = publicOverride ? "https://other.example" : "https://shop.example" }))
+            .BuildServiceProvider();
+        context.RequestServices = services;
+        context.Request.Headers.Authorization = "Bearer platform-token";
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", "user-1"),
+            new Claim("aud", audience),
+        ], "Bearer"));
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Equal(accepted, nextCalled);
+        if (!accepted)
+        {
+            Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+            Assert.Contains("https://shop.example/.well-known/oauth-protected-resource/ucp/mcp", context.Response.Headers.WWWAuthenticate.ToString());
+            Assert.DoesNotContain("backend.example", context.Response.Headers.WWWAuthenticate.ToString());
+        }
+    }
+
+    [Theory]
+    [InlineData("123")]
+    [InlineData("true")]
+    [InlineData("null")]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    public async Task InvokeAsync_NonStringMethodReturnsInvalidRequest(string method)
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var context = CreateJsonRequest($$"""{"jsonrpc":"2.0","id":1,"method":{{method}}}""");
+
+        await middleware.InvokeAsync(context);
+
+        Assert.False(nextCalled);
+        Assert.Equal(StatusCodes.Status400BadRequest, context.Response.StatusCode);
+        Assert.Equal(0, context.Request.Body.Position);
+    }
+
+    [Theory]
+    [InlineData("not json", -32700)]
+    [InlineData("{\"jsonrpc\":\"2.0\",\"id\":true,\"method\":\"tools/list\"}", -32600)]
+    [InlineData("{\"jsonrpc\":\"2.0\",\"id\":1}", -32600)]
+    [InlineData("null", -32600)]
+    [InlineData("[]", -32600)]
+    public async Task InvokeAsync_InvalidEnvelopeReturnsProtocolError(string json, int expectedCode)
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var context = CreateJsonRequest(json);
+
+        await middleware.InvokeAsync(context);
+
+        Assert.False(nextCalled);
+        Assert.Equal(StatusCodes.Status400BadRequest, context.Response.StatusCode);
+        context.Response.Body.Position = 0;
+        using var response = await JsonDocument.ParseAsync(context.Response.Body, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(expectedCode, response.RootElement.GetProperty("error").GetProperty("code").GetInt32());
+        Assert.Equal(JsonValueKind.Null, response.RootElement.GetProperty("id").ValueKind);
+    }
+
+    [Theory]
+    [InlineData("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}")]
+    [InlineData("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}")]
+    public async Task InvokeAsync_ValidNotificationOrResponseReachesTransport(string json)
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var context = CreateJsonRequest(json);
+
+        await middleware.InvokeAsync(context);
+
+        Assert.True(nextCalled);
+        Assert.Equal(0, context.Request.Body.Position);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_AllowsCommerceToolWithoutBuyerToken()
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(context =>
+        {
+            nextCalled = true;
+            context.Response.StatusCode = StatusCodes.Status204NoContent;
+            return Task.CompletedTask;
+        });
+        var context = CreateToolCall("search_products");
+
+        await middleware.InvokeAsync(context);
+
+        Assert.True(nextCalled);
+        Assert.Equal(StatusCodes.Status204NoContent, context.Response.StatusCode);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_DoesNotTreatCookiePrincipalAsMcpBuyerWithoutBearer()
+    {
+        ClaimsPrincipal forwardedPrincipal = null;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(context =>
+        {
+            forwardedPrincipal = context.User;
+            return Task.CompletedTask;
+        });
+        var context = CreateToolCall("search_products");
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", "storefront-user"),
+            new Claim(ClaimTypes.NameIdentifier, "storefront-user"),
+        ], "Identity.Application"));
+
+        await middleware.InvokeAsync(context);
+
+        Assert.NotNull(forwardedPrincipal);
+        Assert.DoesNotContain(forwardedPrincipal.Identities, identity => identity.IsAuthenticated);
+        Assert.DoesNotContain(forwardedPrincipal.Claims, claim => claim.Value == "storefront-user");
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ChallengesIdentityLinkingToolWithoutPlatformToken()
+    {
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ => Task.CompletedTask);
+        var context = CreateToolCall("link_buyer_identity");
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+        Assert.Contains("realm=\"https://store.example\"", context.Response.Headers.WWWAuthenticate.ToString());
+        Assert.Contains("resource_metadata=\"https://store.example/.well-known/oauth-protected-resource/ucp/mcp\"", context.Response.Headers.WWWAuthenticate.ToString());
+        Assert.Contains("scope=\"openid profile offline_access\"", context.Response.Headers.WWWAuthenticate.ToString());
+    }
+
+    [Fact]
+    public async Task InvokeAsync_DoesNotChallengeInitializeOrGlobalPreference()
+    {
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ => Task.CompletedTask);
+        var context = CreateJsonRequest("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""");
+        context.Request.Headers["Prefer"] = "identity-linking=required";
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_AllowsIdentityLinkingToolWithPlatformBearerPrincipal()
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var context = CreateToolCall("link_buyer_identity");
+        context.Request.Headers.Authorization = "Bearer platform-token";
+        context.User = CreateBuyerPrincipal();
+
+        await middleware.InvokeAsync(context);
+
+        Assert.True(nextCalled);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_AllowsCommerceToolWithAgentOnlyPlatformBearer()
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var context = CreateToolCall("search_products");
+        context.Request.Headers.Authorization = "Bearer platform-agent-token";
+        context.User = CreateAgentPrincipal();
+
+        await middleware.InvokeAsync(context);
+
+        Assert.True(nextCalled);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_ChallengesIdentityLinkingToolWithAgentOnlyPlatformBearer()
+    {
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ => Task.CompletedTask);
+        var context = CreateToolCall("link_buyer_identity");
+        context.Request.Headers.Authorization = "Bearer platform-agent-token";
+        context.User = CreateAgentPrincipal();
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+        Assert.DoesNotContain("error=\"invalid_token\"", context.Response.Headers.WWWAuthenticate.ToString());
+    }
+
+    [Fact]
+    public async Task InvokeAsync_RejectsInvalidBearerInsteadOfFallingBackToAnonymous()
+    {
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ => Task.CompletedTask);
+        var context = CreateToolCall("search_products");
+        context.Request.Headers.Authorization = "Bearer invalid-token";
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+        Assert.Contains("error=\"invalid_token\"", context.Response.Headers.WWWAuthenticate.ToString());
+    }
+
+    [Fact]
+    public async Task InvokeAsync_RejectsPlatformBearerIssuedForAnotherResource()
+    {
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ => Task.CompletedTask);
+        var context = CreateToolCall("link_buyer_identity");
+        context.Request.Headers.Authorization = "Bearer platform-token";
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", "user-1"),
+            new Claim("aud", "resource_server"),
+        ], "Bearer"));
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+        Assert.Contains("error=\"invalid_token\"", context.Response.Headers.WWWAuthenticate.ToString());
+    }
+
+    private static DefaultHttpContext CreateToolCall(string toolName)
+    {
+        var json = """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"TOOL_NAME","arguments":{"query":"Epson"}}}"""
+            .Replace("TOOL_NAME", toolName, StringComparison.Ordinal);
+        return CreateJsonRequest(json);
+    }
+
+    private static DefaultHttpContext CreateJsonRequest(string json)
+    {
+        var context = new DefaultHttpContext();
+        context.RequestServices = new ServiceCollection()
+            .AddSingleton<UcpMcpSessionService>(new ActiveSessionService())
+            .AddSingleton<IUcpPublicOriginResolver>(UcpPublicOriginResolverTests.CreateResolver(new HttpContextAccessor { HttpContext = context }))
+            .BuildServiceProvider();
+        context.Request.Scheme = "https";
+        context.Request.Host = new HostString("store.example");
+        context.Request.Method = HttpMethods.Post;
+        context.Request.ContentType = "application/json";
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(json));
+        context.Response.Body = new MemoryStream();
+        return context;
+    }
+
+    private static ClaimsPrincipal CreateAgentPrincipal()
+    {
+        return new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", "desktop-client"),
+            new Claim("client_id", "desktop-client"),
+            new Claim("aud", "https://store.example/ucp/mcp"),
+        ], "Bearer"));
+    }
+
+    [Theory]
+    [InlineData("link_buyer_identity", 401)]
+    [InlineData("search_products", 401)]
+    [InlineData("logout_buyer", 200)]
+    public async Task InvokeAsync_RevokedSessionCannotShopOrLinkButCanRepeatLogout(string tool, int expectedStatus)
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(context =>
+        {
+            nextCalled = true;
+            Assert.False(context.User.Identity.IsAuthenticated);
+            return Task.CompletedTask;
+        });
+        var context = CreateToolCall(tool);
+        context.User = CreateBuyerPrincipal();
+        context.Request.Headers.Authorization = "Bearer revoked-token";
+        using var services = new ServiceCollection()
+            .AddSingleton<IUcpPublicOriginResolver>(UcpPublicOriginResolverTests.CreateResolver(new HttpContextAccessor { HttpContext = context }))
+            .AddSingleton<UcpMcpSessionService>(new ActiveSessionService { Active = false })
+            .BuildServiceProvider();
+        context.RequestServices = services;
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Equal(expectedStatus, context.Response.StatusCode);
+        Assert.Equal(expectedStatus == 200, nextCalled);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("Bearer expired-token")]
+    public async Task InvokeAsync_LogoutWithoutValidBearerDoesNotStartLogin(string authorization)
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var context = CreateToolCall("logout_buyer");
+        context.Request.Headers.Authorization = authorization;
+
+        await middleware.InvokeAsync(context);
+
+        Assert.True(nextCalled);
+        Assert.Equal(200, context.Response.StatusCode);
+        Assert.Equal(0, context.Response.Headers.WWWAuthenticate.Count);
+    }
+
+    private sealed class ActiveSessionService : UcpMcpSessionService
+    {
+        public ActiveSessionService() : base(null, null)
+        {
+        }
+
+        public bool Active { get; init; } = true;
+
+        public override Task<bool> IsActive(ClaimsPrincipal principal, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(Active);
+        }
+    }
+
+    private static ClaimsPrincipal CreateBuyerPrincipal()
+    {
+        return new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", "user-1"),
+            new Claim("aud", "https://store.example/ucp/mcp"),
+        ], "Bearer"));
+    }
+}

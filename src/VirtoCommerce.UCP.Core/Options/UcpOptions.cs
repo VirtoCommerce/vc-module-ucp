@@ -7,6 +7,7 @@ public class UcpOptions
     public string DefaultCultureName { get; set; }
     public string StorefrontOrigin { get; set; }
     public string UcpBaseUrl { get; set; }
+    public string PublicOrigin { get; set; }
     public string HandoffUrlTemplate { get; set; }
     public int HandoffTokenTtlMinutes { get; set; } = 15;
     public bool AnonymousCatalog { get; set; } = true;

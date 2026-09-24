@@ -4,11 +4,11 @@ using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using VirtoCommerce.Platform.Core.Common;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Data.Services;
-using VirtoCommerce.Platform.Core.Common;
 using Xunit;
 
 namespace VirtoCommerce.UCP.Tests;
