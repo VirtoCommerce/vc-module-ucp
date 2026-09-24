@@ -16,7 +16,7 @@ using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Data.Services;
-using VirtoCommerce.Xapi.Core.Infrastructure;
+using VirtoCommerce.Platform.Core.DistributedLock;
 using Xunit;
 
 namespace VirtoCommerce.UCP.Tests;
@@ -49,7 +49,7 @@ public class UcpCheckoutServiceTests
         var cart = CreateCart();
         cart.Addresses.Add(CreateShippingAddress());
         var cache = new StubHandoffSessionStore();
-        var distributedLock = new TestDistributedLockService();
+        var distributedLock = new TestDistributedLock();
         var service = CreateService(new StubCartService(cart), cache, distributedLock);
 
         var handoff = await service.HandoffCheckout("cart-1", new UcpCheckoutRequest
@@ -96,7 +96,7 @@ public class UcpCheckoutServiceTests
     public async Task RestoreHandoff_BusyLockReturnsRetryableConflictAndKeepsSession()
     {
         var cache = new StubHandoffSessionStore();
-        var distributedLock = new TestDistributedLockService { IsBusy = true };
+        var distributedLock = new TestDistributedLock { IsBusy = true };
         var service = CreateService(new StubCartService(CreateCart()), cache, distributedLock);
         const string token = "busy-session";
         var cacheKey = GetHandoffCacheKey(token);
@@ -109,7 +109,6 @@ public class UcpCheckoutServiceTests
 
         Assert.Equal(ModuleConstants.ErrorCodes.HandoffInProgress, exception.Code);
         Assert.Equal(StatusCodes.Status409Conflict, exception.StatusCode);
-        Assert.IsType<LockError>(exception.InnerException);
         Assert.Contains(cacheKey, distributedLock.ResourceKeys);
         Assert.NotNull(cache.Get(cacheKey));
     }
@@ -142,7 +141,7 @@ public class UcpCheckoutServiceTests
         var service = new UcpCheckoutService(
             new StubCartService(cart),
             new StubHandoffSessionStore(),
-            new TestDistributedLockService(),
+            new TestDistributedLock(),
             httpContextAccessor,
             Options.Create(new UcpOptions
             {
@@ -208,7 +207,7 @@ public class UcpCheckoutServiceTests
         cart.Addresses.Add(CreateShippingAddress());
         var accessor = new HttpContextAccessor { HttpContext = new DefaultHttpContext() };
         var service = new UcpCheckoutService(new StubCartService(cart), new StubHandoffSessionStore(),
-            new TestDistributedLockService(), accessor,
+            new TestDistributedLock(), accessor,
             Options.Create(new UcpOptions { StorefrontOrigin = "https://store.example" }));
         var handoff = await service.HandoffCheckout(cart.Id, new UcpCheckoutRequest
         {
@@ -239,7 +238,7 @@ public class UcpCheckoutServiceTests
         var service = new UcpCheckoutService(
             new StubCartService(cart),
             new StubHandoffSessionStore(),
-            new TestDistributedLockService(),
+            new TestDistributedLock(),
             httpContextAccessor,
             Options.Create(new UcpOptions
             {
@@ -574,7 +573,7 @@ public class UcpCheckoutServiceTests
     private static UcpCheckoutService CreateService(
         IUcpCartService cartService,
         IUcpHandoffSessionStore handoffSessionStore = null,
-        IDistributedLockService distributedLock = null)
+        IDistributedLock distributedLock = null)
     {
         var httpContextAccessor = new HttpContextAccessor
         {
@@ -585,7 +584,7 @@ public class UcpCheckoutServiceTests
         return new UcpCheckoutService(
             cartService,
             handoffSessionStore ?? new StubHandoffSessionStore(),
-            distributedLock ?? new TestDistributedLockService(),
+            distributedLock ?? new TestDistributedLock(),
             httpContextAccessor,
             Options.Create(new UcpOptions
             {
@@ -744,22 +743,38 @@ public class UcpCheckoutServiceTests
         }
     }
 
-    private sealed class TestDistributedLockService : IDistributedLockService
+    private sealed class TestDistributedLock : IDistributedLock
     {
         public ConcurrentQueue<string> ResourceKeys { get; } = new();
 
         public bool IsBusy { get; init; }
 
-        public T Execute<T>(string resourceKey, Func<T> resolver)
+        public Task<IDistributedLockHandle> AcquireAsync(string resource, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
         {
-            ResourceKeys.Enqueue(resourceKey);
-            return IsBusy ? throw new LockError("Service is busy.") : resolver();
+            ResourceKeys.Enqueue(resource);
+            return IsBusy
+                ? Task.FromException<IDistributedLockHandle>(new DistributedLockTimeoutException(resource, timeout ?? TimeSpan.FromSeconds(30)))
+                : Task.FromResult<IDistributedLockHandle>(new Handle(resource));
         }
 
-        public Task<T> ExecuteAsync<T>(string resourceKey, Func<Task<T>> resolver)
+        public Task<IDistributedLockHandle> TryAcquireAsync(string resource, TimeSpan timeout = default, CancellationToken cancellationToken = default)
         {
-            ResourceKeys.Enqueue(resourceKey);
-            return IsBusy ? throw new LockError("Service is busy.") : resolver();
+            ResourceKeys.Enqueue(resource);
+            return Task.FromResult<IDistributedLockHandle>(IsBusy ? null : new Handle(resource));
+        }
+
+        private sealed class Handle(string resource) : IDistributedLockHandle
+        {
+            public string Resource { get; } = resource;
+
+            public void Dispose()
+            {
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                return ValueTask.CompletedTask;
+            }
         }
     }
 }
