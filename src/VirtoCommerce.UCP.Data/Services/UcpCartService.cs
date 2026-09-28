@@ -95,7 +95,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             }
         }
 
-        return CreateResponse(cartElement);
+        return CreateMutationResponse(cartElement);
     }
 
     public virtual async Task<UcpCartListResponse> ListCarts(UcpCartListRequest request, CancellationToken cancellationToken = default)
@@ -194,7 +194,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         cartElement = await ApplyDesiredItems(cartRequest.CartId, cartElement, cartRequest, currentItems, consolidatedItems, cancellationToken);
         cartElement = await ApplyCoupons(cartElement, cartRequest, currentCart, request.Coupons, cancellationToken);
 
-        return CreateResponse(cartElement);
+        return CreateMutationResponse(cartElement);
     }
 
     private async Task<JsonElement> MergeAnonymousCart(
@@ -295,6 +295,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         }
 
         var currentCart = ReadCart(cartElement);
+        UcpInventoryErrorNormalizer.ThrowIfInvalid(currentCart, GetCorrelationId());
         var shippingAddress = await PrepareAddress(request.ShippingAddress, request.Buyer, cancellationToken);
         var billingAddress = await PrepareAddress(request.BillingAddress, request.Buyer, cancellationToken);
 
@@ -340,7 +341,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
                 cancellationToken);
         }
 
-        return CreateResponse(cartElement);
+        return CreateMutationResponse(cartElement);
     }
 
     private CartExecutionRequest BuildCartExecutionRequest(
@@ -668,6 +669,11 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         using var document = ParseGraphQlResult(result, "XCart");
         var cart = document.RootElement.GetProperty("data").GetProperty(mutationName).Clone();
         EnsureCartOwnership(cart, cartRequest);
+        UcpInventoryErrorNormalizer.ThrowIfInvalid(new UcpCart
+        {
+            Id = ReadString(cart, "id"),
+            InventoryErrors = UcpInventoryErrorNormalizer.ReadMutationErrors(cart, command),
+        }, GetCorrelationId());
         return cart;
     }
 
@@ -978,6 +984,13 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         };
     }
 
+    private UcpCartResponse CreateMutationResponse(JsonElement cartElement)
+    {
+        var response = CreateResponse(cartElement);
+        UcpInventoryErrorNormalizer.ThrowIfInvalid(response.Cart, GetCorrelationId());
+        return response;
+    }
+
     protected virtual UcpCartResponse CreateResponse(JsonElement cartElement)
     {
         var cart = ReadCart(cartElement);
@@ -1019,9 +1032,24 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             Payments = ReadCartPayments(element),
         };
 
-        cart.ContinueUrl = BuildContinueUrl(cart.Id);
         cart.Messages = ReadMessages(element);
         AddCouponMessages(cart);
+        cart.InventoryErrors = UcpInventoryErrorNormalizer.ReadErrors(element);
+        cart.ContinueUrl = cart.InventoryErrors.Count == 0 ? BuildContinueUrl(cart.Id) : null;
+        foreach (var error in cart.InventoryErrors)
+        {
+            if (!error.Details.TryGetValue("line_item_id", out var lineItemId))
+            {
+                continue;
+            }
+            var lineItem = cart.LineItems.FirstOrDefault(x => x.Id == lineItemId as string);
+            if (lineItem != null)
+            {
+                lineItem.InventoryStatus = error.Code;
+                lineItem.RequestedQuantity = error.Details.TryGetValue("requested_quantity", out var requested) ? (long?)requested : null;
+                lineItem.AvailableQuantity = error.Details.TryGetValue("available_quantity", out var available) ? (long?)available : null;
+            }
+        }
 
         return cart;
     }
@@ -1479,11 +1507,17 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
           validationErrors {
             errorCode
             errorMessage
+            objectId
+            objectType
+            errorParameters { key value }
           }
         }
         validationErrors {
           errorCode
           errorMessage
+          objectId
+          objectType
+          errorParameters { key value }
         }
         warnings {
           errorCode

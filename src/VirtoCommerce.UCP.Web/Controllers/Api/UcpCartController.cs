@@ -25,6 +25,7 @@ public class UcpCartController : ControllerBase
     [UcpOperation(ModuleConstants.Operations.CreateCart, IsXApiBacked = true)]
     [ProducesResponseType(typeof(UcpCartResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(UcpError), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(UcpError), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<UcpCartResponse>> CreateCart([FromBody] UcpCartRequest request, CancellationToken cancellationToken)
     {
         return Ok(await _cartService.CreateCart(request, cancellationToken));
@@ -59,6 +60,7 @@ public class UcpCartController : ControllerBase
     [UcpOperation(ModuleConstants.Operations.UpdateCart, IsXApiBacked = true)]
     [ProducesResponseType(typeof(UcpCartResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(UcpError), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(UcpError), StatusCodes.Status409Conflict)]
     [ProducesResponseType(typeof(UcpError), StatusCodes.Status404NotFound)]
     public async Task<ActionResult<UcpCartResponse>> UpdateCart(string cartId, [FromBody] UcpCartRequest request, CancellationToken cancellationToken)
     {

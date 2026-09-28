@@ -57,6 +57,8 @@ public static class ModuleConstants
         Treat price.amount as the current sell price and list_price.amount as the pre-discount reference price.
         list_carts requires buyer_id for anonymous continuation. In authenticated mode, buyer identity and organization come only from the Platform token; never invent or request identity fields from the user.
         update_cart accepts the complete desired line_items state, not a delta. Reuse the existing cart_id and buyer_id; never call create_cart as a fallback for changing an existing cart.
+        Inventory failures return isError: true with out_of_stock, insufficient_stock, or inventory_unavailable and structured details. Treat operation_rejected as a refusal to fulfill the request; it does not guarantee that stored cart quantities were rolled back.
+        Do not report unfulfillable quantities as successfully added and do not continue checkout while cart.inventory_errors is non-empty. Read the existing cart when needed, then offer a correction using available_quantity only when it is known and positive. Never retry the identical invalid mutation automatically.
         After create_cart or update_cart, inspect line_items and messages. If an expected line is missing, call get_cart once to account for asynchronous settling; do not claim that an item was added unless the re-read contains it.
         XAPI GraphQL errors are returned unchanged in MCP structuredContent. Inspect their codes, paths, locations, extensions, and partial data before deciding what to do.
         Every MCP tool result includes a model-visible "Trace ID: ..." content block and _meta.trace_id when an active trace exists. Preserve that id with any reported result or failure so operators can open the exact MCP -> UCP -> XAPI trace.
@@ -98,6 +100,9 @@ public static class ModuleConstants
 
     public static class ErrorCodes
     {
+        public const string OutOfStock = "out_of_stock";
+        public const string InsufficientStock = "insufficient_stock";
+        public const string InventoryUnavailable = "inventory_unavailable";
         public const string IdentityOptional = "identity_optional";
         public const string IdentityRequired = "identity_required";
         public const string BuyerContextMismatch = "buyer_context_mismatch";

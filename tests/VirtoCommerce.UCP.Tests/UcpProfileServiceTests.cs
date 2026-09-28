@@ -73,6 +73,9 @@ public class UcpProfileServiceTests
         Assert.Equal(ModuleConstants.DiscoveryVersion, profile.Ucp.Capabilities["com.virtocommerce.ucp.checkout"].Single().Version);
         Assert.Equal(ModuleConstants.UcpVersion, profile.UcpVersion);
         Assert.Equal(ModuleConstants.Platform, profile.Platform);
+        Assert.Contains(ModuleConstants.ErrorCodes.OutOfStock, profile.Errors.Codes);
+        Assert.Contains(ModuleConstants.ErrorCodes.InsufficientStock, profile.Errors.Codes);
+        Assert.Contains(ModuleConstants.ErrorCodes.InventoryUnavailable, profile.Errors.Codes);
         Assert.Contains(ModuleConstants.Capabilities.Catalog, profile.Capabilities);
         Assert.Contains(ModuleConstants.Capabilities.Cart, profile.Capabilities);
         Assert.Contains(ModuleConstants.Capabilities.Checkout, profile.Capabilities);

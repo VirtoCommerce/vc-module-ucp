@@ -52,4 +52,7 @@ public class UcpCart
 
     [JsonProperty("messages")]
     public IList<UcpMessage> Messages { get; set; } = new List<UcpMessage>();
+
+    [JsonProperty("inventory_errors")]
+    public IList<UcpError> InventoryErrors { get; set; } = new List<UcpError>();
 }
