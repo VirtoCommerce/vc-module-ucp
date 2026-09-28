@@ -72,6 +72,7 @@ public partial class UcpCartServiceTests
                 new UcpCartLineItemRequest { ProductId = "PRODUCT-1", Quantity = 2 },
             },
         };
+        var originalQuantities = request.LineItems.Select(x => x.Quantity).ToArray();
 
         var response = await CreateService(executor).CreateCart(request, TestContext.Current.CancellationToken);
 
@@ -84,7 +85,7 @@ public partial class UcpCartServiceTests
         Assert.Equal(2, secondCommand["quantity"]);
         Assert.Equal(3, response.Cart.LineItems.Single(x => x.ProductId == "product-1").Quantity);
         Assert.Empty(response.Cart.InventoryErrors);
-        Assert.Equal(new[] { 1, 2, 2 }, request.LineItems.Select(x => x.Quantity));
+        Assert.Equal(originalQuantities, request.LineItems.Select(x => x.Quantity));
     }
 
     [Fact]
