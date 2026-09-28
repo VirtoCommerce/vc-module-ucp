@@ -72,7 +72,8 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             ValidateLineItemForAdd(lineItem);
         }
 
-        var firstLineItem = request.LineItems[0];
+        var lineItems = ConsolidateDesiredItems(request.LineItems, []);
+        var firstLineItem = lineItems[0];
         var cartElement = await ExecuteCartMutation(
             "addItem",
             "UcpAddCartItem",
@@ -81,7 +82,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             cancellationToken);
         cartRequest.CartId = ReadString(cartElement, "id");
 
-        foreach (var lineItem in request.LineItems.Skip(1))
+        foreach (var lineItem in lineItems.Skip(1))
         {
             cartElement = await ExecuteCartMutation("addItem", "UcpAddCartItem", cartRequest, BuildAddItemCommand(cartRequest, null, lineItem), cancellationToken);
         }

@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
@@ -15,6 +17,94 @@ namespace VirtoCommerce.UCP.Tests;
 
 public partial class UcpCartServiceTests
 {
+    [Theory]
+    [InlineData(2)]
+    [InlineData(9)]
+    public async Task CreateCart_DuplicateEntriesReturnInventoryErrorForCombinedQuantity(int entryCount)
+    {
+        var rejected = JsonNode.Parse(InventoryCartJson("addItem", "PRODUCT_FFC_QTY", "availableQty", "5", true));
+        var cart = rejected["data"]["addItem"];
+        cart["items"] = new JsonArray();
+        cart["validationErrors"][0]["errorParameters"] = new JsonArray
+        {
+            new JsonObject { ["key"] = "availableQty", ["value"] = "5" },
+        };
+        var executor = new StubXApiExecutor(rejected.ToJsonString());
+        var quantities = entryCount == 2 ? new[] { 4, 5 } : Enumerable.Repeat(1, entryCount).ToArray();
+        var lines = quantities.Select(quantity => new UcpCartLineItemRequest
+        {
+            ProductId = "product-1",
+            Quantity = quantity,
+        }).ToArray();
+        var result = await UcpInventoryErrorContractTests.InvokeTool(ModuleConstants.McpTools.CreateCart,
+            () => UcpMcpCommerceTools.CreateCart(new UcpInventoryErrorContractTests.ProfileService(),
+                CreateService(executor), lines, cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.True(result.IsError);
+        var content = result.StructuredContent.Value;
+        Assert.Equal("insufficient_stock", content.GetProperty("code").GetString());
+        Assert.Equal(409, content.GetProperty("status_code").GetInt32());
+        var details = content.GetProperty("details");
+        Assert.Equal(9, details.GetProperty("requested_quantity").GetInt64());
+        Assert.Equal(5, details.GetProperty("available_quantity").GetInt64());
+        Assert.True(details.GetProperty("operation_rejected").GetBoolean());
+        Assert.False(content.TryGetProperty("cart", out _));
+        Assert.False(content.TryGetProperty("checkout", out _));
+        Assert.False(content.TryGetProperty("continue_url", out _));
+        var command = Assert.IsType<Dictionary<string, object>>(Assert.Single(executor.Requests).Variables["command"]);
+        Assert.Equal(9, command["quantity"]);
+    }
+
+    [Fact]
+    public async Task CreateCart_ConsolidatesDuplicateProductsAndPreservesDistinctProducts()
+    {
+        var first = JsonNode.Parse(CartWithOneItemJson);
+        first["data"]["addItem"]["items"][0]["quantity"] = 3;
+        var final = JsonNode.Parse(CartWithTwoItemsJson);
+        final["data"]["addItem"]["items"][0]["quantity"] = 3;
+        var executor = new StubXApiExecutor(first.ToJsonString(), final.ToJsonString());
+        var request = new UcpCartRequest
+        {
+            LineItems =
+            {
+                new UcpCartLineItemRequest { ProductId = "product-1", Quantity = 1 },
+                new UcpCartLineItemRequest { ProductId = "product-2", Quantity = 2 },
+                new UcpCartLineItemRequest { ProductId = "PRODUCT-1", Quantity = 2 },
+            },
+        };
+
+        var response = await CreateService(executor).CreateCart(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, executor.Requests.Count);
+        var firstCommand = Assert.IsType<Dictionary<string, object>>(executor.Requests[0].Variables["command"]);
+        var secondCommand = Assert.IsType<Dictionary<string, object>>(executor.Requests[1].Variables["command"]);
+        Assert.Equal("product-1", firstCommand["productId"]);
+        Assert.Equal(3, firstCommand["quantity"]);
+        Assert.Equal("product-2", secondCommand["productId"]);
+        Assert.Equal(2, secondCommand["quantity"]);
+        Assert.Equal(3, response.Cart.LineItems.Single(x => x.ProductId == "product-1").Quantity);
+        Assert.Empty(response.Cart.InventoryErrors);
+        Assert.Equal(new[] { 1, 2, 2 }, request.LineItems.Select(x => x.Quantity));
+    }
+
+    [Fact]
+    public async Task CreateCart_CombinedQuantityOverflowDoesNotModifyCart()
+    {
+        var executor = new StubXApiExecutor();
+        var exception = await Assert.ThrowsAsync<UcpException>(() => CreateService(executor).CreateCart(new UcpCartRequest
+        {
+            LineItems =
+            {
+                new UcpCartLineItemRequest { ProductId = "product-1", Quantity = int.MaxValue },
+                new UcpCartLineItemRequest { ProductId = "product-1", Quantity = 1 },
+            },
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, exception.Code);
+        Assert.Equal(400, exception.StatusCode);
+        Assert.Empty(executor.Requests);
+    }
+
     [Theory]
     [InlineData(ModuleConstants.McpTools.CreateCart)]
     [InlineData(ModuleConstants.McpTools.UpdateCart)]
