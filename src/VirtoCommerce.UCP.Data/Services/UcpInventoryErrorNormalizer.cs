@@ -71,7 +71,7 @@ internal static class UcpInventoryErrorNormalizer
         }
     }
 
-    private static void AddErrors(IList<UcpError> result, JsonElement owner, JsonElement item,
+    private static void AddErrors(List<UcpError> result, JsonElement owner, JsonElement item,
         IList<JsonElement> items, IDictionary<string, object> command)
     {
         if (!owner.TryGetProperty("validationErrors", out var errors) || errors.ValueKind != JsonValueKind.Array)
@@ -133,15 +133,27 @@ internal static class UcpInventoryErrorNormalizer
             : FindRelatedItem(items, objectId, objectType, isProduct, commandLine);
         var productId = ReadString(relatedItem, "productId") ?? (isProduct ? objectId : null);
         var lineItemId = ReadString(relatedItem, "id") ?? (objectType == "LineItem" ? objectId : null);
-        var matchesCommand = (productId != null && productId == commandProduct) ||
-            (lineItemId != null && lineItemId == commandLine) ||
-            (objectId == null && item.ValueKind != JsonValueKind.Object);
+        var matchesCommand = MatchesCommand(productId, lineItemId, objectId, item, command);
         if (matchesCommand)
         {
             productId ??= commandProduct;
             lineItemId ??= commandLine;
         }
         return (productId, lineItemId, relatedItem, matchesCommand);
+    }
+
+    private static bool MatchesCommand(string productId, string lineItemId, string objectId, JsonElement item,
+        IDictionary<string, object> command)
+    {
+        if (productId != null && productId == ReadCommandString(command, "productId"))
+        {
+            return true;
+        }
+        if (lineItemId != null && lineItemId == ReadCommandString(command, "lineItemId"))
+        {
+            return true;
+        }
+        return objectId == null && item.ValueKind != JsonValueKind.Object;
     }
 
     private static JsonElement FindRelatedItem(IList<JsonElement> items, string objectId, string objectType, bool isProduct, string commandLine)
@@ -207,8 +219,12 @@ internal static class UcpInventoryErrorNormalizer
 
     private static long? ReadQuantity(JsonElement item)
     {
-        return item.ValueKind == JsonValueKind.Object && item.TryGetProperty("quantity", out var quantity) &&
-            quantity.ValueKind == JsonValueKind.Number && quantity.TryGetInt64(out var value) ? value : null;
+        if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("quantity", out var quantity) ||
+            quantity.ValueKind != JsonValueKind.Number)
+        {
+            return null;
+        }
+        return quantity.TryGetInt64(out var value) ? value : null;
     }
 
     private static string ReadString(JsonElement element, string name)
@@ -222,7 +238,7 @@ internal static class UcpInventoryErrorNormalizer
         return command?.TryGetValue(name, out var value) == true ? value as string : null;
     }
 
-    private static void AddDetail(IDictionary<string, object> details, string name, object value)
+    private static void AddDetail(Dictionary<string, object> details, string name, object value)
     {
         if (value != null)
         {
