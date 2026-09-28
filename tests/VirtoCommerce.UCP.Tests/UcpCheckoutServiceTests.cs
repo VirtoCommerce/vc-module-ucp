@@ -767,6 +767,9 @@ public class UcpCheckoutServiceTests
         {
             public string Resource { get; } = resource;
 
+            // The test lock is never lost.
+            public CancellationToken HandleLostToken => CancellationToken.None;
+
             public void Dispose()
             {
             }
