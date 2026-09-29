@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using VirtoCommerce.Platform.Core.Common;
+using VirtoCommerce.Platform.Core.DistributedLock;
 using VirtoCommerce.StoreModule.Core.Services;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
@@ -18,7 +19,6 @@ using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Data.Models;
-using VirtoCommerce.Xapi.Core.Infrastructure;
 
 namespace VirtoCommerce.UCP.Data.Services;
 
@@ -30,6 +30,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
     private const string StatusRequiresEscalation = "requires_escalation";
     private const string CheckoutCapability = "dev.ucp.shopping.checkout";
     private const string HandoffCapability = "dev.ucp.shopping.checkout.handoff";
+    private static readonly TimeSpan HandoffRestoreLockTimeout = TimeSpan.FromSeconds(10);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -39,14 +40,14 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
 
     private readonly IUcpCartService _cartService;
     private readonly IUcpHandoffSessionStore _handoffSessionStore;
-    private readonly IDistributedLockService _distributedLock;
+    private readonly IDistributedLock _distributedLock;
     private readonly IStoreService _storeService;
     private readonly UcpOptions _options;
 
     public UcpCheckoutService(
         IUcpCartService cartService,
         IUcpHandoffSessionStore handoffSessionStore,
-        IDistributedLockService distributedLock,
+        IDistributedLock distributedLock,
         IHttpContextAccessor httpContextAccessor,
         IOptions<UcpOptions> options,
         IStoreService storeService = null,
@@ -167,16 +168,15 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         }
 
         var cacheKey = GetHandoffSessionCacheKey(request.UcpSession);
-        try
-        {
-            return await _distributedLock.ExecuteAsync(cacheKey, () => RestoreHandoffCore(cacheKey, cancellationToken));
-        }
-        catch (LockError exception)
+        await using var handle = await _distributedLock.TryAcquireAsync(cacheKey, HandoffRestoreLockTimeout, cancellationToken);
+        if (handle is null)
         {
             // Busy does not mean consumed: the lock holder may still reject the session and leave it valid.
             throw CreateException(ModuleConstants.ErrorCodes.HandoffInProgress,
-                "ucp_session is being restored by another request. Retry the request.", StatusCodes.Status409Conflict, exception);
+                "ucp_session is being restored by another request. Retry the request.", StatusCodes.Status409Conflict);
         }
+
+        return await RestoreHandoffCore(cacheKey, cancellationToken);
     }
 
     private async Task<UcpHandoffRestoreResponse> RestoreHandoffCore(string cacheKey, CancellationToken cancellationToken)
