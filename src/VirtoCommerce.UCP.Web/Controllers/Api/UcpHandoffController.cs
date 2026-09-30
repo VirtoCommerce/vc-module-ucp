@@ -24,6 +24,7 @@ public class UcpHandoffController : ControllerBase
     [UcpOperation(ModuleConstants.Operations.RestoreHandoff, IsXApiBacked = true)]
     [ProducesResponseType(typeof(UcpHandoffRestoreResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(UcpError), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(UcpError), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<UcpHandoffRestoreResponse>> Restore([FromBody] UcpHandoffRestoreRequest request, CancellationToken cancellationToken)
     {
         return Ok(await _checkoutService.RestoreHandoff(request, cancellationToken));

@@ -39,6 +39,7 @@ internal static partial class UcpMcpErrorResultFactory
             Code = safeCode,
             StatusCode = exception.StatusCode,
             Message = exception.Message,
+            Details = exception.Error?.Details,
         };
         var structuredContent = JsonSerializer.SerializeToElement(error, UcpMcpSerialization.Options);
         return new CallToolResult

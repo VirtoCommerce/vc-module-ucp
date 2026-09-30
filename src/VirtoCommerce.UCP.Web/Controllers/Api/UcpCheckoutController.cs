@@ -24,6 +24,7 @@ public class UcpCheckoutController : ControllerBase
     [UcpOperation(ModuleConstants.Operations.CreateCheckout, IsXApiBacked = true)]
     [ProducesResponseType(typeof(UcpCheckoutResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(UcpError), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(UcpError), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<UcpCheckoutResponse>> CreateCheckout([FromBody] UcpCheckoutRequest request, CancellationToken cancellationToken)
     {
         return Ok(await _checkoutService.CreateCheckout(request, cancellationToken));
@@ -33,6 +34,7 @@ public class UcpCheckoutController : ControllerBase
     [UcpOperation(ModuleConstants.Operations.UpdateCheckout, IsXApiBacked = true)]
     [ProducesResponseType(typeof(UcpCheckoutResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(UcpError), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(UcpError), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<UcpCheckoutResponse>> UpdateCheckout(string checkoutId, [FromBody] UcpCheckoutRequest request, CancellationToken cancellationToken)
     {
         return Ok(await _checkoutService.UpdateCheckout(checkoutId, request, cancellationToken));
@@ -51,6 +53,7 @@ public class UcpCheckoutController : ControllerBase
     [UcpOperation(ModuleConstants.Operations.HandoffCheckout, IsXApiBacked = true)]
     [ProducesResponseType(typeof(UcpCheckoutHandoffResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(UcpError), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(UcpError), StatusCodes.Status409Conflict)]
     public async Task<ActionResult<UcpCheckoutHandoffResponse>> HandoffCheckout(string checkoutId, [FromBody] UcpCheckoutRequest request, CancellationToken cancellationToken)
     {
         return Ok(await _checkoutService.HandoffCheckout(checkoutId, request, cancellationToken));

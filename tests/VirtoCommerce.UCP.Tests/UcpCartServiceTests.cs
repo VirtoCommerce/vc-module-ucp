@@ -16,7 +16,7 @@ using Xunit;
 namespace VirtoCommerce.UCP.Tests;
 
 [Trait("Category", "Unit")]
-public class UcpCartServiceTests
+public partial class UcpCartServiceTests
 {
     [Fact]
     public async Task CreateCart_RejectsInvalidSecondLineBeforeAddingFirstItem()

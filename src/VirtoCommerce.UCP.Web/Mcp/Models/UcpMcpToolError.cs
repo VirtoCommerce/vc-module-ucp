@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
 namespace VirtoCommerce.UCP.Web.Mcp.Models;
@@ -15,4 +16,7 @@ public sealed class UcpMcpToolError
 
     [JsonPropertyName("message")]
     public string Message { get; set; }
+
+    [JsonPropertyName("details")]
+    public IDictionary<string, object> Details { get; set; }
 }

@@ -23,6 +23,15 @@ public class UcpCartLineItem
     [JsonProperty("quantity")]
     public int Quantity { get; set; }
 
+    [JsonProperty("requested_quantity")]
+    public long? RequestedQuantity { get; set; }
+
+    [JsonProperty("available_quantity")]
+    public long? AvailableQuantity { get; set; }
+
+    [JsonProperty("inventory_status")]
+    public string InventoryStatus { get; set; }
+
     [JsonProperty("unit_price")]
     public UcpMoney UnitPrice { get; set; }
 

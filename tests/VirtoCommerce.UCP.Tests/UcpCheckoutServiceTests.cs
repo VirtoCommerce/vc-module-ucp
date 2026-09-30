@@ -570,6 +570,75 @@ public class UcpCheckoutServiceTests
         Assert.Contains("shipping_address.first_name", exception.Message);
     }
 
+    [Theory]
+    [InlineData("create", false)]
+    [InlineData("update", false)]
+    [InlineData("handoff", false)]
+    [InlineData("create", true)]
+    [InlineData("update", true)]
+    [InlineData("handoff", true)]
+    public async Task Checkout_RejectsInventoryErrorsBeforeCreatingHandoff(string operation, bool withAddress)
+    {
+        var cart = CreateCart();
+        cart.InventoryErrors.Add(new UcpError
+        {
+            Code = "out_of_stock",
+            Message = "This product is out of stock.",
+            Details = new Dictionary<string, object>
+            {
+                ["product_id"] = "product-1",
+                ["line_item_id"] = "line-1",
+                ["requested_quantity"] = 5L,
+                ["available_quantity"] = 0L,
+                ["retryable"] = false,
+            },
+        });
+        var store = new StubHandoffSessionStore();
+        var service = CreateService(new StubCartService(cart), store);
+        var request = new UcpCheckoutRequest
+        {
+            CartId = cart.Id,
+            ShippingAddress = withAddress ? new UcpCheckoutAddress { FirstName = "Buyer", LastName = "Name", PostalCode = "12345" } : null,
+        };
+        var exception = await Assert.ThrowsAsync<UcpException>(async () =>
+        {
+            if (operation == "create")
+            {
+                await service.CreateCheckout(request, TestContext.Current.CancellationToken);
+            }
+            else if (operation == "update")
+            {
+                await service.UpdateCheckout(cart.Id, request, TestContext.Current.CancellationToken);
+            }
+            else
+            {
+                await service.HandoffCheckout(cart.Id, request, TestContext.Current.CancellationToken);
+            }
+        });
+        Assert.Equal("out_of_stock", exception.Code);
+        Assert.Equal("trace-checkout", exception.Error.CorrelationId);
+        Assert.Equal("product-1", exception.Error.Details["product_id"]);
+        Assert.Equal(0, store.SetCount);
+    }
+
+    [Fact]
+    public async Task RestoreHandoff_RechecksInventoryWithoutConsumingSessionOnRejection()
+    {
+        var cart = CreateCart();
+        cart.Addresses.Add(CreateShippingAddress());
+        var cache = new StubHandoffSessionStore();
+        var service = CreateService(new StubCartService(cart), cache);
+        var handoff = await service.HandoffCheckout(cart.Id, new UcpCheckoutRequest(), TestContext.Current.CancellationToken);
+        var token = handoff.Checkout.ContinueUrl.Split("ucp_session=").Last();
+        cart.InventoryErrors.Add(new UcpError { Code = "out_of_stock", Message = "This product is out of stock." });
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.RestoreHandoff(new UcpHandoffRestoreRequest
+        {
+            UcpSession = System.Uri.UnescapeDataString(token),
+        }, TestContext.Current.CancellationToken));
+        Assert.Equal("out_of_stock", exception.Code);
+        Assert.NotNull(cache.Get(GetHandoffCacheKey(token)));
+    }
+
     private static UcpCheckoutService CreateService(
         IUcpCartService cartService,
         IUcpHandoffSessionStore handoffSessionStore = null,
@@ -705,6 +774,7 @@ public class UcpCheckoutServiceTests
 
     private sealed class StubHandoffSessionStore : IUcpHandoffSessionStore
     {
+        public int SetCount { get; private set; }
         private readonly Dictionary<string, string> _items = [];
         private readonly System.Exception _getException;
 
@@ -725,6 +795,7 @@ public class UcpCheckoutServiceTests
 
         public Task SetAsync(string key, string payload, DateTimeOffset expiresAt, CancellationToken cancellationToken = default)
         {
+            SetCount++;
             _items[key] = payload;
             return Task.CompletedTask;
         }

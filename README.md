@@ -691,8 +691,17 @@ Known UCP error codes:
 - `missing_store_id`
 - `product_not_found`
 - `cart_not_found`
+- `out_of_stock` — XCart reports zero available units (`409`)
+- `insufficient_stock` — XCart rejects the requested inventory quantity (`409`)
+- `inventory_unavailable` — XCart cannot fulfill the minimum stock requirement (`409`)
 - `order_not_found`
 - `xapi_invalid_response`
+
+`create_cart` combines entries with the same `product_id` before calling XCart, using the same consolidation as `update_cart`. XCart therefore validates the total requested quantity rather than each fragment: splitting quantity 9 into `4 + 5` or nine entries of 1 cannot bypass a stock limit of 5. Combined quantities outside the supported integer range are rejected before any cart mutation.
+
+Inventory validation in cart-level and item-level `validationErrors` is normalized using XCart codes, object identifiers, and `errorParameters`. Failed cart mutations and checkout/handoff operations return HTTP `409` on REST or `isError: true` on MCP. MCP structured and text content include `details.product_id`, `line_item_id`, `requested_quantity`, and `available_quantity` when known, plus `retryable`, `cart_id`, `operation_rejected`, and an `errors` list of rejected inventory failures. Unknown availability is omitted; it is never treated as zero. A retry with an adjusted quantity is suggested only when a positive available quantity is known.
+
+Cart reads remain available for recovery and expose `inventory_errors` and each affected line's `inventory_status`, `requested_quantity`, and `available_quantity`. Invalid carts do not expose a `continue_url`, and cannot create or restore a checkout handoff until inventory errors are resolved. XCart mutations are sequential: rejection does not roll back earlier successful changes. Clients should read the cart before deciding how to retry.
 
 Responses include correlation id when available. The module reads `X-Correlation-Id` and falls back to the ASP.NET Core trace identifier. UCP REST responses also include `X-Trace-Id` for direct correlation with distributed traces.
 

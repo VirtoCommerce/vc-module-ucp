@@ -295,6 +295,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             cartId,
             new UcpCartRequest { Context = context },
             cancellationToken);
+        UcpInventoryErrorNormalizer.ThrowIfInvalid(response.Cart, GetCorrelationId());
         if (response.Cart.LineItems.Count == 0)
         {
             throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "Checkout requires a non-empty cart.");
@@ -317,6 +318,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
                 new UcpCartRequest { Context = request.Context },
                 cancellationToken);
 
+        UcpInventoryErrorNormalizer.ThrowIfInvalid(response.Cart, GetCorrelationId());
         if (response.Cart.LineItems.Count == 0)
         {
             throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "Checkout requires a non-empty cart.");
