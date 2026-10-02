@@ -30,7 +30,7 @@
     <group>commerce</group>
   </groups>
 
-  <projectUrl>https://github.com/VirtoCommerce/vc-module-u-c-p</projectUrl>
+  <projectUrl>https://github.com/VirtoCommerce/vc-module-ucp</projectUrl>
   <iconUrl>Modules/$(VirtoCommerce.UCP)/Content/logo.svg</iconUrl>
   <requireLicenseAcceptance>false</requireLicenseAcceptance>
 
