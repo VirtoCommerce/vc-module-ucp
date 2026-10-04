@@ -31,7 +31,7 @@
     <PackageReference Include="VirtoCommerce.XCatalog.Data" Version="3.1023.0" />
     <PackageReference Include="VirtoCommerce.XCart.Core" Version="3.1038.0" />
     <PackageReference Include="VirtoCommerce.XCart.Data" Version="3.1038.0" />
-    <PackageReference Include="VirtoCommerce.XOrder.Data" Version="3.1013.0" />
+    <PackageReference Include="VirtoCommerce.XOrder.Data" Version="3.1014.0" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="module.manifest" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
