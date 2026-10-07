@@ -21,8 +21,7 @@ internal sealed class UcpEnabledMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        var enabled = await _settingsManager.GetValueAsync<bool>(ModuleConstants.Settings.General.UcpEnabled);
-        if (!enabled)
+        if (!await IsEnabled())
         {
             context.Response.StatusCode = StatusCodes.Status404NotFound;
 
@@ -30,5 +29,18 @@ internal sealed class UcpEnabledMiddleware
         }
 
         await _next(context);
+    }
+
+    // SettingsExtension.GetValueAsync ignores a configured DefaultValue override (it falls back to the descriptor default),
+    // which would leave the gate open; the manager applies that override to the entry's DefaultValue.
+    private async Task<bool> IsEnabled()
+    {
+        var descriptor = ModuleConstants.Settings.General.UcpEnabled;
+        var entry = await _settingsManager.GetObjectSettingAsync(descriptor.Name);
+        var rawValue = entry?.Value ?? entry?.DefaultValue;
+
+        return SettingValueConverter.TryConvert<bool>(rawValue, out var enabled)
+            ? enabled
+            : descriptor.DefaultValue is true;
     }
 }

@@ -394,8 +394,8 @@ When `UCP.Enabled` is off, the module answers `404` without running the request 
 
 Notes:
 
-- The default is `true`. A `false` value already persisted in the database survives the change of the default, so an installation that stored `false` stays disabled.
-- To force the value per environment regardless of the database, set it from configuration. The key is `VirtoCommerce:Settings:Override:CurrentValue:Global:UCP.Enabled`; as an environment variable (no dots allowed), `VirtoCommerce__Settings__Override__CurrentValue__Global__UCP_Enabled=false`. A configured value makes the setting read-only in the back office.
+- The default is `true`. Before this switch was enforced nothing read the setting, so an installation with a stored `false` had every UCP surface open; it becomes disabled on upgrade. Set it to `true` to keep UCP running.
+- To force the value per environment regardless of the database, set it from configuration. The key is `VirtoCommerce:Settings:Override:CurrentValue:Global:UCP.Enabled`; as an environment variable (no dots allowed), `VirtoCommerce__Settings__Override__CurrentValue__Global__UCP_Enabled=false`. A configured current value makes the setting read-only in the back office. The `DefaultValue` bucket (`VirtoCommerce:Settings:Override:DefaultValue:Global:UCP.Enabled`) is honoured too, but a value stored in the database still wins over it.
 - The setting is read through the platform settings cache. Without a cache backplane, a change made on one instance is not seen by the others; restart every instance to pick it up.
 - This path-prefix gate is interim. It is meant to be replaced by a gate in the platform request pipeline, which will also cover surfaces that do not share these prefixes.
 

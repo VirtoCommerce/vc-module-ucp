@@ -8,6 +8,7 @@ namespace VirtoCommerce.UCP.Tests;
 internal sealed class TestSettingsManager : ISettingsManager
 {
     private readonly Dictionary<string, object> _values;
+    private readonly Dictionary<string, object> _defaultValues = new(StringComparer.Ordinal);
 
     public TestSettingsManager(params (string Name, object Value)[] values)
     {
@@ -20,14 +21,25 @@ internal sealed class TestSettingsManager : ISettingsManager
 
     public List<string> ReadNames { get; } = [];
 
+    /// <summary>
+    /// Sets the entry's DefaultValue, as the platform manager does for a configured DefaultValue override.
+    /// </summary>
+    public TestSettingsManager WithDefaultValue(string name, object defaultValue)
+    {
+        _defaultValues[name] = defaultValue;
+
+        return this;
+    }
+
     public IEnumerable<SettingDescriptor> AllRegisteredSettings => [];
 
     public Task<ObjectSettingEntry> GetObjectSettingAsync(string name, string objectType = null, string objectId = null)
     {
         ReadNames.Add(name);
         _values.TryGetValue(name, out var value);
+        _defaultValues.TryGetValue(name, out var defaultValue);
 
-        return Task.FromResult(new ObjectSettingEntry { Name = name, Value = value });
+        return Task.FromResult(new ObjectSettingEntry { Name = name, Value = value, DefaultValue = defaultValue });
     }
 
     public Task<IEnumerable<ObjectSettingEntry>> GetObjectSettingsAsync(IEnumerable<string> names, string objectType = null, string objectId = null)

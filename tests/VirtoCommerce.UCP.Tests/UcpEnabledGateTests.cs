@@ -64,6 +64,47 @@ public class UcpEnabledGateTests
         Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
     }
 
+    [Fact]
+    public async Task InvokeAsync_NoStoredValueAndConfiguredDefaultOff_Answers404WithoutCallingNext()
+    {
+        var settings = new TestSettingsManager().WithDefaultValue(_settingName, false);
+
+        var (nextCalled, context) = await Invoke(settings);
+
+        Assert.False(nextCalled);
+        Assert.Equal(StatusCodes.Status404NotFound, context.Response.StatusCode);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_StoredValueOnAndConfiguredDefaultOff_CallsNext()
+    {
+        var settings = new TestSettingsManager((_settingName, true)).WithDefaultValue(_settingName, false);
+
+        var (nextCalled, _) = await Invoke(settings);
+
+        Assert.True(nextCalled);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_NoStoredValueAndConfiguredDefaultOn_CallsNext()
+    {
+        var settings = new TestSettingsManager().WithDefaultValue(_settingName, true);
+
+        var (nextCalled, _) = await Invoke(settings);
+
+        Assert.True(nextCalled);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_UnconvertibleStoredValue_FallsBackToDescriptorDefault()
+    {
+        var settings = new TestSettingsManager((_settingName, "not a boolean"));
+
+        var (nextCalled, _) = await Invoke(settings);
+
+        Assert.True(nextCalled);
+    }
+
     [Theory]
     [InlineData("/ucp")]
     [InlineData("/ucp/v1/carts")]
@@ -163,6 +204,24 @@ public class UcpEnabledGateTests
 
         Assert.True(terminal.Reached);
         Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+    }
+
+    private static async Task<(bool NextCalled, DefaultHttpContext Context)> Invoke(TestSettingsManager settings)
+    {
+        var nextCalled = false;
+        var middleware = new UcpEnabledMiddleware(
+            _ =>
+            {
+                nextCalled = true;
+
+                return Task.CompletedTask;
+            },
+            settings);
+        var context = new DefaultHttpContext();
+
+        await middleware.InvokeAsync(context);
+
+        return (nextCalled, context);
     }
 
     private static (RequestDelegate Pipeline, Terminal Terminal) BuildPipeline(TestSettingsManager settings)

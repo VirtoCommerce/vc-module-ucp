@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using VirtoCommerce.UCP.Core;
@@ -27,6 +26,14 @@ internal static class UcpEnabledGateExtensions
 
     internal static bool IsGatedPath(PathString path)
     {
-        return _gatedPrefixes.Any(x => path.StartsWithSegments(x, StringComparison.OrdinalIgnoreCase));
+        foreach (var prefix in _gatedPrefixes)
+        {
+            if (path.StartsWithSegments(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
