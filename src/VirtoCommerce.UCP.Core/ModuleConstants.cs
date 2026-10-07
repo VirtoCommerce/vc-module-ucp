@@ -239,7 +239,7 @@ public static class ModuleConstants
                 Name = "UCP.Enabled",
                 GroupName = "UCP|General",
                 ValueType = SettingValueType.Boolean,
-                DefaultValue = false,
+                DefaultValue = true,
             };
 
             public static IEnumerable<SettingDescriptor> AllGeneralSettings

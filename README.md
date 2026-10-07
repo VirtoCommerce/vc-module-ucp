@@ -380,7 +380,24 @@ The module registers the following platform settings:
 
 | Setting | Type | Default | Description |
 | --- | --- | --- | --- |
-| `UCP.Enabled` | Boolean | `false` | Enables UCP module functionality. Registered in the platform settings under **UCP > General**; not yet enforced by the current preview endpoints. |
+| `UCP.Enabled` | Boolean | `true` | Master switch for every UCP surface. Registered in the platform settings under **UCP > General**. When it is off, the surfaces listed below answer `404`. |
+
+#### The `UCP.Enabled` switch
+
+When `UCP.Enabled` is off, the module answers `404` without running the request on these URL prefixes (segment-aware, case-insensitive; `/ucpx` is not matched):
+
+- `/ucp` (REST `/ucp/v1/*` and the MCP endpoint `/ucp/mcp`, for every HTTP method)
+- `/.well-known/ucp`
+- `/.well-known/oauth-protected-resource/ucp`
+- `/graphql/ucp`
+- `/ui/graphiql/ucp`
+
+Notes:
+
+- The default is `true`. A `false` value already persisted in the database survives the change of the default, so an installation that stored `false` stays disabled.
+- To force the value per environment regardless of the database, set it from configuration. The key is `VirtoCommerce:Settings:Override:CurrentValue:Global:UCP.Enabled`; as an environment variable (no dots allowed), `VirtoCommerce__Settings__Override__CurrentValue__Global__UCP_Enabled=false`. A configured value makes the setting read-only in the back office.
+- The setting is read through the platform settings cache. Without a cache backplane, a change made on one instance is not seen by the others; restart every instance to pick it up.
+- This path-prefix gate is interim. It is meant to be replaced by a gate in the platform request pipeline, which will also cover surfaces that do not share these prefixes.
 
 ### Permissions
 
