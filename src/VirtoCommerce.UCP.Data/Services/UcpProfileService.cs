@@ -39,6 +39,7 @@ public class UcpProfileService : IUcpProfileService
     private static readonly string[] SupportedMcpTools =
     [
         ModuleConstants.McpTools.LinkBuyerIdentity,
+        ModuleConstants.McpTools.LogoutBuyer,
         ModuleConstants.McpTools.GetStoreCapabilities,
         ModuleConstants.McpTools.SearchProducts,
         ModuleConstants.McpTools.GetProduct,
@@ -81,6 +82,7 @@ public class UcpProfileService : IUcpProfileService
     private static readonly (string Name, string Method, string Path, string Capability, string Status, string Description)[] EndpointOperations =
     [
         (ModuleConstants.McpTools.LinkBuyerIdentity, "MCP", ModuleConstants.Endpoints.Mcp, "identity_linking", "available", "Trigger Platform OAuth account linking before buyer-sensitive commerce operations."),
+        (ModuleConstants.McpTools.LogoutBuyer, "MCP", ModuleConstants.Endpoints.Mcp, "identity_linking", "available", "Sign out the current buyer by revoking the MCP OAuth authorization; stop using saved buyer, organization, cart, and checkout identifiers afterwards."),
         (ModuleConstants.McpTools.GetStoreCapabilities, "GET", ModuleConstants.Endpoints.Discovery, "profile", "available", "Read UCP capabilities, callable MCP tools, endpoint metadata, auth hints, headers, and integration guidance."),
         (ModuleConstants.McpTools.SearchProducts, "POST", ModuleConstants.Endpoints.CatalogSearch, ModuleConstants.Capabilities.Catalog, "available", "Search buyer-aware catalog products."),
         (ModuleConstants.McpTools.GetProduct, "GET", ModuleConstants.Endpoints.CatalogProduct, ModuleConstants.Capabilities.Catalog, "available", "Get one buyer-aware product by stable product id."),

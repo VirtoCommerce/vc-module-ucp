@@ -12,7 +12,7 @@ public static class ModuleConstants
     public const string McpInstructions = """
         This MCP endpoint exposes Virto Commerce UCP tools for the storefront/platform where this MCP server is installed.
         Use typed MCP tools for commerce operations.
-        Available tools: get_store_capabilities, search_products, get_product, create_cart, list_carts, get_cart, update_cart, create_checkout, update_checkout, checkout_and_handoff, get_payment_handlers, handoff_checkout, list_countries, resolve_country, list_regions, and track_order.
+        Available tools: link_buyer_identity, logout_buyer, get_store_capabilities, search_products, get_product, create_cart, list_carts, get_cart, update_cart, create_checkout, update_checkout, checkout_and_handoff, get_payment_handlers, handoff_checkout, list_countries, resolve_country, list_regions, and track_order.
         Do not pass storefront URLs to MCP tools. This MCP server already represents the target Virto Commerce UCP installation.
         Do not infer another target storefront from the MCP transport URL or user-provided links.
         Commerce tools execute local UCP services directly in this platform process.

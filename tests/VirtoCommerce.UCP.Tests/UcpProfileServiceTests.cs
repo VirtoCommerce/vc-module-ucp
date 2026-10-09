@@ -1,8 +1,10 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
+using ModelContextProtocol.Server;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using VirtoCommerce.StoreModule.Core.Model;
@@ -10,6 +12,7 @@ using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Data.Services;
+using VirtoCommerce.UCP.Web.Mcp;
 using Xunit;
 
 namespace VirtoCommerce.UCP.Tests;
@@ -44,6 +47,31 @@ public class UcpProfileServiceTests
         Assert.Equal("https://shop.example/checkout?ucp_session={token}", profile.Endpoints.HandoffUrlTemplate);
         Assert.Equal("https://shop.example/", profile.Auth.AuthorizationServer);
         Assert.Equal("https://shop.example/.well-known/oauth-protected-resource/ucp/mcp", profile.Auth.ProtectedResourceMetadata);
+    }
+
+    [Fact]
+    public async Task GetProfile_McpTools_MatchesToolsRegisteredByTheWebAssembly()
+    {
+        var httpContextAccessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext(),
+        };
+        httpContextAccessor.HttpContext.Request.Scheme = "https";
+        httpContextAccessor.HttpContext.Request.Host = new HostString("acme.example");
+        var service = new UcpProfileService(
+            Options.Create(new UcpOptions()),
+            UcpPublicOriginResolverTests.CreateResolver(httpContextAccessor));
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        var declaredTools = typeof(UcpMcpCommerceTools).Assembly
+            .GetTypes()
+            .SelectMany(x => x.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
+            .Select(x => x.GetCustomAttribute<McpServerToolAttribute>()?.Name)
+            .Where(x => x != null)
+            .OrderBy(x => x, System.StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(declaredTools, profile.McpTools.OrderBy(x => x, System.StringComparer.Ordinal).ToList());
     }
 
     [Fact]
