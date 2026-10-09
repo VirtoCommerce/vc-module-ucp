@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.StoreModule.Core.Model;
@@ -276,18 +277,103 @@ public class UcpMcpBuyerAuthenticationMiddlewareTests
         Assert.Contains("error=\"invalid_token\"", context.Response.Headers.WWWAuthenticate.ToString());
     }
 
-    private static DefaultHttpContext CreateToolCall(string toolName)
+    [Fact]
+    public async Task InvokeAsync_ChallengesAnonymousInitializeWhenCatalogIsClosed()
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var context = CreateJsonRequest("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""", anonymousCatalog: false);
+
+        await middleware.InvokeAsync(context);
+
+        Assert.False(nextCalled);
+        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+        Assert.Contains("resource_metadata=\"https://store.example/.well-known/oauth-protected-resource/ucp/mcp\"", context.Response.Headers.WWWAuthenticate.ToString());
+    }
+
+    [Fact]
+    public async Task InvokeAsync_AllowsAnonymousInitializeWhenCatalogIsOpen()
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var context = CreateJsonRequest("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""", anonymousCatalog: true);
+
+        await middleware.InvokeAsync(context);
+
+        Assert.True(nextCalled);
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_AllowsAuthenticatedBuyerWhenCatalogIsClosed()
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var context = CreateToolCall("search_products", anonymousCatalog: false);
+        context.Request.Headers.Authorization = "Bearer platform-token";
+        context.User = CreateBuyerPrincipal();
+
+        await middleware.InvokeAsync(context);
+
+        Assert.True(nextCalled);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_DoesNotChallengeLogoutWhenCatalogIsClosed()
+    {
+        var nextCalled = false;
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var context = CreateToolCall("logout_buyer", anonymousCatalog: false);
+
+        await middleware.InvokeAsync(context);
+
+        Assert.True(nextCalled);
+        Assert.Equal(0, context.Response.Headers.WWWAuthenticate.Count);
+    }
+
+    [Fact]
+    public async Task InvokeAsync_KeepsIdentityLinkingMessageWhenCatalogIsClosed()
+    {
+        var middleware = new UcpMcpBuyerAuthenticationMiddleware(_ => Task.CompletedTask);
+        var context = CreateToolCall("link_buyer_identity", anonymousCatalog: false);
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+        context.Response.Body.Position = 0;
+        using var reader = new StreamReader(context.Response.Body);
+        Assert.Contains("link the buyer account", await reader.ReadToEndAsync(TestContext.Current.CancellationToken));
+    }
+
+    private static DefaultHttpContext CreateToolCall(string toolName, bool anonymousCatalog = true)
     {
         var json = """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"TOOL_NAME","arguments":{"query":"Epson"}}}"""
             .Replace("TOOL_NAME", toolName, StringComparison.Ordinal);
-        return CreateJsonRequest(json);
+        return CreateJsonRequest(json, anonymousCatalog);
     }
 
-    private static DefaultHttpContext CreateJsonRequest(string json)
+    private static DefaultHttpContext CreateJsonRequest(string json, bool anonymousCatalog = true)
     {
         var context = new DefaultHttpContext();
         context.RequestServices = new ServiceCollection()
             .AddSingleton<UcpMcpSessionService>(new ActiveSessionService())
+            .AddSingleton<IUcpProfileService>(new StubProfileService(anonymousCatalog))
             .AddSingleton<IUcpPublicOriginResolver>(UcpPublicOriginResolverTests.CreateResolver(new HttpContextAccessor { HttpContext = context }))
             .BuildServiceProvider();
         context.Request.Scheme = "https";
@@ -356,6 +442,21 @@ public class UcpMcpBuyerAuthenticationMiddlewareTests
         Assert.True(nextCalled);
         Assert.Equal(200, context.Response.StatusCode);
         Assert.Equal(0, context.Response.Headers.WWWAuthenticate.Count);
+    }
+
+    private sealed class StubProfileService : IUcpProfileService
+    {
+        private readonly bool _anonymousCatalog;
+
+        public StubProfileService(bool anonymousCatalog)
+        {
+            _anonymousCatalog = anonymousCatalog;
+        }
+
+        public Task<UcpProfile> GetProfile(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new UcpProfile { Auth = new UcpProfileAuth { AnonymousCatalog = _anonymousCatalog } });
+        }
     }
 
     private sealed class ActiveSessionService : UcpMcpSessionService

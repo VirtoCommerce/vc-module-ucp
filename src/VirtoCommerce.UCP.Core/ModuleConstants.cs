@@ -19,6 +19,7 @@ public static class ModuleConstants
         Do not use browser/web/search tools to execute UCP operations when MCP tools are available.
         MCP tool calls are stateless. Arguments from earlier calls are never carried automatically.
         For ordinary public shopping requests, call commerce tools directly without linking an account.
+        When the store does not allow anonymous users, the MCP endpoint requires Platform OAuth from the first request.
         When the user explicitly asks to act on their behalf, use their account, personalized prices, organization,
         saved data, or orders, you MUST call link_buyer_identity before any buyer-sensitive commerce tool.
         Do not call search_products, get_product, create_cart, list_carts, get_cart, update_cart, checkout, or order tools
