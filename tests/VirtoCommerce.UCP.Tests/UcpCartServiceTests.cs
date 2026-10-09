@@ -231,6 +231,38 @@ public partial class UcpCartServiceTests
     }
 
     [Fact]
+    public async Task ListCarts_WithoutCartType_WhenMorePagesExist_ReportsServerTotalCount()
+    {
+        var executor = new StubXApiExecutor(BuildPagedCartListJson(
+            25,
+            true,
+            BuildCartListItem("cart-1", "null", "buyer-1", "null"),
+            BuildCartListItem("wishlist-1", "\"Wishlist\"", "buyer-1", "null")));
+        var service = CreateService(executor);
+
+        var response = await service.ListCarts(CreateListRequest(null), TestContext.Current.CancellationToken);
+
+        Assert.Equal("cart-1", Assert.Single(response.Carts).Id);
+        Assert.Equal(25, response.Pagination.TotalCount);
+    }
+
+    [Fact]
+    public async Task ListCarts_WithoutCartType_OnLastPageOfCursoredListing_ReportsServerTotalCount()
+    {
+        var executor = new StubXApiExecutor(BuildPagedCartListJson(
+            25,
+            false,
+            BuildCartListItem("cart-1", "null", "buyer-1", "null"),
+            BuildCartListItem("wishlist-1", "\"Wishlist\"", "buyer-1", "null")));
+        var service = CreateService(executor);
+
+        var response = await service.ListCarts(CreateListRequest("cursor-1"), TestContext.Current.CancellationToken);
+
+        Assert.Equal("cart-1", Assert.Single(response.Carts).Id);
+        Assert.Equal(25, response.Pagination.TotalCount);
+    }
+
+    [Fact]
     public async Task ListCarts_WithRequestedCartType_ReturnsListsOfThatType()
     {
         var executor = new StubXApiExecutor(BuildCartListJson(
@@ -986,6 +1018,27 @@ public partial class UcpCartServiceTests
             {"id":"{{id}}","name":"default","status":"New","storeId":"store-acme","type":{{typeJson}},"isAnonymous":true,"customerId":"{{customerId}}","organizationId":{{organizationIdJson}},"currency":{"code":"USD"},
               "coupons":[],"items":[],"validationErrors":[],"warnings":[]}
             """;
+    }
+
+    private static UcpCartListRequest CreateListRequest(string cursor)
+    {
+        return new UcpCartListRequest
+        {
+            Context = new UcpCartContext
+            {
+                StoreId = "store-acme",
+                Currency = "USD",
+                Language = "en-US",
+                BuyerId = "buyer-1",
+            },
+            Pagination = new UcpPaginationRequest { Cursor = cursor },
+        };
+    }
+
+    private static string BuildPagedCartListJson(int totalCount, bool hasNextPage, params string[] itemJsons)
+    {
+        return "{\"data\":{\"carts\":{\"totalCount\":" + totalCount +
+            ",\"pageInfo\":{\"hasNextPage\":" + (hasNextPage ? "true" : "false") + ",\"endCursor\":null},\"items\":[" + string.Join(",", itemJsons) + "]}}}";
     }
 
     private static string BuildCartListJson(params string[] itemJsons)

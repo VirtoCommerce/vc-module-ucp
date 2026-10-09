@@ -152,8 +152,10 @@ public static class UcpMcpCommerceTools
 
     [McpServerTool(Name = ModuleConstants.McpTools.ListCarts, ReadOnly = true, Destructive = false)]
     [Description(
-        "List buyer-scoped carts in this Virto Commerce storefront. Anonymous continuation requires buyer_id. " +
-        "For the user's account, organization, or saved carts, do not call this tool until link_buyer_identity succeeds; " +
+        "List buyer-scoped carts in this Virto Commerce storefront. By default the result is the buyer's storefront cart(s); " +
+        "lists such as wishlists or saved-for-later carts are returned only when an explicit cart_type is passed. " +
+        "Anonymous continuation requires buyer_id. " +
+        "For the user's account or organization carts, do not call this tool until link_buyer_identity succeeds; " +
         "buyer and organization then come from the Platform token. Global cart listing is not allowed.")]
     [SuppressMessage("Maintainability", "S107", Justification = "Parameters define the public MCP tool schema.")]
     public static Task<object> ListCarts(
@@ -164,7 +166,7 @@ public static class UcpMcpCommerceTools
         string language = null,
         [Description("Required for anonymous continuation; authenticated mode derives buyer identity from the Platform token.")] string buyer_id = null,
         string cart_name = null,
-        string cart_type = null,
+        [Description("Omit to list the storefront cart. Pass a list type such as Wishlist or SavedForLater to list those carts instead.")] string cart_type = null,
         string cursor = null,
         int limit = 10,
         string sort = null,

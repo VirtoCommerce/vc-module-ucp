@@ -141,6 +141,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         }
 
         var hasNextPage = cartsElement.TryGetProperty("pageInfo", out var pageInfo) && ReadBoolean(pageInfo, "hasNextPage");
+        var isSinglePage = !hasNextPage && string.IsNullOrEmpty(request.Pagination?.Cursor);
 
         return new UcpCartListResponse
         {
@@ -150,7 +151,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             {
                 Cursor = pageInfo.ValueKind == JsonValueKind.Object ? ReadString(pageInfo, "endCursor") : null,
                 HasNextPage = hasNextPage,
-                TotalCount = filterUntyped && !hasNextPage ? carts.Count : ReadInt(cartsElement, "totalCount"),
+                TotalCount = filterUntyped && isSinglePage ? carts.Count : ReadInt(cartsElement, "totalCount"),
             },
         };
     }

@@ -144,6 +144,9 @@ public class UcpMcpCommerceToolsTests
         var listCartsBuyerParameter = listCartsMethod
             ?.GetParameters()
             .Single(parameter => parameter.Name == "buyer_id");
+        var listCartsTypeParameter = listCartsMethod
+            ?.GetParameters()
+            .Single(parameter => parameter.Name == "cart_type");
         var checkoutDescription = typeof(UcpMcpCommerceTools)
             .GetMethod(nameof(UcpMcpCommerceTools.CheckoutAndHandoff))
             ?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()
@@ -153,6 +156,7 @@ public class UcpMcpCommerceToolsTests
         Assert.Contains("buyer-scoped carts", listCartsMethod?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
         Assert.Contains("Required for anonymous continuation", listCartsBuyerParameter?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
         Assert.Null(listCartsBuyerParameter?.GetCustomAttribute<System.ComponentModel.DataAnnotations.RequiredAttribute>());
+        Assert.Contains("Omit to list the storefront cart", listCartsTypeParameter?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
         Assert.Contains("shipping_address.postal_code", checkoutDescription);
         Assert.Contains("ask the user", checkoutDescription);
     }
