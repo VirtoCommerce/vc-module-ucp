@@ -146,6 +146,8 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             return orders;
         }
 
+        // Offset paging can serve the same row twice when an order is created mid-scan.
+        var seenOrderIds = new HashSet<string>(StringComparer.Ordinal);
         var criteria = new CustomerOrderSearchCriteria
         {
             CustomerId = request.UserId,
@@ -163,7 +165,8 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
                 "SearchOrdersByCartScoped",
                 () => _customerOrderSearchService.SearchAsync(criteria, clone: false));
             orders.AddRange(result.Results.Where(x => IsOrderInScope(x, request) &&
-                string.Equals(x.ShoppingCartId, request.CartId, StringComparison.OrdinalIgnoreCase)));
+                string.Equals(x.ShoppingCartId, request.CartId, StringComparison.OrdinalIgnoreCase) &&
+                seenOrderIds.Add(x.Id)));
 
             criteria.Skip += result.Results.Count;
             if (result.Results.Count == 0 || criteria.Skip >= result.TotalCount)

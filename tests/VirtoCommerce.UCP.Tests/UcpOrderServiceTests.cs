@@ -132,6 +132,28 @@ public class UcpOrderServiceTests
     }
 
     [Fact]
+    public async Task TrackOrder_ByCartId_WhenPagesShiftDuringScan_ReturnsEachOrderOnce()
+    {
+        // A new order created mid-scan pushes the last row of page 1 onto page 2,
+        // so the stub serves the same order at index 49 and index 50.
+        var orders = Enumerable.Range(0, 50).Select(x => CreateOrder($"order-{x}", $"cart-{x}", "buyer-1")).ToList();
+        orders[3].ShoppingCartId = "cart-split";
+        orders[49].ShoppingCartId = "cart-split";
+        orders.Add(CreateOrder("order-49", "cart-split", "buyer-1"));
+        var searchService = new StubCustomerOrderSearchService(orders.ToArray());
+        var service = CreateService(orderSearchService: searchService);
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            CartId = "cart-split",
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal([0, 50], searchService.Criteria.Select(x => x.Skip));
+        Assert.Equal(["order-3", "order-49"], response.Orders.Select(x => x.Id));
+    }
+
+    [Fact]
     public async Task TrackOrder_ByCartId_WithSingleOrder_ReturnsItInOrders()
     {
         var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(
