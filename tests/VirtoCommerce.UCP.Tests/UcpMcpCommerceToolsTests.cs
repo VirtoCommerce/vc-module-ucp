@@ -64,6 +64,23 @@ public class UcpMcpCommerceToolsTests
     }
 
     [Fact]
+    public void UpdateCartTool_ReplacesLineItemsAndIsMarkedDestructive()
+    {
+        var method = typeof(UcpMcpCommerceTools).GetMethod(nameof(UcpMcpCommerceTools.UpdateCart));
+        var attribute = method?.GetCustomAttribute<McpServerToolAttribute>();
+        var description = method?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description;
+        var lineItemsDescription = method?.GetParameters()
+            .Single(parameter => parameter.Name == "line_items")
+            .GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description;
+
+        Assert.True(attribute?.Destructive);
+        Assert.Contains("replaces", description);
+        Assert.Contains("removed", description);
+        Assert.Contains("complete desired", lineItemsDescription);
+        Assert.Contains("removed", lineItemsDescription);
+    }
+
+    [Fact]
     public void UcpMcpTools_DoNotAcceptStorefrontUrl()
     {
         var parameterNames = typeof(UcpMcpCommerceTools)

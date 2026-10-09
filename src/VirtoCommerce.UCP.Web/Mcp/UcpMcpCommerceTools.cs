@@ -211,13 +211,16 @@ public static class UcpMcpCommerceTools
         });
     }
 
-    [McpServerTool(Name = ModuleConstants.McpTools.UpdateCart, ReadOnly = false, Destructive = false)]
-    [Description("Update cart state in this Virto Commerce storefront. For the user's account, organization, or cart, do not call this tool until link_buyer_identity succeeds; authenticated buyer identity comes from the Platform token.")]
+    [McpServerTool(Name = ModuleConstants.McpTools.UpdateCart, ReadOnly = false, Destructive = true)]
+    [Description(
+        "Update cart state in this Virto Commerce storefront. This replaces the cart's line items with the complete desired line_items state: " +
+        "lines not listed are removed, so read the cart first and send every line that should remain. " +
+        "For the user's account, organization, or cart, do not call this tool until link_buyer_identity succeeds; authenticated buyer identity comes from the Platform token.")]
     public static Task<object> UpdateCart(
         IUcpProfileService profileService,
         IUcpCartService cartService,
         string cart_id,
-        IList<UcpCartLineItemRequest> line_items,
+        [Description("The complete desired line items of the cart, not a delta. Existing lines that are not listed are removed.")] IList<UcpCartLineItemRequest> line_items,
         string store_id = null,
         string currency = null,
         string language = null,
