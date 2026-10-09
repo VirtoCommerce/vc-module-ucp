@@ -93,6 +93,32 @@ public class UcpCheckoutServiceTests
     }
 
     [Fact]
+    public async Task HandoffCheckout_ReturnsIssuedAtOneTtlBeforeExpiresAtAndStoresTheSameInstant()
+    {
+        var cart = CreateCart();
+        cart.Addresses.Add(CreateShippingAddress());
+        var cache = new StubHandoffSessionStore();
+        var service = CreateService(new StubCartService(cart), cache, options: new UcpOptions
+        {
+            DefaultStoreId = "store-acme",
+            DefaultCurrency = "USD",
+            DefaultCultureName = "en-US",
+            StorefrontOrigin = "https://storefront.example",
+            HandoffUrlTemplate = "https://storefront.example/checkout?ucp_session={token}",
+            HandoffTokenTtlMinutes = 7,
+        });
+
+        var handoff = await service.HandoffCheckout("cart-1", new UcpCheckoutRequest(), TestContext.Current.CancellationToken);
+
+        var issuedAt = Assert.NotNull(handoff.Checkout.IssuedAt);
+        Assert.Equal(TimeSpan.FromMinutes(7), handoff.Checkout.ExpiresAt - issuedAt);
+
+        var token = handoff.Checkout.ContinueUrl.Split("ucp_session=").Last();
+        using var payload = JsonDocument.Parse(cache.Get(GetHandoffCacheKey(token)));
+        Assert.Equal(issuedAt, payload.RootElement.GetProperty("issued_at").GetDateTimeOffset());
+    }
+
+    [Fact]
     public async Task RestoreHandoff_BusyLockReturnsRetryableConflictAndKeepsSession()
     {
         var cache = new StubHandoffSessionStore();

@@ -21,6 +21,10 @@ public static class UcpMcpCommerceTools
         "shipping_address.postal_code are provided, unless the store assigns cart addresses itself " +
         "(store_managed_addresses in get_store_capabilities); ask the user for missing values.";
 
+    private const string TrackOrderNextStepNote =
+        "Its next step for track_order carries placed_after (the handoff issued_at); " +
+        "keep those arguments to track the order the buyer places.";
+
     [McpServerTool(Name = ModuleConstants.McpTools.GetStoreCapabilities, ReadOnly = true, Destructive = false)]
     [Description("Discover UCP capabilities for this Virto Commerce storefront.")]
     public static Task<object> GetStoreCapabilities(
@@ -372,7 +376,7 @@ public static class UcpMcpCommerceTools
     [Description(
         "Create checkout and immediately create a hosted checkout handoff URL. For the user's account or organization, " +
         "do not call this tool until link_buyer_identity succeeds. " + ShippingAddressRequirement + " " +
-        "This does not execute a payment.")]
+        "This does not execute a payment. " + TrackOrderNextStepNote)]
     public static Task<object> CheckoutAndHandoff(
         IUcpProfileService profileService,
         IUcpCheckoutService checkoutService,
@@ -427,7 +431,7 @@ public static class UcpMcpCommerceTools
     [Description(
         "Create a hosted checkout handoff URL. For the user's account or organization, do not call this tool until " +
         "link_buyer_identity succeeds. " + ShippingAddressRequirement + " " +
-        "This does not execute a payment.")]
+        "This does not execute a payment. " + TrackOrderNextStepNote)]
     public static Task<object> HandoffCheckout(
         IUcpProfileService profileService,
         IUcpCheckoutService checkoutService,
@@ -485,7 +489,7 @@ public static class UcpMcpCommerceTools
                 NextStepAfterPayment = new UcpMcpNextToolStep
                 {
                     Tool = ModuleConstants.McpTools.TrackOrder,
-                    Arguments = CreateTrackOrderArguments(request.CartId, effectiveBuyerId, effectiveLanguage),
+                    Arguments = CreateTrackOrderArguments(request.CartId, effectiveBuyerId, effectiveLanguage, handoff?.Checkout?.IssuedAt),
                 },
             };
         });
@@ -525,7 +529,10 @@ public static class UcpMcpCommerceTools
     [McpServerTool(Name = ModuleConstants.McpTools.TrackOrder, ReadOnly = true, Destructive = false)]
     [Description(
         "Track order by order id, order number, or cart id in this Virto Commerce storefront. " +
-        "By cart_id it returns every order created from that cart in orders (newest first); order is the newest one. " +
+        "After a hosted checkout, call it with the cart_id and placed_after from the handoff's next step " +
+        "(placed_after is the handoff issued_at): orders lists the orders placed from that checkout, newest first, " +
+        "and order is the newest. Without placed_after, cart_id returns only the newest order of the cart. " +
+        "Not found with placed_after means the buyer has not placed the order yet. " +
         "For the user's account, organization, or orders, do not call this tool until link_buyer_identity succeeds.")]
     public static Task<object> TrackOrder(
         IUcpProfileService profileService,
@@ -533,6 +540,7 @@ public static class UcpMcpCommerceTools
         string order_id = null,
         string order_number = null,
         string cart_id = null,
+        DateTimeOffset? placed_after = null,
         string store_id = null,
         string currency = null,
         string language = null,
@@ -546,6 +554,7 @@ public static class UcpMcpCommerceTools
                 OrderId = order_id,
                 OrderNumber = order_number,
                 CartId = cart_id,
+                PlacedAfter = placed_after,
                 Context = CreateCartContext(store_id, currency, language, buyer_id, null, null),
             };
             ApplyCartContextDefaults(request.Context, await profileService.GetProfile(cancellationToken));
@@ -676,15 +685,16 @@ public static class UcpMcpCommerceTools
             NextStepAfterPayment = new UcpMcpNextToolStep
             {
                 Tool = ModuleConstants.McpTools.TrackOrder,
-                Arguments = CreateTrackOrderArguments(request.CartId, buyerId, language),
+                Arguments = CreateTrackOrderArguments(request.CartId, buyerId, language, handoff?.Checkout?.IssuedAt),
             },
         };
     }
 
-    private static Dictionary<string, object> CreateTrackOrderArguments(string cartId, string buyerId, string language)
+    private static Dictionary<string, object> CreateTrackOrderArguments(string cartId, string buyerId, string language, DateTimeOffset? placedAfter)
     {
         var arguments = new Dictionary<string, object>();
         AddNextStepString(arguments, "cart_id", cartId);
+        AddNextStepString(arguments, "placed_after", placedAfter?.ToString("O"));
         AddNextStepString(arguments, "buyer_id", buyerId);
         AddNextStepString(arguments, "language", language);
 

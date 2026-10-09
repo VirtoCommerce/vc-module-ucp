@@ -57,8 +57,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
 
         if (orderModels.Count == 0)
         {
-            var lookup = FirstNotEmpty(orderRequest.OrderId, orderRequest.OrderNumber, orderRequest.CartId);
-            throw CreateException(ModuleConstants.ErrorCodes.OrderNotFound, $"Order '{lookup}' was not found.", StatusCodes.Status404NotFound);
+            throw CreateException(ModuleConstants.ErrorCodes.OrderNotFound, CreateOrderNotFoundMessage(orderRequest), StatusCodes.Status404NotFound);
         }
 
         var orders = orderModels.Select(MapOrder).ToList();
@@ -71,6 +70,18 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             Orders = orders,
             Messages = order.Messages,
         };
+    }
+
+    private static string CreateOrderNotFoundMessage(OrderExecutionRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.CartId) && request.PlacedAfter.HasValue)
+        {
+            return $"No order was placed from cart '{request.CartId}' after {request.PlacedAfter.Value:O}.";
+        }
+
+        var lookup = FirstNotEmpty(request.OrderId, request.OrderNumber, request.CartId);
+
+        return $"Order '{lookup}' was not found.";
     }
 
     private OrderExecutionRequest BuildOrderExecutionRequest(UcpOrderTrackingRequest request)
@@ -91,6 +102,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             OrderId = request.OrderId,
             OrderNumber = request.OrderNumber,
             CartId = request.CartId,
+            PlacedAfter = request.PlacedAfter,
             CultureName = FirstNotEmpty(request.Context?.Language, _options.DefaultCultureName),
             UserId = buyerContext.UserId,
             OrganizationId = buyerContext.OrganizationId,
@@ -152,6 +164,8 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
         {
             CustomerId = request.UserId,
             OrganizationId = request.OrganizationId,
+            HasParentOperation = false,
+            StartDate = request.PlacedAfter?.UtcDateTime,
             Take = _orderLookupPageSize,
             Sort = "CreatedDate:desc",
             ResponseGroup = _orderResponseGroup,
@@ -167,6 +181,11 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             orders.AddRange(result.Results.Where(x => IsOrderInScope(x, request) &&
                 string.Equals(x.ShoppingCartId, request.CartId, StringComparison.OrdinalIgnoreCase) &&
                 seenOrderIds.Add(x.Id)));
+
+            if (orders.Count > 0 && request.PlacedAfter is null)
+            {
+                return [orders[0]];
+            }
 
             criteria.Skip += result.Results.Count;
             if (result.Results.Count == 0 || criteria.Skip >= result.TotalCount)

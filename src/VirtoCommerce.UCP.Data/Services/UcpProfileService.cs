@@ -71,7 +71,7 @@ public class UcpProfileService : IUcpProfileService
         "default_store_id or store.id from discovery is the default store_id for catalog, cart, and checkout tools. Multiple stores without default_store_id require an explicit store selection.",
         "Address changes after checkout or handoff require update_checkout followed by a new handoff_checkout URL.",
         "When the buyer is ready to pay or continue to hosted checkout, prefer checkout_and_handoff so the response includes the final continue_url.",
-        "After hosted checkout, track_order can use the original cart_id before an order_id is available.",
+        "After hosted checkout, track_order can use the original cart_id with placed_after set to the handoff issued_at before an order_id is available.",
         "requires_escalation means the buyer must continue in hosted checkout; it does not mean an order approval rule was triggered. Approval rules and payment terms are enforced by the existing storefront checkout.",
         "For ordinary shopping, call commerce tools directly without linking an account.",
         "When the user explicitly asks to act on their behalf or use their account, organization, personalized prices, saved data, or orders, call link_buyer_identity before buyer-sensitive commerce tools.",
@@ -124,7 +124,7 @@ public class UcpProfileService : IUcpProfileService
             "Create hosted checkout handoff URL. For physical goods, shipping_address is expected before handoff unless store_managed_addresses is true; billing_address defaults to shipping_address when no separate billing address is provided."
         ),
         (ModuleConstants.McpTools.TrackOrder, "GET", ModuleConstants.Endpoints.OrderTrack, ModuleConstants.Capabilities.Order, "available", "Track an order by order id or number when the user provides one."),
-        (ModuleConstants.McpTools.TrackOrder, "GET", ModuleConstants.Endpoints.OrderTrackByCart, ModuleConstants.Capabilities.Order, "available", "After hosted checkout, track the created order by the original cart_id."),
+        (ModuleConstants.McpTools.TrackOrder, "GET", ModuleConstants.Endpoints.OrderTrackByCart, ModuleConstants.Capabilities.Order, "available", "After hosted checkout, track the created order by the original cart_id and placed_after (the handoff issued_at)."),
         (ModuleConstants.McpTools.ListCountries, "GET", ModuleConstants.Endpoints.GeographyCountries, ModuleConstants.Capabilities.Geography, "available", "List or search Virto Commerce platform countries before checkout country normalization."),
         (ModuleConstants.McpTools.ResolveCountry, "GET", ModuleConstants.Endpoints.GeographyCountryResolve, ModuleConstants.Capabilities.Geography, "available", "Resolve a country query such as ISO2, ISO3, or platform country name to the Virto Commerce platform country id."),
         (ModuleConstants.McpTools.ListRegions, "GET", ModuleConstants.Endpoints.GeographyRegions, ModuleConstants.Capabilities.Geography, "available", "List platform regions/provinces for a resolved country id. City remains free text."),

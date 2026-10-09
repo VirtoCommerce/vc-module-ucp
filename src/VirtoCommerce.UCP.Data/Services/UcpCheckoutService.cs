@@ -143,8 +143,10 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
 
         var cart = await PrepareCartForCheckout(request, cancellationToken);
         ValidateEffectiveShippingAddress(request.ShippingAddress, cart);
-        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(Math.Max(1, _options.HandoffTokenTtlMinutes));
+        var issuedAt = DateTimeOffset.UtcNow;
+        var expiresAt = issuedAt.AddMinutes(Math.Max(1, _options.HandoffTokenTtlMinutes));
         var checkout = CreateCheckout(request, cart, StatusRequiresEscalation);
+        checkout.IssuedAt = issuedAt;
         checkout.ExpiresAt = expiresAt;
         var sessionToken = await StoreHandoffPayload(checkout, request.Context, expiresAt, cancellationToken);
         checkout.ContinueUrl = await BuildContinueUrl(sessionToken, checkout.Cart.StoreId);
@@ -233,6 +235,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             BillingAddress = payload.BillingAddress,
             ShippingMethodId = payload.ShippingMethodId,
             PaymentHandler = payload.PaymentHandler,
+            IssuedAt = payload.IssuedAt,
             ExpiresAt = payload.ExpiresAt,
         };
 
@@ -588,7 +591,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             BuyerId = buyerContext.PublicBuyerId,
             OrganizationId = buyerContext.OrganizationId,
             RequiresAuthentication = buyerContext.IsAuthenticated,
-            IssuedAt = DateTimeOffset.UtcNow,
+            IssuedAt = checkout.IssuedAt ?? DateTimeOffset.UtcNow,
             Buyer = checkout.Buyer,
             ShippingAddress = checkout.ShippingAddress,
             BillingAddress = checkout.BillingAddress,

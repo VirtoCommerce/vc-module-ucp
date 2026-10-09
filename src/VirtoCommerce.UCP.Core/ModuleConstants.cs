@@ -53,7 +53,7 @@ public static class ModuleConstants
         Never send a partial shipping_address.
         Ask for every missing value and do not call a checkout or handoff tool yet; never invent address data.
         Resolve country with resolve_country and, when the country defines regions, resolve region_id with list_regions before checkout. City remains free text.
-        Before resolve_country, require query. Before list_regions, require country_id. Before track_order, require at least one of order_id, order_number, or the saved cart_id.
+        Before resolve_country, require query. Before list_regions, require country_id. Before track_order, require at least one of order_id, order_number, or the saved cart_id (with the placed_after from the handoff next step).
         Treat price.amount as the current sell price and list_price.amount as the pre-discount reference price.
         list_carts requires buyer_id for anonymous continuation. In authenticated mode, buyer identity and organization come only from the Platform token; never invent or request identity fields from the user.
         update_cart accepts the complete desired line_items state, not a delta. Reuse the existing cart_id and buyer_id; never call create_cart as a fallback for changing an existing cart.
@@ -64,9 +64,9 @@ public static class ModuleConstants
         XAPI GraphQL errors are returned unchanged in MCP structuredContent. Inspect their codes, paths, locations, extensions, and partial data before deciding what to do.
         Every MCP tool result includes a model-visible "Trace ID: ..." content block and _meta.trace_id when an active trace exists. Preserve that id with any reported result or failure so operators can open the exact MCP -> UCP -> XAPI trace.
         A read-only XAPI failure from search_products or get_product may be transient; retry the same read-only tool at most once. Do not automatically retry mutating cart or checkout tools.
-        For hosted checkout, return checkout.continue_url to the buyer and keep cart_id for later track_order.
-        After hosted checkout, use the saved cart_id and buyer_id with track_order when the user asks about the order; do not require an order number when those saved identifiers are available.
-        One cart can produce several orders (for example, one per supplier). Lookup by cart_id returns all of them in orders, newest first; order is the newest. Read orders, not only order, before answering about a cart's orders.
+        For hosted checkout, return checkout.continue_url to the buyer and keep cart_id and the handoff issued_at (placed_after) for later track_order.
+        After hosted checkout, use the saved cart_id and buyer_id, plus placed_after (the handoff issued_at), with track_order when the user asks about the order; do not require an order number when those saved identifiers are available.
+        One hosted checkout can produce several orders (for example, one per supplier). Lookup by cart_id with placed_after returns the orders placed since the handoff in orders, newest first; order is the newest; not found means the buyer has not placed the order yet. Without placed_after only the newest order of the cart is returned. Read orders, not only order, before answering about a checkout's orders.
         """;
 
     public static class Capabilities

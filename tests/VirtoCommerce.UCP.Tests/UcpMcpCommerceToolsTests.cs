@@ -163,7 +163,7 @@ public class UcpMcpCommerceToolsTests
         Assert.Contains("Required for anonymous continuation", listCartsBuyerParameter?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
         Assert.Null(listCartsBuyerParameter?.GetCustomAttribute<System.ComponentModel.DataAnnotations.RequiredAttribute>());
         Assert.Contains("Omit to list the storefront cart", listCartsTypeParameter?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
-        Assert.Contains("every order created from that cart in orders", trackOrderDescription);
+        Assert.Contains("placed_after from the handoff's next step", trackOrderDescription);
         Assert.Contains("shipping_address.postal_code", checkoutDescription);
         Assert.Contains("ask the user", checkoutDescription);
     }
@@ -290,7 +290,7 @@ public class UcpMcpCommerceToolsTests
             [nameof(UcpMcpCommerceTools.UpdateCheckout)] = ["checkout_id", "cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
             [nameof(UcpMcpCommerceTools.CheckoutAndHandoff)] = ["cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
             [nameof(UcpMcpCommerceTools.HandoffCheckout)] = ["checkout_id", "cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
-            [nameof(UcpMcpCommerceTools.TrackOrder)] = ["order_id", "order_number", "cart_id", "store_id", "currency", "language", "buyer_id"],
+            [nameof(UcpMcpCommerceTools.TrackOrder)] = ["order_id", "order_number", "cart_id", "placed_after", "store_id", "currency", "language", "buyer_id"],
         };
 
         foreach (var (methodName, expectedProperties) in expectedSchemas)
@@ -461,6 +461,24 @@ public class UcpMcpCommerceToolsTests
         Assert.Equal("cart-request", result.NextStepAfterPayment.Arguments["cart_id"]);
         Assert.Equal("buyer-service", result.NextStepAfterPayment.Arguments["buyer_id"]);
         Assert.Equal("en-US", result.NextStepAfterPayment.Arguments["language"]);
+        Assert.Equal(CaptureCheckoutService.HandoffIssuedAt.ToString("O"), result.NextStepAfterPayment.Arguments["placed_after"]);
+    }
+
+    [Fact]
+    public async Task HandoffCheckout_NextStepTrackOrderCarriesHandoffIssuedAtAsPlacedAfter()
+    {
+        var profileService = new StubProfileService(new UcpProfile());
+        var checkoutService = new CaptureCheckoutService();
+
+        var result = Assert.IsType<UcpMcpHandoffCheckoutResult>(await UcpMcpCommerceTools.HandoffCheckout(
+            profileService,
+            checkoutService,
+            checkout_id: "checkout-1",
+            cart_id: "cart-request",
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal("cart-request", result.NextStepAfterPayment.Arguments["cart_id"]);
+        Assert.Equal(CaptureCheckoutService.HandoffIssuedAt.ToString("O"), result.NextStepAfterPayment.Arguments["placed_after"]);
     }
 
     private static string[] GetCommerceToolNames()
@@ -556,6 +574,8 @@ public class UcpMcpCommerceToolsTests
 
     private sealed class CaptureCheckoutService : IUcpCheckoutService
     {
+        public static readonly DateTimeOffset HandoffIssuedAt = new(2026, 6, 16, 9, 30, 15, TimeSpan.Zero);
+
         public string HandoffCheckoutId { get; private set; }
         public UcpCheckoutRequest HandoffRequest { get; private set; }
 
@@ -589,7 +609,7 @@ public class UcpMcpCommerceToolsTests
 
             return Task.FromResult(new UcpCheckoutHandoffResponse
             {
-                Checkout = new UcpCheckout { ContinueUrl = "https://example.test/checkout" },
+                Checkout = new UcpCheckout { ContinueUrl = "https://example.test/checkout", IssuedAt = HandoffIssuedAt },
             });
         }
 

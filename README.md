@@ -599,7 +599,7 @@ The current checkout flow is hosted-only:
 - If the request contains `shipping_address` or `billing_address`, the module applies them to XCart before creating the snapshot.
 - `update_checkout` updates address hints before payment and applies addresses to XCart.
 - `checkout_and_handoff` creates the checkout snapshot and immediately returns the hosted checkout `continue_url`; MCP clients should prefer it when the buyer is ready to pay or continue to storefront checkout.
-- `handoff_checkout` returns a `continue_url` with an opaque `ucp_session`.
+- `handoff_checkout` returns a `continue_url` with an opaque `ucp_session`, plus the checkout's `issued_at` and `expires_at`. `issued_at` is the handoff time and anchors order tracking (see Order Tracking); the next step for `track_order` already carries it as `placed_after`.
 - `storefront_restore` validates `ucp_session`, reads the session payload from the handoff session store, checks expiration, and returns cart and checkout context to the storefront.
 - Shipping method and payment details are completed in storefront checkout.
 
@@ -659,16 +659,16 @@ Example handoff request:
 
 ```http
 GET /ucp/v1/orders/{orderId}?buyer_id=user-42&culture_name=en-US
-GET /ucp/v1/orders?cart_id={cartId}&buyer_id=user-42&culture_name=en-US
+GET /ucp/v1/orders?cart_id={cartId}&placed_after={issued_at}&buyer_id=user-42&culture_name=en-US
 ```
 
 `track_order` returns order status, order number, totals, line items, shipment snapshot, payment snapshot, and shipment tracking fields when they are available in order data.
 
 After hosted handoff, the client usually does not know `order_id` yet. The primary path is lookup by the original `cart_id`, matched against `CustomerOrder.ShoppingCartId` through Orders module services. Lookup stays within the resolved buyer and organization context. If the buyer signed in during guest checkout, link that identity before tracking the order.
 
-A cart can produce several orders, for example when the storefront checks out per supplier. Lookup by `cart_id` returns every matching order in `orders`, newest first, and `order` is the newest of them. Lookup by order id or number returns that single order in `orders` as well.
+The storefront's default cart survives checkout: after an order is placed the cart is emptied but keeps its id, so one `cart_id` accumulates orders over time. To track the order of one hosted checkout, pass `placed_after` set to the handoff `issued_at` (the `track_order` next step carries it). `orders` then lists the top-level orders of that cart created at or after `placed_after`, newest first, and `order` is the newest of them; one checkout can yield several, for example when the storefront checks out per supplier. Without `placed_after`, lookup by `cart_id` returns only the newest order of the cart. Supplier child orders (those with a parent order) are never returned. Lookup by order id or number returns that single order in `orders` as well and ignores `placed_after`.
 
-If the order has not been created yet or is not found within that buyer context, the endpoint returns the structured error `order_not_found`.
+If the order has not been created yet (with `placed_after`: the buyer has not placed the order since the handoff) or is not found within that buyer context, the endpoint returns the structured error `order_not_found`.
 
 ## MCP Server
 
@@ -830,7 +830,7 @@ Recommended smoke checks after installation:
 10. `POST /ucp/v1/internal/handoff/restore` restores the temporary handoff session.
 11. `GET /ucp/v1/geography/countries/resolve?query=KZ` returns the platform country id for checkout address normalization.
 12. `GET /ucp/v1/geography/countries/{countryId}/regions` returns regions when they exist in the platform dictionary.
-13. After storefront checkout, `GET /ucp/v1/orders?cart_id={cartId}&buyer_id={buyerId}` returns the order tracking snapshot.
+13. After storefront checkout, `GET /ucp/v1/orders?cart_id={cartId}&placed_after={issuedAt}&buyer_id={buyerId}` returns the order tracking snapshot.
 
 ## Roadmap
 
