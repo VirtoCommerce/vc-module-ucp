@@ -142,6 +142,121 @@ public partial class UcpCartServiceTests
     }
 
     [Fact]
+    public async Task CreateCart_WithoutCartType_SendsNullCartTypeInCommand()
+    {
+        var executor = new StubXApiExecutor(CartWithOneItemJson);
+        var service = CreateService(executor);
+
+        await service.CreateCart(new UcpCartRequest
+        {
+            LineItems =
+            {
+                new UcpCartLineItemRequest { ProductId = "product-1", Quantity = 1 },
+            },
+        }, TestContext.Current.CancellationToken);
+
+        var command = executor.Requests[0].Variables["command"].AsDictionary();
+
+        Assert.True(command.ContainsKey("cartType"));
+        Assert.Null(command["cartType"]);
+    }
+
+    [Fact]
+    public async Task CreateCart_WithExplicitCartType_PassesCartTypeToCommand()
+    {
+        var executor = new StubXApiExecutor(CartWithOneItemJson);
+        var service = CreateService(executor);
+
+        await service.CreateCart(new UcpCartRequest
+        {
+            CartType = "Wishlist",
+            LineItems =
+            {
+                new UcpCartLineItemRequest { ProductId = "product-1", Quantity = 1 },
+            },
+        }, TestContext.Current.CancellationToken);
+
+        var command = executor.Requests[0].Variables["command"].AsDictionary();
+
+        Assert.Equal("Wishlist", command["cartType"]);
+    }
+
+    [Fact]
+    public async Task CreateCart_WithStorefrontOrigin_BuildsContinueUrlFromCartRoute()
+    {
+        var executor = new StubXApiExecutor(CartWithOneItemJson);
+        var service = CreateService(executor, options: new UcpOptions
+        {
+            DefaultStoreId = "store-acme",
+            DefaultCurrency = "USD",
+            DefaultCultureName = "en-US",
+            StorefrontOrigin = "https://shop.example.test/",
+        });
+
+        var response = await service.CreateCart(new UcpCartRequest
+        {
+            LineItems =
+            {
+                new UcpCartLineItemRequest { ProductId = "product-1", Quantity = 1 },
+            },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("https://shop.example.test/cart/cart-1", response.Cart.ContinueUrl);
+    }
+
+    [Fact]
+    public async Task ListCarts_WithoutCartType_ReturnsOnlyUntypedCartsAndSkipsForeignLists()
+    {
+        var executor = new StubXApiExecutor(BuildCartListJson(
+            BuildCartListItem("cart-1", "null", "buyer-1", "null"),
+            BuildCartListItem("wishlist-1", "\"Wishlist\"", "buyer-2", "\"org-2\""),
+            BuildCartListItem("saved-1", "\"SavedForLater\"", "buyer-2", "null")));
+        var service = CreateService(executor);
+
+        var response = await service.ListCarts(new UcpCartListRequest
+        {
+            Context = new UcpCartContext
+            {
+                StoreId = "store-acme",
+                Currency = "USD",
+                Language = "en-US",
+                BuyerId = "buyer-1",
+            },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("cart-1", Assert.Single(response.Carts).Id);
+        Assert.Equal(1, response.Pagination.TotalCount);
+        Assert.True(executor.Requests[0].Variables.ContainsKey("cartType"));
+        Assert.Null(executor.Requests[0].Variables["cartType"]);
+    }
+
+    [Fact]
+    public async Task ListCarts_WithRequestedCartType_ReturnsListsOfThatType()
+    {
+        var executor = new StubXApiExecutor(BuildCartListJson(
+            BuildCartListItem("wishlist-1", "\"Wishlist\"", "buyer-1", "null")));
+        var service = CreateService(executor);
+
+        var response = await service.ListCarts(new UcpCartListRequest
+        {
+            Context = new UcpCartContext
+            {
+                StoreId = "store-acme",
+                Currency = "USD",
+                Language = "en-US",
+                BuyerId = "buyer-1",
+                CartType = "Wishlist",
+            },
+        }, TestContext.Current.CancellationToken);
+
+        var cart = Assert.Single(response.Carts);
+        Assert.Equal("wishlist-1", cart.Id);
+        Assert.Equal("Wishlist", cart.CartType);
+        Assert.Equal(1, response.Pagination.TotalCount);
+        Assert.Equal("Wishlist", executor.Requests[0].Variables["cartType"]);
+    }
+
+    [Fact]
     public async Task ListCarts_RequiresBuyerContext()
     {
         var service = CreateService(
@@ -865,6 +980,20 @@ public partial class UcpCartServiceTests
             buyerContextAccessor ?? new TestBuyerContextAccessor("anonymous"));
     }
 
+    private static string BuildCartListItem(string id, string typeJson, string customerId, string organizationIdJson)
+    {
+        return $$"""
+            {"id":"{{id}}","name":"default","status":"New","storeId":"store-acme","type":{{typeJson}},"isAnonymous":true,"customerId":"{{customerId}}","organizationId":{{organizationIdJson}},"currency":{"code":"USD"},
+              "coupons":[],"items":[],"validationErrors":[],"warnings":[]}
+            """;
+    }
+
+    private static string BuildCartListJson(params string[] itemJsons)
+    {
+        return "{\"data\":{\"carts\":{\"totalCount\":" + itemJsons.Length +
+            ",\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null},\"items\":[" + string.Join(",", itemJsons) + "]}}}";
+    }
+
     private sealed class StubXApiExecutor : IXApiInProcessExecutor
     {
         private readonly Queue<string> _jsonResponses;
@@ -1010,7 +1139,7 @@ public partial class UcpCartServiceTests
         .Replace("\"quantity\":1", "\"quantity\":3", System.StringComparison.Ordinal);
     private const string CartsQueryJson = """
         {"data":{"carts":{"totalCount":1,"pageInfo":{"hasNextPage":false,"endCursor":null},"items":[{
-          "id":"cart-1","name":"default","status":"New","storeId":"store-acme","type":"cart","isAnonymous":true,"customerId":"buyer-1","organizationId":null,"currency":{"code":"USD"},
+          "id":"cart-1","name":"default","status":"New","storeId":"store-acme","type":null,"isAnonymous":true,"customerId":"buyer-1","organizationId":null,"currency":{"code":"USD"},
           "total":{"amount":120.0,"formattedAmount":"$120.00","currency":{"code":"USD"}},
           "subTotal":{"amount":120.0,"formattedAmount":"$120.00","currency":{"code":"USD"}},
           "taxTotal":{"amount":0.0,"formattedAmount":"$0.00","currency":{"code":"USD"}},

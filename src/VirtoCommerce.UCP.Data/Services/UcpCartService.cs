@@ -19,7 +19,6 @@ namespace VirtoCommerce.UCP.Data.Services;
 public class UcpCartService : UcpServiceBase, IUcpCartService
 {
     private const string DefaultCartName = "default";
-    private const string DefaultCartType = "cart";
     private const int DefaultListLimit = 10;
     private const int MaxListLimit = 50;
     private const int BillingAddressType = 1;
@@ -135,6 +134,13 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         var cartsElement = document.RootElement.GetProperty("data").GetProperty("carts");
         EnsureCartListOwnership(cartsElement, cartRequest);
         var carts = ReadCarts(cartsElement);
+        var filterUntyped = string.IsNullOrWhiteSpace(cartRequest.CartType);
+        if (filterUntyped)
+        {
+            carts = carts.Where(x => IsListedCart(x.CartType, cartRequest.CartType)).ToList();
+        }
+
+        var hasNextPage = cartsElement.TryGetProperty("pageInfo", out var pageInfo) && ReadBoolean(pageInfo, "hasNextPage");
 
         return new UcpCartListResponse
         {
@@ -142,9 +148,9 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             Carts = carts,
             Pagination = new UcpPaginationResponse
             {
-                Cursor = cartsElement.TryGetProperty("pageInfo", out var pageInfo) ? ReadString(pageInfo, "endCursor") : null,
-                HasNextPage = cartsElement.TryGetProperty("pageInfo", out pageInfo) && ReadBoolean(pageInfo, "hasNextPage"),
-                TotalCount = ReadInt(cartsElement, "totalCount"),
+                Cursor = pageInfo.ValueKind == JsonValueKind.Object ? ReadString(pageInfo, "endCursor") : null,
+                HasNextPage = hasNextPage,
+                TotalCount = filterUntyped && !hasNextPage ? carts.Count : ReadInt(cartsElement, "totalCount"),
             },
         };
     }
@@ -396,7 +402,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
 
     private static string ResolveCartType(UcpCartRequest request)
     {
-        return FirstNotEmpty(request.CartType, request.Context?.CartType, DefaultCartType);
+        return FirstNotEmpty(request.CartType, request.Context?.CartType);
     }
 
     private void ValidateCartExecutionRequest(CartExecutionRequest request)
@@ -711,8 +717,20 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
 
         foreach (var cart in items.EnumerateArray())
         {
+            if (!IsListedCart(ReadString(cart, "type"), request.CartType))
+            {
+                continue;
+            }
+
             EnsureCartOwnership(cart, request);
         }
+    }
+
+    // x-cart treats a null cartType in a list query as "no type filter", so Wishlist and SavedForLater lists
+    // come back too. The storefront cart is the one whose type is null ("" is a distinct value, as in x-cart).
+    private static bool IsListedCart(string cartType, string requestedCartType)
+    {
+        return !string.IsNullOrWhiteSpace(requestedCartType) || cartType is null;
     }
 
     private static Dictionary<string, object> BuildAddItemCommand(CartExecutionRequest request, string cartId, UcpCartLineItemRequest lineItem)
@@ -1257,7 +1275,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         var origin = _options.StorefrontOrigin?.TrimEnd('/');
         return string.IsNullOrWhiteSpace(origin) || string.IsNullOrWhiteSpace(cartId)
             ? null
-            : $"{origin}/cart?cart_id={Uri.EscapeDataString(cartId)}";
+            : $"{origin}/cart/{Uri.EscapeDataString(cartId)}";
     }
 
     protected static bool HasDesiredMatch(UcpCartLineItem current, IEnumerable<UcpCartLineItemRequest> desiredItems)
