@@ -384,6 +384,39 @@ public class UcpCheckoutServiceTests
     }
 
     [Fact]
+    public async Task CreateCheckout_StoreManagedAddresses_HandoffRequiredMessageDoesNotClaimSuppliedAddressesWereApplied()
+    {
+        var service = CreateService(new StubCartService(CreateCart()), options: StoreManagedOptions());
+
+        var response = await service.CreateCheckout(new UcpCheckoutRequest
+        {
+            CartId = "cart-1",
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+            ShippingAddress = new UcpCheckoutAddress { Line1 = "1 Main St" },
+        }, TestContext.Current.CancellationToken);
+
+        var message = Assert.Single(response.Messages, x => x.Code == "handoff_required");
+        Assert.DoesNotContain("Provided", message.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("already applied", message.Content, StringComparison.Ordinal);
+        Assert.Contains("store has assigned", message.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateCheckout_DefaultMode_HandoffRequiredMessageKeepsAppliedAddressesText()
+    {
+        var service = CreateService(new StubCartService(CreateCart()));
+
+        var response = await service.CreateCheckout(new UcpCheckoutRequest
+        {
+            CartId = "cart-1",
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+        }, TestContext.Current.CancellationToken);
+
+        var message = Assert.Single(response.Messages, x => x.Code == "handoff_required");
+        Assert.Equal("Checkout is ready for hosted handoff. Provided shipping and billing addresses are already applied to the cart.", message.Content);
+    }
+
+    [Fact]
     public async Task CreateCheckout_StoreManagedAddresses_DoesNotValidateSuppliedAddress()
     {
         var cartService = new StubCartService(CreateCart());

@@ -60,7 +60,7 @@ public class UcpProfileService : IUcpProfileService
 
     private static readonly string[] CheckoutGuidance =
     [
-        "For physical goods, shipping_address is required before hosted handoff when it is not already present on the cart.",
+        "For physical goods, shipping_address is required before hosted handoff when it is not already present on the cart, unless store_managed_addresses is true.",
         "create_checkout and handoff_checkout accept shipping_address; billing_address can mirror shipping_address unless a separate billing address is supplied.",
         "Delivery and shipping addresses belong in shipping_address, not notes. Notes are order comments only.",
         "shipping_address and billing_address require recipient first_name and last_name.",
@@ -96,7 +96,7 @@ public class UcpProfileService : IUcpProfileService
             ModuleConstants.Endpoints.CheckoutCreate,
             ModuleConstants.Capabilities.Checkout,
             "available",
-            "Create checkout snapshot. Delivery addresses belong in structured shipping_address fields; country and region are normalized through platform dictionaries before XCart is updated."
+            "Create checkout snapshot. Delivery addresses belong in structured shipping_address fields; country and region are normalized through platform dictionaries before XCart is updated. Supplied addresses are ignored when store_managed_addresses is true."
         ),
         (
             ModuleConstants.McpTools.UpdateCheckout,
@@ -121,7 +121,7 @@ public class UcpProfileService : IUcpProfileService
             ModuleConstants.Endpoints.CheckoutHandoff,
             ModuleConstants.Capabilities.Checkout,
             "available",
-            "Create hosted checkout handoff URL. For physical goods, shipping_address is expected before handoff; billing_address defaults to shipping_address when no separate billing address is provided."
+            "Create hosted checkout handoff URL. For physical goods, shipping_address is expected before handoff unless store_managed_addresses is true; billing_address defaults to shipping_address when no separate billing address is provided."
         ),
         (ModuleConstants.McpTools.TrackOrder, "GET", ModuleConstants.Endpoints.OrderTrack, ModuleConstants.Capabilities.Order, "available", "Track an order by order id or number when the user provides one."),
         (ModuleConstants.McpTools.TrackOrder, "GET", ModuleConstants.Endpoints.OrderTrackByCart, ModuleConstants.Capabilities.Order, "available", "After hosted checkout, track the created order by the original cart_id."),
@@ -186,6 +186,7 @@ public class UcpProfileService : IUcpProfileService
                 TraceId = ModuleConstants.Headers.TraceId,
                 IdempotencyKey = ModuleConstants.Headers.IdempotencyKey,
             },
+            StoreManagedAddresses = _options.StoreManagedAddresses,
             Errors = new UcpErrorProfile
             {
                 Schema = "ucp_error",
@@ -312,6 +313,11 @@ public class UcpProfileService : IUcpProfileService
         foreach (var guidance in CheckoutGuidance)
         {
             profile.AgentGuidance.Add(guidance);
+        }
+
+        if (_options.StoreManagedAddresses)
+        {
+            profile.AgentGuidance.Add(ModuleConstants.StoreManagedAddressesInstruction);
         }
     }
 

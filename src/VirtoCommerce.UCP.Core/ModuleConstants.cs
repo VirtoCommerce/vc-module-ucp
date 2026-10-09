@@ -106,6 +106,12 @@ public static class ModuleConstants
     public const string StoreManagedAddressesMessage =
         "This store assigns cart addresses from the buyer's saved delivery location; the supplied shipping and billing addresses were not applied.";
 
+    public const string CheckoutReadyMessage =
+        "Checkout is ready for hosted handoff. Provided shipping and billing addresses are already applied to the cart.";
+
+    public const string CheckoutReadyStoreManagedMessage =
+        "Checkout is ready for hosted handoff. The store has assigned the cart's addresses.";
+
     public static class MessageCodes
     {
         public const string AddressesStoreManaged = "addresses_store_managed";

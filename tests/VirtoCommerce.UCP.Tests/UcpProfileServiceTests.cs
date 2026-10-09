@@ -316,6 +316,28 @@ public class UcpProfileServiceTests
         Assert.Equal("https://platform.example", profile.StorefrontOrigin);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetProfile_StoreManagedAddresses_ExposesFlagAndGuidanceOnlyWhenOptionIsTrue(bool storeManaged)
+    {
+        var httpContextAccessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext(),
+        };
+        httpContextAccessor.HttpContext.Request.Scheme = "https";
+        httpContextAccessor.HttpContext.Request.Host = new HostString("acme.example");
+        var service = new UcpProfileService(
+            Options.Create(new UcpOptions { StoreManagedAddresses = storeManaged }),
+            UcpPublicOriginResolverTests.CreateResolver(httpContextAccessor));
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Equal(storeManaged, profile.StoreManagedAddresses);
+        Assert.Equal(storeManaged, profile.AgentGuidance.Contains(ModuleConstants.StoreManagedAddressesInstruction));
+        Assert.Equal(storeManaged, JObject.Parse(JsonConvert.SerializeObject(profile)).Value<bool>("store_managed_addresses"));
+    }
+
     private sealed class TestUcpProfileService : UcpProfileService
     {
         private readonly Store _store;

@@ -47,6 +47,9 @@ public class UcpProfile
     [JsonProperty("agent_guidance")]
     public IList<string> AgentGuidance { get; set; } = new List<string>();
 
+    [JsonProperty("store_managed_addresses")]
+    public bool StoreManagedAddresses { get; set; }
+
     [JsonProperty("errors")]
     public UcpErrorProfile Errors { get; set; }
 }

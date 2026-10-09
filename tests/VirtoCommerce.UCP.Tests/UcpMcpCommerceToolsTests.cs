@@ -167,6 +167,23 @@ public class UcpMcpCommerceToolsTests
         Assert.Contains("ask the user", checkoutDescription);
     }
 
+    [Theory]
+    [InlineData(nameof(UcpMcpCommerceTools.CreateCheckout))]
+    [InlineData(nameof(UcpMcpCommerceTools.CheckoutAndHandoff))]
+    [InlineData(nameof(UcpMcpCommerceTools.HandoffCheckout))]
+    public void CheckoutToolDescriptions_MakeShippingAddressConditionalOnStoreManagedAddresses(string methodName)
+    {
+        var description = typeof(UcpMcpCommerceTools)
+            .GetMethod(methodName)
+            ?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()
+            ?.Description;
+
+        Assert.Contains("shipping_address.postal_code", description);
+        Assert.Contains("unless the store assigns cart addresses itself", description);
+        Assert.Contains("store_managed_addresses", description);
+        Assert.Contains("get_store_capabilities", description);
+    }
+
     [Fact]
     public void BuyerSensitiveToolDescriptions_RouteAccountIntentThroughIdentityLinking()
     {

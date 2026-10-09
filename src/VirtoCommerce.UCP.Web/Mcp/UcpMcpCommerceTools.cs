@@ -16,6 +16,11 @@ namespace VirtoCommerce.UCP.Web.Mcp;
 [McpServerToolType]
 public static class UcpMcpCommerceTools
 {
+    private const string ShippingAddressRequirement =
+        "For physical goods, do not call until shipping_address.first_name, shipping_address.last_name, and " +
+        "shipping_address.postal_code are provided, unless the store assigns cart addresses itself " +
+        "(store_managed_addresses in get_store_capabilities); ask the user for missing values.";
+
     [McpServerTool(Name = ModuleConstants.McpTools.GetStoreCapabilities, ReadOnly = true, Destructive = false)]
     [Description("Discover UCP capabilities for this Virto Commerce storefront.")]
     public static Task<object> GetStoreCapabilities(
@@ -254,8 +259,7 @@ public static class UcpMcpCommerceTools
     [McpServerTool(Name = ModuleConstants.McpTools.CreateCheckout, ReadOnly = false, Destructive = false)]
     [Description(
         "Create checkout in this Virto Commerce storefront. For the user's account or organization, do not call this tool " +
-        "until link_buyer_identity succeeds. For physical goods, do not call until shipping_address.first_name, " +
-        "shipping_address.last_name, and shipping_address.postal_code are provided; ask the user for missing values.")]
+        "until link_buyer_identity succeeds. " + ShippingAddressRequirement)]
     public static Task<object> CreateCheckout(
         IUcpProfileService profileService,
         IUcpCheckoutService checkoutService,
@@ -367,8 +371,7 @@ public static class UcpMcpCommerceTools
     [McpServerTool(Name = ModuleConstants.McpTools.CheckoutAndHandoff, ReadOnly = false, Destructive = false)]
     [Description(
         "Create checkout and immediately create a hosted checkout handoff URL. For the user's account or organization, " +
-        "do not call this tool until link_buyer_identity succeeds. For physical goods, do not call until shipping_address.first_name, " +
-        "shipping_address.last_name, and shipping_address.postal_code are provided; ask the user for missing values. " +
+        "do not call this tool until link_buyer_identity succeeds. " + ShippingAddressRequirement + " " +
         "This does not execute a payment.")]
     public static Task<object> CheckoutAndHandoff(
         IUcpProfileService profileService,
@@ -423,8 +426,7 @@ public static class UcpMcpCommerceTools
     [McpServerTool(Name = ModuleConstants.McpTools.HandoffCheckout, ReadOnly = false, Destructive = false)]
     [Description(
         "Create a hosted checkout handoff URL. For the user's account or organization, do not call this tool until " +
-        "link_buyer_identity succeeds. For physical goods, do not call until shipping_address.first_name, " +
-        "shipping_address.last_name, and shipping_address.postal_code are provided; ask the user for missing values. " +
+        "link_buyer_identity succeeds. " + ShippingAddressRequirement + " " +
         "This does not execute a payment.")]
     public static Task<object> HandoffCheckout(
         IUcpProfileService profileService,

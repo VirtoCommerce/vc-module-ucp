@@ -74,7 +74,9 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         {
             Type = "info",
             Code = "handoff_required",
-            Content = "Checkout is ready for hosted handoff. Provided shipping and billing addresses are already applied to the cart.",
+            Content = _options.StoreManagedAddresses
+                ? ModuleConstants.CheckoutReadyStoreManagedMessage
+                : ModuleConstants.CheckoutReadyMessage,
             Severity = "info",
         });
         AddAddressMessages(checkout, request, addressesIgnored);
