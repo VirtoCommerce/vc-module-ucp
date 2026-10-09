@@ -369,6 +369,62 @@ public class UcpProfileServiceTests
         Assert.Equal(expected, profile.Auth.AnonymousCatalog);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetProfile_AnonymousCatalog_WhenDefaultStoreCannotBeLoaded_KeepsOptionValue(bool option)
+    {
+        var service = CreateAnonymousCatalogService(new UcpOptions { DefaultStoreId = "store-acme", AnonymousCatalog = option });
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Equal(option, profile.Auth.AnonymousCatalog);
+    }
+
+    [Fact]
+    public async Task GetProfile_AnonymousCatalog_WhenStoreHasNoAllowAnonymousUsersSetting_UsesDescriptorDefault()
+    {
+        var service = CreateAnonymousCatalogService(
+            new UcpOptions { DefaultStoreId = "store-acme" },
+            store: new Store { Id = "store-acme", Settings = [] });
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.True(profile.Auth.AnonymousCatalog);
+    }
+
+    [Fact]
+    public async Task GetProfile_AnonymousCatalog_WhenDiscoveredDefaultStoreDeniesAnonymousUsers_IsFalse()
+    {
+        var service = CreateAnonymousCatalogService(
+            new UcpOptions(),
+            stores:
+            [
+                new Store
+                {
+                    Id = "store-acme",
+                    Settings = [new ObjectSettingEntry { Name = StoreSetting.AllowAnonymousUsers.Name, Value = false }],
+                },
+            ]);
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Equal("store-acme", profile.DefaultStoreId);
+        Assert.False(profile.Auth.AnonymousCatalog);
+    }
+
+    private static TestUcpProfileService CreateAnonymousCatalogService(UcpOptions options, Store store = null, IEnumerable<Store> stores = null)
+    {
+        var httpContextAccessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext(),
+        };
+        httpContextAccessor.HttpContext.Request.Scheme = "https";
+        httpContextAccessor.HttpContext.Request.Host = new HostString("platform.example");
+
+        return new TestUcpProfileService(Options.Create(options), httpContextAccessor, store, stores);
+    }
+
     private sealed class TestUcpProfileService : UcpProfileService
     {
         private readonly Store _store;
@@ -384,6 +440,11 @@ public class UcpProfileServiceTests
         protected override Task<Store> GetConfiguredDefaultStore()
         {
             return Task.FromResult(_store);
+        }
+
+        protected override Task<Store> GetStoreById(string storeId)
+        {
+            return Task.FromResult(_stores.FirstOrDefault(x => x.Id == storeId));
         }
 
         protected override Task<IList<Store>> SearchOpenStores()

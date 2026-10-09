@@ -153,9 +153,9 @@ public class UcpProfileService : IUcpProfileService
     public virtual async Task<UcpProfile> GetProfile(CancellationToken cancellationToken = default)
     {
         var publicOrigin = await _publicOriginResolver.GetOriginAsync();
-        var configuredStore = await GetConfiguredDefaultStore();
-        var storeProfiles = await GetStoreProfiles(configuredStore);
+        var storeProfiles = await GetStoreProfiles();
         var storeProfile = storeProfiles.FirstOrDefault(x => x.IsDefault);
+        var defaultStore = await GetDefaultStore(storeProfile);
         var origin = !string.IsNullOrWhiteSpace(_options.PublicOrigin)
             ? publicOrigin
             : GetConfiguredStorefrontOrigin(storeProfile) ?? publicOrigin;
@@ -176,7 +176,7 @@ public class UcpProfileService : IUcpProfileService
             Auth = new UcpProfileAuth
             {
                 Agent = "mcp_transport",
-                AnonymousCatalog = _options.AnonymousCatalog && StoreAllowsAnonymousUsers(configuredStore),
+                AnonymousCatalog = _options.AnonymousCatalog && StoreAllowsAnonymousUsers(defaultStore),
                 BuyerDelegation = "platform_oauth_bearer",
                 BuyerIdentitySource = "platform_claims_principal",
                 AuthorizationServer = publicOrigin == null ? null : publicOrigin + "/",
@@ -324,14 +324,31 @@ public class UcpProfileService : IUcpProfileService
         }
     }
 
-    protected virtual async Task<IList<UcpStoreProfile>> GetStoreProfiles(Store configuredStore)
+    protected virtual async Task<IList<UcpStoreProfile>> GetStoreProfiles()
     {
+        var configuredStore = await GetConfiguredDefaultStore();
         if (HasConfiguredDefaultStore(configuredStore))
         {
             return CreateConfiguredStoreProfiles(configuredStore);
         }
 
         return await GetDiscoveredStoreProfiles();
+    }
+
+    protected virtual async Task<Store> GetDefaultStore(UcpStoreProfile storeProfile)
+    {
+        if (storeProfile == null)
+        {
+            return null;
+        }
+
+        var configuredStore = await GetConfiguredDefaultStore();
+        if (configuredStore != null || !string.IsNullOrWhiteSpace(_options.DefaultStoreId))
+        {
+            return configuredStore;
+        }
+
+        return await GetStoreById(storeProfile.Id);
     }
 
     protected virtual bool StoreAllowsAnonymousUsers(Store store)
@@ -364,9 +381,14 @@ public class UcpProfileService : IUcpProfileService
             .ToList();
     }
 
-    protected virtual async Task<Store> GetConfiguredDefaultStore()
+    protected virtual Task<Store> GetConfiguredDefaultStore()
     {
-        if (_storeService == null || string.IsNullOrWhiteSpace(_options.DefaultStoreId))
+        return GetStoreById(_options.DefaultStoreId);
+    }
+
+    protected virtual async Task<Store> GetStoreById(string storeId)
+    {
+        if (_storeService == null || string.IsNullOrWhiteSpace(storeId))
         {
             return null;
         }
@@ -374,7 +396,7 @@ public class UcpProfileService : IUcpProfileService
         return await UcpDiagnostics.ExecuteDependency(
             "stores",
             "GetStore",
-            () => _storeService.GetNoCloneAsync(_options.DefaultStoreId));
+            () => _storeService.GetNoCloneAsync(storeId));
     }
 
     protected virtual async Task<IList<Store>> SearchOpenStores()
