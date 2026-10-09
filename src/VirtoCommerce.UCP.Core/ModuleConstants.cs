@@ -101,7 +101,8 @@ public static class ModuleConstants
     }
 
     public const string StoreManagedAddressesInstruction =
-        "This store assigns cart addresses itself; call checkout tools without shipping_address and billing_address.";
+        "This store assigns cart addresses itself, so the shipping_address and billing_address requirements for checkout do not apply: " +
+        "do not ask the user for an address, do not resolve a country or region for checkout, and call checkout tools without shipping_address and billing_address.";
 
     public const string StoreManagedAddressesMessage =
         "This store assigns cart addresses from the buyer's saved delivery location; the supplied shipping and billing addresses were not applied.";
@@ -110,7 +111,7 @@ public static class ModuleConstants
         "Checkout is ready for hosted handoff. Provided shipping and billing addresses are already applied to the cart.";
 
     public const string CheckoutReadyStoreManagedMessage =
-        "Checkout is ready for hosted handoff. The store has assigned the cart's addresses.";
+        "Checkout is ready for hosted handoff. The store assigns the cart's addresses.";
 
     public static class MessageCodes
     {

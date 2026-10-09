@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -316,6 +317,18 @@ public class UcpMcpCommerceToolsTests
         Assert.Contains(ModuleConstants.StoreManagedAddressesInstruction, storeManaged);
         Assert.StartsWith(ModuleConstants.McpInstructions, storeManaged);
         Assert.Equal(ModuleConstants.McpInstructions, byDefault);
+    }
+
+    [Fact]
+    public void BuildMcpInstructions_StoreManaged_OverridesTheBaseAddressRequirements()
+    {
+        // The base text demands shipping_address before any checkout call; without an explicit override an agent keeps
+        // asking for an address and never reaches the handoff.
+        var instructions = UcpModule.BuildMcpInstructions(new UcpOptions { StoreManagedAddresses = true });
+
+        Assert.Contains("requirements for checkout do not apply", instructions, StringComparison.Ordinal);
+        Assert.Contains("do not ask the user for an address", instructions, StringComparison.Ordinal);
+        Assert.Contains("do not resolve a country or region for checkout", instructions, StringComparison.Ordinal);
     }
 
     [Fact]

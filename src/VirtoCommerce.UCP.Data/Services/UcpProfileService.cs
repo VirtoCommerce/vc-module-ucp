@@ -104,7 +104,7 @@ public class UcpProfileService : IUcpProfileService
             ModuleConstants.Endpoints.CheckoutUpdate,
             ModuleConstants.Capabilities.Checkout,
             "available",
-            "Update checkout address data before payment. A new handoff URL is required after shipping_address or billing_address changes."
+            "Update checkout address data before payment; supplied addresses are ignored when store_managed_addresses is true. A new handoff URL is required after shipping_address or billing_address changes."
         ),
         (
             ModuleConstants.McpTools.CheckoutAndHandoff,

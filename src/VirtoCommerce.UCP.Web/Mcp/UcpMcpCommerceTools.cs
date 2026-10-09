@@ -351,7 +351,7 @@ public static class UcpMcpCommerceTools
                 NextStep = new UcpMcpNextToolStep
                 {
                     Tool = ModuleConstants.McpTools.HandoffCheckout,
-                    Reason = "Address was updated; create a fresh hosted checkout URL with the latest address snapshot.",
+                    Reason = "Checkout was updated; create a fresh hosted checkout URL with the latest checkout snapshot.",
                     Arguments = CreateHandoffNextStepArguments(checkout_id, request),
                 },
             };

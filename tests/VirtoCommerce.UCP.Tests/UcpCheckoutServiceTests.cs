@@ -398,7 +398,7 @@ public class UcpCheckoutServiceTests
         var message = Assert.Single(response.Messages, x => x.Code == "handoff_required");
         Assert.DoesNotContain("Provided", message.Content, StringComparison.Ordinal);
         Assert.DoesNotContain("already applied", message.Content, StringComparison.Ordinal);
-        Assert.Contains("store has assigned", message.Content, StringComparison.Ordinal);
+        Assert.Contains("store assigns", message.Content, StringComparison.Ordinal);
     }
 
     [Fact]
