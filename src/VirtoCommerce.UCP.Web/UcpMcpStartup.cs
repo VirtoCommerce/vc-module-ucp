@@ -33,6 +33,9 @@ public class UcpMcpStartup : IPlatformStartup
 
     public void Configure(IApplicationBuilder app, IConfiguration config)
     {
+        // Must stay before the MapWhen: a MapWhen branch never rejoins the main pipeline, so a gate placed after it would not cover /ucp/mcp.
+        app.UseUcpEnabledGate();
+
         app.MapWhen(
             context => context.Request.Path.StartsWithSegments(ModuleConstants.Endpoints.Mcp),
             branch =>

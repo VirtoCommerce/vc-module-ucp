@@ -44,29 +44,48 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
         request ??= new UcpOrderTrackingRequest();
         var orderRequest = BuildOrderExecutionRequest(request);
 
-        CustomerOrder orderModel;
+        IList<CustomerOrder> orderModels;
         if (!string.IsNullOrWhiteSpace(orderRequest.CartId))
         {
-            orderModel = await FindOrderByCartId(orderRequest, cancellationToken);
+            orderModels = await FindOrdersByCartId(orderRequest, cancellationToken);
         }
         else
         {
-            orderModel = await FindOrderByIdOrNumber(orderRequest);
+            var orderModel = await FindOrderByIdOrNumber(orderRequest);
+            orderModels = orderModel == null ? [] : [orderModel];
         }
 
-        if (orderModel == null)
+        if (orderModels.Count == 0)
         {
-            var lookup = FirstNotEmpty(orderRequest.OrderId, orderRequest.OrderNumber, orderRequest.CartId);
-            throw CreateException(ModuleConstants.ErrorCodes.OrderNotFound, $"Order '{lookup}' was not found.", StatusCodes.Status404NotFound);
+            throw CreateException(ModuleConstants.ErrorCodes.OrderNotFound, CreateOrderNotFoundMessage(orderRequest), StatusCodes.Status404NotFound);
         }
 
-        var order = MapOrder(orderModel);
+        var orders = orderModels
+            .OrderBy(x => x.CreatedDate)
+            .ThenBy(x => !string.IsNullOrEmpty(x.ParentOperationId))
+            .Select(MapOrder)
+            .ToList();
+        var order = orders.FindLast(x => string.IsNullOrEmpty(x.ParentOrderId)) ?? orders[^1];
+
         return new UcpOrderResponse
         {
             Ucp = CreateMetadata("success", "dev.ucp.shopping.order.track"),
             Order = order,
+            Orders = orders,
             Messages = order.Messages,
         };
+    }
+
+    private static string CreateOrderNotFoundMessage(OrderExecutionRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.CartId) && request.PlacedAfter.HasValue)
+        {
+            return $"No order was placed from cart '{request.CartId}' at or after {request.PlacedAfter.Value.UtcDateTime:O}.";
+        }
+
+        var lookup = FirstNotEmpty(request.OrderId, request.OrderNumber, request.CartId);
+
+        return $"Order '{lookup}' was not found.";
     }
 
     private OrderExecutionRequest BuildOrderExecutionRequest(UcpOrderTrackingRequest request)
@@ -87,6 +106,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             OrderId = request.OrderId,
             OrderNumber = request.OrderNumber,
             CartId = request.CartId,
+            PlacedAfter = request.PlacedAfter,
             CultureName = FirstNotEmpty(request.Context?.Language, _options.DefaultCultureName),
             UserId = buyerContext.UserId,
             OrganizationId = buyerContext.OrganizationId,
@@ -134,21 +154,57 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
         return result.Results.FirstOrDefault(x => IsOrderInScope(x, request));
     }
 
-    private async Task<CustomerOrder> FindOrderByCartId(OrderExecutionRequest request, CancellationToken cancellationToken)
+    private async Task<IList<CustomerOrder>> FindOrdersByCartId(OrderExecutionRequest request, CancellationToken cancellationToken)
     {
         if (!HasOrderScope(request))
         {
-            return null;
+            return [];
         }
 
-        var criteria = new CustomerOrderSearchCriteria
+        if (request.PlacedAfter is not null)
+        {
+            return await SearchOrdersOfCart(request, CreateCartOrderCriteria(request), firstMatchOnly: false, cancellationToken);
+        }
+
+        var mainCriteria = CreateCartOrderCriteria(request);
+        mainCriteria.HasParentOperation = false;
+        var mainOrders = await SearchOrdersOfCart(request, mainCriteria, firstMatchOnly: true, cancellationToken);
+        if (mainOrders.Count == 0)
+        {
+            return mainOrders;
+        }
+
+        var main = mainOrders[0];
+        var childCriteria = CreateCartOrderCriteria(request);
+        childCriteria.ParentOperationId = main.Id;
+        var childOrders = await SearchOrdersOfCart(request, childCriteria, firstMatchOnly: false, cancellationToken);
+
+        return childOrders.Append(main).ToList();
+    }
+
+    private CustomerOrderSearchCriteria CreateCartOrderCriteria(OrderExecutionRequest request)
+    {
+        return new CustomerOrderSearchCriteria
         {
             CustomerId = request.UserId,
             OrganizationId = request.OrganizationId,
+            StartDate = request.PlacedAfter?.UtcDateTime,
             Take = _orderLookupPageSize,
             Sort = "CreatedDate:desc",
             ResponseGroup = _orderResponseGroup,
         };
+    }
+
+    private async Task<List<CustomerOrder>> SearchOrdersOfCart(
+        OrderExecutionRequest request,
+        CustomerOrderSearchCriteria criteria,
+        bool firstMatchOnly,
+        CancellationToken cancellationToken)
+    {
+        var orders = new List<CustomerOrder>();
+
+        // Offset paging can serve the same row twice when an order is created mid-scan.
+        var seenOrderIds = new HashSet<string>(StringComparer.Ordinal);
 
         while (true)
         {
@@ -157,17 +213,19 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
                 "orders",
                 "SearchOrdersByCartScoped",
                 () => _customerOrderSearchService.SearchAsync(criteria, clone: false));
-            var order = result.Results.FirstOrDefault(x => IsOrderInScope(x, request) &&
-                string.Equals(x.ShoppingCartId, request.CartId, StringComparison.OrdinalIgnoreCase));
-            if (order != null)
+            orders.AddRange(result.Results.Where(x => IsOrderInScope(x, request) &&
+                string.Equals(x.ShoppingCartId, request.CartId, StringComparison.OrdinalIgnoreCase) &&
+                seenOrderIds.Add(x.Id)));
+
+            if (orders.Count > 0 && firstMatchOnly)
             {
-                return order;
+                return [orders[0]];
             }
 
             criteria.Skip += result.Results.Count;
             if (result.Results.Count == 0 || criteria.Skip >= result.TotalCount)
             {
-                return null;
+                return orders;
             }
         }
     }
@@ -183,6 +241,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             StatusDisplayValue = orderModel.Status,
             CreatedAt = orderModel.CreatedDate.ToString("O"),
             CartId = orderModel.ShoppingCartId,
+            ParentOrderId = orderModel.ParentOperationId,
             StoreId = orderModel.StoreId,
             BuyerId = orderModel.CustomerId,
             CustomerName = orderModel.CustomerName,

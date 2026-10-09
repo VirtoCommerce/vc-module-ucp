@@ -1,3 +1,4 @@
+using System;
 using Newtonsoft.Json;
 
 namespace VirtoCommerce.UCP.Core.Models;
@@ -15,4 +16,7 @@ public class UcpOrderTrackingRequest
 
     [JsonProperty("cart_id")]
     public string CartId { get; set; }
+
+    [JsonProperty("placed_after")]
+    public DateTimeOffset? PlacedAfter { get; set; }
 }

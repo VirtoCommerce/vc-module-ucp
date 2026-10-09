@@ -39,7 +39,7 @@
   <moduleType>VirtoCommerce.UCP.Web.Module, VirtoCommerce.UCP.Web</moduleType>
   <startupType>VirtoCommerce.UCP.Web.UcpMcpStartup, VirtoCommerce.UCP.Web</startupType>
 
-  <releaseNotes>Adds MCP-to-UCP-to-XAPI tracing, metrics, and AI-visible correlation. Breaking changes: REST XAPI failures now return HTTP 200 with the original GraphQL envelope instead of a synthetic 502; MCP UCP failures now return tools/call isError results instead of JSON-RPC errors; protected ParseGraphQlResult and CreateException overloads remain compatible.</releaseNotes>
+  <releaseNotes>Adds MCP-to-UCP-to-XAPI tracing, metrics, and AI-visible correlation. Breaking changes: REST XAPI failures now return HTTP 200 with the original GraphQL envelope instead of a synthetic 502; MCP UCP failures now return tools/call isError results instead of JSON-RPC errors; protected ParseGraphQlResult and CreateException overloads remain compatible. The UCP.Enabled setting is now enforced: every UCP surface answers 404 while it is off, and its default is now true. An installation with a stored false becomes disabled on upgrade; set it to true to keep UCP running.</releaseNotes>
   <copyright>Copyright © 2026 VirtoCommerce. All rights reserved</copyright>
   <tags>ucp commerce mcp checkout catalog cart</tags>
   <useFullTypeNameInSwagger>false</useFullTypeNameInSwagger>

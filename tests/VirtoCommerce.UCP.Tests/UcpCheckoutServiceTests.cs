@@ -10,13 +10,13 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
+using VirtoCommerce.Platform.Core.DistributedLock;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Data.Services;
-using VirtoCommerce.Platform.Core.DistributedLock;
 using Xunit;
 
 namespace VirtoCommerce.UCP.Tests;
@@ -90,6 +90,32 @@ public class UcpCheckoutServiceTests
             UcpSession = token,
         }, TestContext.Current.CancellationToken));
         Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, replay.Code);
+    }
+
+    [Fact]
+    public async Task HandoffCheckout_ReturnsIssuedAtOneTtlBeforeExpiresAtAndStoresTheSameInstant()
+    {
+        var cart = CreateCart();
+        cart.Addresses.Add(CreateShippingAddress());
+        var cache = new StubHandoffSessionStore();
+        var service = CreateService(new StubCartService(cart), cache, options: new UcpOptions
+        {
+            DefaultStoreId = "store-acme",
+            DefaultCurrency = "USD",
+            DefaultCultureName = "en-US",
+            StorefrontOrigin = "https://storefront.example",
+            HandoffUrlTemplate = "https://storefront.example/checkout?ucp_session={token}",
+            HandoffTokenTtlMinutes = 7,
+        });
+
+        var handoff = await service.HandoffCheckout("cart-1", new UcpCheckoutRequest(), TestContext.Current.CancellationToken);
+
+        var issuedAt = Assert.NotNull(handoff.Checkout.IssuedAt);
+        Assert.Equal(TimeSpan.FromMinutes(7), handoff.Checkout.ExpiresAt - issuedAt);
+
+        var token = handoff.Checkout.ContinueUrl.Split("ucp_session=").Last();
+        using var payload = JsonDocument.Parse(cache.Get(GetHandoffCacheKey(token)));
+        Assert.Equal(issuedAt, payload.RootElement.GetProperty("issued_at").GetDateTimeOffset());
     }
 
     [Fact]
@@ -352,6 +378,126 @@ public class UcpCheckoutServiceTests
         Assert.Single(cartService.AppliedCheckoutRequests);
         Assert.Equal("cart-1", cartService.AppliedCheckoutRequests[0].cartId);
         Assert.Equal("1 Main St", cartService.AppliedCheckoutRequests[0].request.ShippingAddress.Line1);
+    }
+
+    [Fact]
+    public async Task HandoffCheckout_StoreManagedAddresses_IgnoresSuppliedAddressesEverywhere()
+    {
+        var cartService = new StubCartService(CreateCart());
+        var cache = new StubHandoffSessionStore();
+        var service = CreateService(cartService, cache, options: StoreManagedOptions());
+
+        var handoff = await service.HandoffCheckout("cart-1", new UcpCheckoutRequest
+        {
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+            ShippingAddress = new UcpCheckoutAddress { Line1 = "1 Main St", City = "Seattle", CountryCode = "US" },
+            BillingAddress = new UcpCheckoutAddress { Line1 = "2 Billing Rd", City = "Seattle", CountryCode = "US" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Empty(cartService.AppliedCheckoutRequests);
+        Assert.Null(handoff.Checkout.ShippingAddress);
+        Assert.Null(handoff.Checkout.BillingAddress);
+        Assert.Single(handoff.Messages, x => x.Code == ModuleConstants.MessageCodes.AddressesStoreManaged);
+        Assert.DoesNotContain(handoff.Messages, x => x.Code is "shipping_address_missing" or "shipping_address_prefilled");
+
+        var token = handoff.Checkout.ContinueUrl.Split("ucp_session=").Last();
+        var payloadJson = cache.Get(GetHandoffCacheKey(token));
+        Assert.DoesNotContain("1 Main St", payloadJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("2 Billing Rd", payloadJson, StringComparison.Ordinal);
+        using var payload = JsonDocument.Parse(payloadJson);
+        Assert.False(payload.RootElement.TryGetProperty("shipping_address", out _));
+        Assert.False(payload.RootElement.TryGetProperty("billing_address", out _));
+    }
+
+    [Fact]
+    public async Task CreateCheckout_StoreManagedAddresses_HandoffRequiredMessageDoesNotClaimSuppliedAddressesWereApplied()
+    {
+        var service = CreateService(new StubCartService(CreateCart()), options: StoreManagedOptions());
+
+        var response = await service.CreateCheckout(new UcpCheckoutRequest
+        {
+            CartId = "cart-1",
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+            ShippingAddress = new UcpCheckoutAddress { Line1 = "1 Main St" },
+        }, TestContext.Current.CancellationToken);
+
+        var message = Assert.Single(response.Messages, x => x.Code == "handoff_required");
+        Assert.DoesNotContain("Provided", message.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain("already applied", message.Content, StringComparison.Ordinal);
+        Assert.Contains("store assigns", message.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateCheckout_DefaultMode_HandoffRequiredMessageKeepsAppliedAddressesText()
+    {
+        var service = CreateService(new StubCartService(CreateCart()));
+
+        var response = await service.CreateCheckout(new UcpCheckoutRequest
+        {
+            CartId = "cart-1",
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+        }, TestContext.Current.CancellationToken);
+
+        var message = Assert.Single(response.Messages, x => x.Code == "handoff_required");
+        Assert.Equal("Checkout is ready for hosted handoff. Provided shipping and billing addresses are already applied to the cart.", message.Content);
+    }
+
+    [Fact]
+    public async Task CreateCheckout_StoreManagedAddresses_DoesNotValidateSuppliedAddress()
+    {
+        var cartService = new StubCartService(CreateCart());
+        var service = CreateService(cartService, options: StoreManagedOptions());
+
+        var response = await service.CreateCheckout(new UcpCheckoutRequest
+        {
+            CartId = "cart-1",
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+            ShippingAddress = new UcpCheckoutAddress { Line1 = "1 Main St" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Empty(cartService.AppliedCheckoutRequests);
+        Assert.Contains(response.Messages, x => x.Code == ModuleConstants.MessageCodes.AddressesStoreManaged);
+    }
+
+    [Fact]
+    public async Task HandoffCheckout_StoreManagedAddresses_WithoutAddresses_DoesNotRequireOneAndAddsNoMessage()
+    {
+        var service = CreateService(new StubCartService(CreateCart()), options: StoreManagedOptions());
+
+        var handoff = await service.HandoffCheckout("cart-1", new UcpCheckoutRequest
+        {
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Contains("ucp_session=", handoff.Checkout.ContinueUrl);
+        Assert.DoesNotContain(handoff.Messages, x => x.Code == ModuleConstants.MessageCodes.AddressesStoreManaged);
+        Assert.DoesNotContain(handoff.Messages, x => x.Code == "shipping_address_missing");
+    }
+
+    [Fact]
+    public async Task HandoffCheckout_WithoutCartAddress_StillRequiresShippingAddressByDefault()
+    {
+        var service = CreateService(new StubCartService(CreateCart()));
+
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.HandoffCheckout("cart-1", new UcpCheckoutRequest
+        {
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, exception.Code);
+    }
+
+    private static UcpOptions StoreManagedOptions()
+    {
+        return new UcpOptions
+        {
+            DefaultStoreId = "store-acme",
+            DefaultCurrency = "USD",
+            DefaultCultureName = "en-US",
+            StorefrontOrigin = "https://storefront.example",
+            HandoffUrlTemplate = "https://storefront.example/checkout?ucp_session={token}",
+            StoreManagedAddresses = true,
+        };
     }
 
     [Fact]
@@ -642,7 +788,8 @@ public class UcpCheckoutServiceTests
     private static UcpCheckoutService CreateService(
         IUcpCartService cartService,
         IUcpHandoffSessionStore handoffSessionStore = null,
-        IDistributedLock distributedLock = null)
+        IDistributedLock distributedLock = null,
+        UcpOptions options = null)
     {
         var httpContextAccessor = new HttpContextAccessor
         {
@@ -655,7 +802,7 @@ public class UcpCheckoutServiceTests
             handoffSessionStore ?? new StubHandoffSessionStore(),
             distributedLock ?? new TestDistributedLock(),
             httpContextAccessor,
-            Options.Create(new UcpOptions
+            Options.Create(options ?? new UcpOptions
             {
                 DefaultStoreId = "store-acme",
                 DefaultCurrency = "USD",

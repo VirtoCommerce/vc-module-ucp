@@ -57,7 +57,20 @@ internal sealed class UcpMcpBuyerAuthenticationMiddleware
             return;
         }
 
+        if (!isLogout && !HasAuthenticatedBuyerPrincipal(context.User) && !await IsAnonymousCatalogOpen(context))
+        {
+            await WriteChallenge(context, null, "This store requires sign-in. Complete Platform OAuth to continue.");
+            return;
+        }
+
         await _next(context);
+    }
+
+    private static async Task<bool> IsAnonymousCatalogOpen(HttpContext context)
+    {
+        var profile = await context.RequestServices.GetRequiredService<IUcpProfileService>().GetProfile(context.RequestAborted);
+
+        return profile.Auth.AnonymousCatalog;
     }
 
     private static async Task<bool> ValidateBearerPrincipal(HttpContext context, bool hasBearerHeader, bool isLogout)

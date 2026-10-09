@@ -12,13 +12,13 @@ public static class ModuleConstants
     public const string McpInstructions = """
         This MCP endpoint exposes Virto Commerce UCP tools for the storefront/platform where this MCP server is installed.
         Use typed MCP tools for commerce operations.
-        Available tools: get_store_capabilities, search_products, get_product, create_cart, list_carts, get_cart, update_cart, create_checkout, update_checkout, checkout_and_handoff, get_payment_handlers, handoff_checkout, list_countries, resolve_country, list_regions, and track_order.
+        Available tools: link_buyer_identity, logout_buyer, get_store_capabilities, search_products, get_product, create_cart, list_carts, get_cart, update_cart, create_checkout, update_checkout, checkout_and_handoff, get_payment_handlers, handoff_checkout, list_countries, resolve_country, list_regions, and track_order.
         Do not pass storefront URLs to MCP tools. This MCP server already represents the target Virto Commerce UCP installation.
         Do not infer another target storefront from the MCP transport URL or user-provided links.
         Commerce tools execute local UCP services directly in this platform process.
         Do not use browser/web/search tools to execute UCP operations when MCP tools are available.
         MCP tool calls are stateless. Arguments from earlier calls are never carried automatically.
-        For ordinary public shopping requests, call commerce tools directly without linking an account.
+        When get_store_capabilities reports auth.anonymous_catalog true, call commerce tools directly for ordinary public shopping without linking an account; when it is false, the store requires buyer sign-in for catalog access, so call link_buyer_identity before search_products or get_product.
         When the user explicitly asks to act on their behalf, use their account, personalized prices, organization,
         saved data, or orders, you MUST call link_buyer_identity before any buyer-sensitive commerce tool.
         Do not call search_products, get_product, create_cart, list_carts, get_cart, update_cart, checkout, or order tools
@@ -53,7 +53,7 @@ public static class ModuleConstants
         Never send a partial shipping_address.
         Ask for every missing value and do not call a checkout or handoff tool yet; never invent address data.
         Resolve country with resolve_country and, when the country defines regions, resolve region_id with list_regions before checkout. City remains free text.
-        Before resolve_country, require query. Before list_regions, require country_id. Before track_order, require at least one of order_id, order_number, or the saved cart_id.
+        Before resolve_country, require query. Before list_regions, require country_id. Before track_order, require at least one of order_id, order_number, or the saved cart_id (with the placed_after from the handoff next step).
         Treat price.amount as the current sell price and list_price.amount as the pre-discount reference price.
         list_carts requires buyer_id for anonymous continuation. In authenticated mode, buyer identity and organization come only from the Platform token; never invent or request identity fields from the user.
         update_cart accepts the complete desired line_items state, not a delta. Reuse the existing cart_id and buyer_id; never call create_cart as a fallback for changing an existing cart.
@@ -64,8 +64,9 @@ public static class ModuleConstants
         XAPI GraphQL errors are returned unchanged in MCP structuredContent. Inspect their codes, paths, locations, extensions, and partial data before deciding what to do.
         Every MCP tool result includes a model-visible "Trace ID: ..." content block and _meta.trace_id when an active trace exists. Preserve that id with any reported result or failure so operators can open the exact MCP -> UCP -> XAPI trace.
         A read-only XAPI failure from search_products or get_product may be transient; retry the same read-only tool at most once. Do not automatically retry mutating cart or checkout tools.
-        For hosted checkout, return checkout.continue_url to the buyer and keep cart_id for later track_order.
-        After hosted checkout, use the saved cart_id and buyer_id with track_order when the user asks about the order; do not require an order number when those saved identifiers are available.
+        For hosted checkout, return checkout.continue_url to the buyer and keep cart_id and the handoff issued_at (placed_after) for later track_order.
+        After hosted checkout, use the saved cart_id and buyer_id, plus placed_after (the handoff issued_at), with track_order when the user asks about the order; do not require an order number when those saved identifiers are available.
+        One hosted checkout can produce a main order plus child orders (each child carries parent_order_id). Lookup by cart_id with placed_after returns all orders placed since the handoff in orders, oldest first (the main order before its child orders), child orders included; order is the newest top-level order; not found means the buyer has not placed the order yet. Without placed_after, lookup by cart_id returns only the newest top-level order of the cart and its child orders; a storefront cart keeps its id across checkouts, so for the cart's earlier orders pass an earlier placed_after (the date the user asks about, or 2000-01-01T00:00:00Z for the whole history). Read orders, not only order, before answering about a checkout's orders.
         """;
 
     public static class Capabilities
@@ -97,6 +98,29 @@ public static class ModuleConstants
         public const string HostedCheckout = "hosted_checkout";
         public const string NativeCard = "native_card";
         public const string GooglePay = "google_pay";
+    }
+
+    public const string AnonymousCatalogGuidance = "For ordinary shopping, call commerce tools directly without linking an account.";
+
+    public const string SignInRequiredCatalogGuidance =
+        "This store requires buyer sign-in for catalog access: call link_buyer_identity before search_products or get_product.";
+
+    public const string StoreManagedAddressesInstruction =
+        "This store assigns cart addresses itself, so the shipping_address and billing_address requirements for checkout do not apply: " +
+        "do not ask the user for an address, do not resolve a country or region for checkout, and call checkout tools without shipping_address and billing_address.";
+
+    public const string StoreManagedAddressesMessage =
+        "This store assigns cart addresses from the buyer's saved delivery location; the supplied shipping and billing addresses were not applied.";
+
+    public const string CheckoutReadyMessage =
+        "Checkout is ready for hosted handoff. Provided shipping and billing addresses are already applied to the cart.";
+
+    public const string CheckoutReadyStoreManagedMessage =
+        "Checkout is ready for hosted handoff. The store assigns the cart's addresses.";
+
+    public static class MessageCodes
+    {
+        public const string AddressesStoreManaged = "addresses_store_managed";
     }
 
     public static class ErrorCodes
@@ -239,7 +263,7 @@ public static class ModuleConstants
                 Name = "UCP.Enabled",
                 GroupName = "UCP|General",
                 ValueType = SettingValueType.Boolean,
-                DefaultValue = false,
+                DefaultValue = true,
             };
 
             public static IEnumerable<SettingDescriptor> AllGeneralSettings

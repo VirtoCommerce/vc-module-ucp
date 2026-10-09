@@ -11,6 +11,9 @@ public class UcpOrderResponse
     [JsonProperty("order")]
     public UcpOrder Order { get; set; }
 
+    [JsonProperty("orders")]
+    public IList<UcpOrder> Orders { get; set; } = new List<UcpOrder>();
+
     [JsonProperty("messages")]
     public IList<UcpMessage> Messages { get; set; } = new List<UcpMessage>();
 }

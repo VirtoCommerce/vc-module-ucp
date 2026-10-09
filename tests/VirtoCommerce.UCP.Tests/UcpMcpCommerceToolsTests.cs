@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -9,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Server;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
+using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Mcp;
 using VirtoCommerce.UCP.Web.Mcp.Models;
@@ -61,6 +63,23 @@ public class UcpMcpCommerceToolsTests
         Assert.StartsWith("REQUIRED first step", description);
         Assert.Contains("Platform OAuth", description);
         Assert.Contains("for my organization", description);
+    }
+
+    [Fact]
+    public void UpdateCartTool_ReplacesLineItemsAndIsMarkedDestructive()
+    {
+        var method = typeof(UcpMcpCommerceTools).GetMethod(nameof(UcpMcpCommerceTools.UpdateCart));
+        var attribute = method?.GetCustomAttribute<McpServerToolAttribute>();
+        var description = method?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description;
+        var lineItemsDescription = method?.GetParameters()
+            .Single(parameter => parameter.Name == "line_items")
+            .GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description;
+
+        Assert.True(attribute?.Destructive);
+        Assert.Contains("replaces", description);
+        Assert.Contains("removed", description);
+        Assert.Contains("complete desired", lineItemsDescription);
+        Assert.Contains("removed", lineItemsDescription);
     }
 
     [Fact]
@@ -127,6 +146,13 @@ public class UcpMcpCommerceToolsTests
         var listCartsBuyerParameter = listCartsMethod
             ?.GetParameters()
             .Single(parameter => parameter.Name == "buyer_id");
+        var listCartsTypeParameter = listCartsMethod
+            ?.GetParameters()
+            .Single(parameter => parameter.Name == "cart_type");
+        var trackOrderDescription = typeof(UcpMcpCommerceTools)
+            .GetMethod(nameof(UcpMcpCommerceTools.TrackOrder))
+            ?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()
+            ?.Description;
         var checkoutDescription = typeof(UcpMcpCommerceTools)
             .GetMethod(nameof(UcpMcpCommerceTools.CheckoutAndHandoff))
             ?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()
@@ -136,8 +162,34 @@ public class UcpMcpCommerceToolsTests
         Assert.Contains("buyer-scoped carts", listCartsMethod?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
         Assert.Contains("Required for anonymous continuation", listCartsBuyerParameter?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
         Assert.Null(listCartsBuyerParameter?.GetCustomAttribute<System.ComponentModel.DataAnnotations.RequiredAttribute>());
+        Assert.Contains("Omit to list the storefront cart", listCartsTypeParameter?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
+        Assert.Contains("placed_after from the handoff's next step", trackOrderDescription);
+        Assert.Contains("order history, pass an earlier placed_after", trackOrderDescription);
+        Assert.Contains("an earlier date to list the cart's order history", typeof(UcpMcpCommerceTools)
+            .GetMethod(nameof(UcpMcpCommerceTools.TrackOrder))
+            ?.GetParameters()
+            .Single(parameter => parameter.Name == "placed_after")
+            .GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()
+            ?.Description);
         Assert.Contains("shipping_address.postal_code", checkoutDescription);
         Assert.Contains("ask the user", checkoutDescription);
+    }
+
+    [Theory]
+    [InlineData(nameof(UcpMcpCommerceTools.CreateCheckout))]
+    [InlineData(nameof(UcpMcpCommerceTools.CheckoutAndHandoff))]
+    [InlineData(nameof(UcpMcpCommerceTools.HandoffCheckout))]
+    public void CheckoutToolDescriptions_MakeShippingAddressConditionalOnStoreManagedAddresses(string methodName)
+    {
+        var description = typeof(UcpMcpCommerceTools)
+            .GetMethod(methodName)
+            ?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()
+            ?.Description;
+
+        Assert.Contains("shipping_address.postal_code", description);
+        Assert.Contains("unless the store assigns cart addresses itself", description);
+        Assert.Contains("store_managed_addresses", description);
+        Assert.Contains("get_store_capabilities", description);
     }
 
     [Fact]
@@ -245,7 +297,7 @@ public class UcpMcpCommerceToolsTests
             [nameof(UcpMcpCommerceTools.UpdateCheckout)] = ["checkout_id", "cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
             [nameof(UcpMcpCommerceTools.CheckoutAndHandoff)] = ["cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
             [nameof(UcpMcpCommerceTools.HandoffCheckout)] = ["checkout_id", "cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
-            [nameof(UcpMcpCommerceTools.TrackOrder)] = ["order_id", "order_number", "cart_id", "store_id", "currency", "language", "buyer_id"],
+            [nameof(UcpMcpCommerceTools.TrackOrder)] = ["order_id", "order_number", "cart_id", "placed_after", "store_id", "currency", "language", "buyer_id"],
         };
 
         foreach (var (methodName, expectedProperties) in expectedSchemas)
@@ -261,6 +313,29 @@ public class UcpMcpCommerceToolsTests
 
             Assert.Equal(expectedProperties.Order(), actualProperties);
         }
+    }
+
+    [Fact]
+    public void BuildMcpInstructions_AppendsStoreManagedSentenceOnlyWhenOptionIsTrue()
+    {
+        var storeManaged = UcpModule.BuildMcpInstructions(new UcpOptions { StoreManagedAddresses = true });
+        var byDefault = UcpModule.BuildMcpInstructions(new UcpOptions());
+
+        Assert.Contains(ModuleConstants.StoreManagedAddressesInstruction, storeManaged);
+        Assert.StartsWith(ModuleConstants.McpInstructions, storeManaged);
+        Assert.Equal(ModuleConstants.McpInstructions, byDefault);
+    }
+
+    [Fact]
+    public void BuildMcpInstructions_StoreManaged_OverridesTheBaseAddressRequirements()
+    {
+        // The base text demands shipping_address before any checkout call; without an explicit override an agent keeps
+        // asking for an address and never reaches the handoff.
+        var instructions = UcpModule.BuildMcpInstructions(new UcpOptions { StoreManagedAddresses = true });
+
+        Assert.Contains("requirements for checkout do not apply", instructions, StringComparison.Ordinal);
+        Assert.Contains("do not ask the user for an address", instructions, StringComparison.Ordinal);
+        Assert.Contains("do not resolve a country or region for checkout", instructions, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -393,6 +468,24 @@ public class UcpMcpCommerceToolsTests
         Assert.Equal("cart-request", result.NextStepAfterPayment.Arguments["cart_id"]);
         Assert.Equal("buyer-service", result.NextStepAfterPayment.Arguments["buyer_id"]);
         Assert.Equal("en-US", result.NextStepAfterPayment.Arguments["language"]);
+        Assert.Equal(CaptureCheckoutService.HandoffIssuedAt.UtcDateTime.ToString("O"), result.NextStepAfterPayment.Arguments["placed_after"]);
+    }
+
+    [Fact]
+    public async Task HandoffCheckout_NextStepTrackOrderCarriesHandoffIssuedAtAsPlacedAfter()
+    {
+        var profileService = new StubProfileService(new UcpProfile());
+        var checkoutService = new CaptureCheckoutService();
+
+        var result = Assert.IsType<UcpMcpHandoffCheckoutResult>(await UcpMcpCommerceTools.HandoffCheckout(
+            profileService,
+            checkoutService,
+            checkout_id: "checkout-1",
+            cart_id: "cart-request",
+            cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal("cart-request", result.NextStepAfterPayment.Arguments["cart_id"]);
+        Assert.Equal(CaptureCheckoutService.HandoffIssuedAt.UtcDateTime.ToString("O"), result.NextStepAfterPayment.Arguments["placed_after"]);
     }
 
     private static string[] GetCommerceToolNames()
@@ -488,6 +581,8 @@ public class UcpMcpCommerceToolsTests
 
     private sealed class CaptureCheckoutService : IUcpCheckoutService
     {
+        public static readonly DateTimeOffset HandoffIssuedAt = new(2026, 6, 16, 9, 30, 15, TimeSpan.Zero);
+
         public string HandoffCheckoutId { get; private set; }
         public UcpCheckoutRequest HandoffRequest { get; private set; }
 
@@ -521,7 +616,7 @@ public class UcpMcpCommerceToolsTests
 
             return Task.FromResult(new UcpCheckoutHandoffResponse
             {
-                Checkout = new UcpCheckout { ContinueUrl = "https://example.test/checkout" },
+                Checkout = new UcpCheckout { ContinueUrl = "https://example.test/checkout", IssuedAt = HandoffIssuedAt },
             });
         }
 
