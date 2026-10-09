@@ -343,7 +343,7 @@ public class UcpProfileService : IUcpProfileService
         }
 
         var configuredStore = await GetConfiguredDefaultStore();
-        if (configuredStore != null || !string.IsNullOrWhiteSpace(_options.DefaultStoreId))
+        if (HasConfiguredDefaultStore(configuredStore))
         {
             return configuredStore;
         }
