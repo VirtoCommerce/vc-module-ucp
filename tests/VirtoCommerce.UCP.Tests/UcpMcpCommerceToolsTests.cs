@@ -461,7 +461,7 @@ public class UcpMcpCommerceToolsTests
         Assert.Equal("cart-request", result.NextStepAfterPayment.Arguments["cart_id"]);
         Assert.Equal("buyer-service", result.NextStepAfterPayment.Arguments["buyer_id"]);
         Assert.Equal("en-US", result.NextStepAfterPayment.Arguments["language"]);
-        Assert.Equal(CaptureCheckoutService.HandoffIssuedAt.ToString("O"), result.NextStepAfterPayment.Arguments["placed_after"]);
+        Assert.Equal(CaptureCheckoutService.HandoffIssuedAt.UtcDateTime.ToString("O"), result.NextStepAfterPayment.Arguments["placed_after"]);
     }
 
     [Fact]
@@ -478,7 +478,7 @@ public class UcpMcpCommerceToolsTests
             cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal("cart-request", result.NextStepAfterPayment.Arguments["cart_id"]);
-        Assert.Equal(CaptureCheckoutService.HandoffIssuedAt.ToString("O"), result.NextStepAfterPayment.Arguments["placed_after"]);
+        Assert.Equal(CaptureCheckoutService.HandoffIssuedAt.UtcDateTime.ToString("O"), result.NextStepAfterPayment.Arguments["placed_after"]);
     }
 
     private static string[] GetCommerceToolNames()

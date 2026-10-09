@@ -668,6 +668,8 @@ After hosted handoff, the client usually does not know `order_id` yet. The prima
 
 The storefront's default cart survives checkout: after an order is placed the cart is emptied but keeps its id, so one `cart_id` accumulates orders over time. To track the order of one hosted checkout, pass `placed_after` set to the handoff `issued_at` (the `track_order` next step carries it). `orders` then lists the top-level orders of that cart created at or after `placed_after`, newest first, and `order` is the newest of them; one checkout can yield several, for example when the storefront checks out per supplier. Without `placed_after`, lookup by `cart_id` returns only the newest order of the cart. Supplier child orders (those with a parent order) are never returned. Lookup by order id or number returns that single order in `orders` as well and ignores `placed_after`.
 
+`placed_after` is an ISO 8601 timestamp. On REST, URL-encode it: `issued_at` carries a `+00:00` offset, and an unencoded `+` decodes to a space and fails binding with 400. The MCP next step passes it in UTC `Z` form.
+
 If the order has not been created yet (with `placed_after`: the buyer has not placed the order since the handoff) or is not found within that buyer context, the endpoint returns the structured error `order_not_found`.
 
 ## MCP Server

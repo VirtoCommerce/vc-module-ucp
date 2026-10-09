@@ -76,7 +76,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
     {
         if (!string.IsNullOrWhiteSpace(request.CartId) && request.PlacedAfter.HasValue)
         {
-            return $"No order was placed from cart '{request.CartId}' after {request.PlacedAfter.Value:O}.";
+            return $"No order was placed from cart '{request.CartId}' at or after {request.PlacedAfter.Value.UtcDateTime:O}.";
         }
 
         var lookup = FirstNotEmpty(request.OrderId, request.OrderNumber, request.CartId);

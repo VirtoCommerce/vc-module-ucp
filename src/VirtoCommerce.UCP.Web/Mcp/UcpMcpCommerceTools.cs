@@ -694,7 +694,7 @@ public static class UcpMcpCommerceTools
     {
         var arguments = new Dictionary<string, object>();
         AddNextStepString(arguments, "cart_id", cartId);
-        AddNextStepString(arguments, "placed_after", placedAfter?.ToString("O"));
+        AddNextStepString(arguments, "placed_after", placedAfter?.UtcDateTime.ToString("O"));
         AddNextStepString(arguments, "buyer_id", buyerId);
         AddNextStepString(arguments, "language", language);
 

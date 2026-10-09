@@ -175,6 +175,7 @@ public class UcpOrderServiceTests
 
         Assert.Equal(ModuleConstants.ErrorCodes.OrderNotFound, exception.Code);
         Assert.Equal(404, exception.StatusCode);
+        Assert.Equal($"No order was placed from cart 'cart-1' at or after {placedAfter.UtcDateTime:O}.", exception.Message);
     }
 
     [Fact]
