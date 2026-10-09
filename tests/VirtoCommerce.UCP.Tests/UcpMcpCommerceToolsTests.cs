@@ -164,6 +164,13 @@ public class UcpMcpCommerceToolsTests
         Assert.Null(listCartsBuyerParameter?.GetCustomAttribute<System.ComponentModel.DataAnnotations.RequiredAttribute>());
         Assert.Contains("Omit to list the storefront cart", listCartsTypeParameter?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
         Assert.Contains("placed_after from the handoff's next step", trackOrderDescription);
+        Assert.Contains("order history, pass an earlier placed_after", trackOrderDescription);
+        Assert.Contains("an earlier date to list the cart's order history", typeof(UcpMcpCommerceTools)
+            .GetMethod(nameof(UcpMcpCommerceTools.TrackOrder))
+            ?.GetParameters()
+            .Single(parameter => parameter.Name == "placed_after")
+            .GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()
+            ?.Description);
         Assert.Contains("shipping_address.postal_code", checkoutDescription);
         Assert.Contains("ask the user", checkoutDescription);
     }

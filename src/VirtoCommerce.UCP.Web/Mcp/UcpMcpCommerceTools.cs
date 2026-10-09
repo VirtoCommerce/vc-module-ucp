@@ -532,16 +532,19 @@ public static class UcpMcpCommerceTools
         "After a hosted checkout, call it with the cart_id and placed_after from the handoff's next step " +
         "(placed_after is the handoff issued_at): orders lists the orders placed from that checkout, child orders included " +
         "(each carries parent_order_id), oldest first (the main order before its child orders), and order is the newest top-level order. " +
-        "Without placed_after, cart_id returns the newest top-level order of the cart together with its child orders. " +
-        "Not found with placed_after means the buyer has not placed the order yet. " +
+        "Without placed_after, cart_id returns only the newest top-level order of the cart together with its child orders: " +
+        "a storefront cart keeps its id across checkouts, so earlier orders of the cart need placed_after. " +
+        "To list the cart's order history, pass an earlier placed_after (for example the date the user asks about, or 2000-01-01T00:00:00Z for all orders). " +
+        "Not found with the handoff placed_after means the buyer has not placed the order yet. " +
         "For the user's account, organization, or orders, do not call this tool until link_buyer_identity succeeds.")]
     public static Task<object> TrackOrder(
         IUcpProfileService profileService,
         IUcpOrderService orderService,
         string order_id = null,
         string order_number = null,
-        string cart_id = null,
-        DateTimeOffset? placed_after = null,
+        [Description("Cart id saved from create_cart or the hosted checkout.")] string cart_id = null,
+        [Description("ISO 8601 timestamp; with cart_id, returns the orders of the cart created at or after it. " +
+            "Use the handoff issued_at to track one checkout, or an earlier date to list the cart's order history.")] DateTimeOffset? placed_after = null,
         string store_id = null,
         string currency = null,
         string language = null,
