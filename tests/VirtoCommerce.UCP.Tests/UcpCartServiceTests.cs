@@ -747,6 +747,71 @@ public partial class UcpCartServiceTests
     }
 
     [Fact]
+    public async Task ApplyCheckoutData_StoreManagedAddresses_SkipsAddressMutationsAndAddsMessage()
+    {
+        var executor = new StubXApiExecutor(CartQueryJson);
+        var service = CreateService(executor, options: StoreManagedOptions());
+
+        var response = await service.ApplyCheckoutData("cart-1", new UcpCheckoutRequest
+        {
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+            ShippingAddress = new UcpCheckoutAddress { Line1 = "1 Main St", City = "Seattle", CountryCode = "US" },
+            BillingAddress = new UcpCheckoutAddress { Line1 = "1 Main St", City = "Seattle", CountryCode = "US" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["UcpGetCart"], executor.OperationNames);
+        var message = Assert.Single(response.Messages, x => x.Code == ModuleConstants.MessageCodes.AddressesStoreManaged);
+        Assert.Equal("info", message.Type);
+        Assert.Equal(ModuleConstants.StoreManagedAddressesMessage, message.Content);
+    }
+
+    [Fact]
+    public async Task ApplyCheckoutData_StoreManagedAddresses_WithoutAddresses_AddsNoMessage()
+    {
+        var executor = new StubXApiExecutor(CartQueryJson);
+        var service = CreateService(executor, options: StoreManagedOptions());
+
+        var response = await service.ApplyCheckoutData("cart-1", new UcpCheckoutRequest
+        {
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["UcpGetCart"], executor.OperationNames);
+        Assert.DoesNotContain(response.Messages, x => x.Code == ModuleConstants.MessageCodes.AddressesStoreManaged);
+    }
+
+    [Fact]
+    public async Task ApplyCheckoutData_DefaultOptions_WithAddresses_AddsNoStoreManagedMessage()
+    {
+        var executor = new StubXApiExecutor(
+            CartQueryJson,
+            CartWithShippingAddressJson,
+            CartWithShipmentAddressJson);
+        var service = CreateService(executor);
+
+        var response = await service.ApplyCheckoutData("cart-1", new UcpCheckoutRequest
+        {
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+            ShippingAddress = new UcpCheckoutAddress { FirstName = "Ada", LastName = "Buyer", Line1 = "1 Main St", PostalCode = "98101", CountryCode = "US" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["UcpGetCart", "UcpAddOrUpdateShippingAddress", "UcpAddOrUpdateShipmentAddress"], executor.OperationNames);
+        Assert.DoesNotContain(response.Messages, x => x.Code == ModuleConstants.MessageCodes.AddressesStoreManaged);
+    }
+
+    private static UcpOptions StoreManagedOptions()
+    {
+        return new UcpOptions
+        {
+            DefaultStoreId = "store-acme",
+            DefaultCurrency = "USD",
+            DefaultCultureName = "en-US",
+            StorefrontOrigin = "https://localhost:5001",
+            StoreManagedAddresses = true,
+        };
+    }
+
+    [Fact]
     public async Task ApplyCheckoutData_ReusesExistingAddressIds()
     {
         var executor = new StubXApiExecutor(

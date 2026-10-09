@@ -37,6 +37,10 @@ public class Module : IModule, IHasConfiguration
             .GetSection("UCP:Observability")
             .Get<UcpObservabilityOptions>() ?? new UcpObservabilityOptions();
 
+        var ucpOptions = Configuration
+            .GetSection("UCP")
+            .Get<UcpOptions>() ?? new UcpOptions();
+
         serviceCollection.AddHttpContextAccessor();
         serviceCollection.Configure<UcpOptions>(Configuration.GetSection("UCP"));
         serviceCollection.Configure<MvcOptions>(options =>
@@ -61,7 +65,7 @@ public class Module : IModule, IHasConfiguration
                     Name = "Virto Commerce UCP Instructions",
                     Version = ModuleConstants.UcpVersion,
                 };
-                options.ServerInstructions = ModuleConstants.McpInstructions;
+                options.ServerInstructions = BuildMcpInstructions(ucpOptions);
             })
             .WithHttpTransport(options =>
             {
@@ -97,6 +101,13 @@ public class Module : IModule, IHasConfiguration
         });
 
         serviceCollection.AddSingleton<ScopedSchemaFactory<XapiAssemblyMarker>>();
+    }
+
+    internal static string BuildMcpInstructions(UcpOptions options)
+    {
+        return options.StoreManagedAddresses
+            ? ModuleConstants.McpInstructions + "\n" + ModuleConstants.StoreManagedAddressesInstruction
+            : ModuleConstants.McpInstructions;
     }
 
     private static JsonSerializerOptions CreateMcpToolSerializerOptions()

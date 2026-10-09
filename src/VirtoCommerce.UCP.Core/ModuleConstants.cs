@@ -100,6 +100,17 @@ public static class ModuleConstants
         public const string GooglePay = "google_pay";
     }
 
+    public const string StoreManagedAddressesInstruction =
+        "This store assigns cart addresses itself; call checkout tools without shipping_address and billing_address.";
+
+    public const string StoreManagedAddressesMessage =
+        "This store assigns cart addresses from the buyer's saved delivery location; the supplied shipping and billing addresses were not applied.";
+
+    public static class MessageCodes
+    {
+        public const string AddressesStoreManaged = "addresses_store_managed";
+    }
+
     public static class ErrorCodes
     {
         public const string OutOfStock = "out_of_stock";

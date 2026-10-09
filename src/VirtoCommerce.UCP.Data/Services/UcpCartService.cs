@@ -304,6 +304,24 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
 
         var currentCart = ReadCart(cartElement);
         UcpInventoryErrorNormalizer.ThrowIfInvalid(currentCart, GetCorrelationId());
+
+        if (_options.StoreManagedAddresses)
+        {
+            var response = CreateMutationResponse(cartElement);
+            if (request.ShippingAddress != null || request.BillingAddress != null)
+            {
+                response.Messages.Add(new UcpMessage
+                {
+                    Type = "info",
+                    Code = ModuleConstants.MessageCodes.AddressesStoreManaged,
+                    Content = ModuleConstants.StoreManagedAddressesMessage,
+                    Severity = "info",
+                });
+            }
+
+            return response;
+        }
+
         var shippingAddress = await PrepareAddress(request.ShippingAddress, request.Buyer, cancellationToken);
         var billingAddress = await PrepareAddress(request.BillingAddress, request.Buyer, cancellationToken);
 

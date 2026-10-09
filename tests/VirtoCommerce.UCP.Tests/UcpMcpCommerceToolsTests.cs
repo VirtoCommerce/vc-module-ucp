@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Server;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
+using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Mcp;
 using VirtoCommerce.UCP.Web.Mcp.Models;
@@ -287,6 +288,17 @@ public class UcpMcpCommerceToolsTests
 
             Assert.Equal(expectedProperties.Order(), actualProperties);
         }
+    }
+
+    [Fact]
+    public void BuildMcpInstructions_AppendsStoreManagedSentenceOnlyWhenOptionIsTrue()
+    {
+        var storeManaged = UcpModule.BuildMcpInstructions(new UcpOptions { StoreManagedAddresses = true });
+        var byDefault = UcpModule.BuildMcpInstructions(new UcpOptions());
+
+        Assert.Contains(ModuleConstants.StoreManagedAddressesInstruction, storeManaged);
+        Assert.StartsWith(ModuleConstants.McpInstructions, storeManaged);
+        Assert.Equal(ModuleConstants.McpInstructions, byDefault);
     }
 
     [Fact]
