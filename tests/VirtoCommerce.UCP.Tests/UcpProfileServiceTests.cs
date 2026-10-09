@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using VirtoCommerce.Platform.Core.Settings;
 using VirtoCommerce.StoreModule.Core.Model;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
@@ -14,6 +15,7 @@ using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Data.Services;
 using VirtoCommerce.UCP.Web.Mcp;
 using Xunit;
+using StoreSetting = VirtoCommerce.StoreModule.Core.ModuleConstants.Settings.General;
 
 namespace VirtoCommerce.UCP.Tests;
 
@@ -336,6 +338,35 @@ public class UcpProfileServiceTests
         Assert.Equal(storeManaged, profile.StoreManagedAddresses);
         Assert.Equal(storeManaged, profile.AgentGuidance.Contains(ModuleConstants.StoreManagedAddressesInstruction));
         Assert.Equal(storeManaged, JObject.Parse(JsonConvert.SerializeObject(profile)).Value<bool>("store_managed_addresses"));
+    }
+
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    public async Task GetProfile_AnonymousCatalog_RequiresOptionAndDefaultStoreAllowingAnonymousUsers(bool option, bool storeAllows, bool expected)
+    {
+        var httpContextAccessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext(),
+        };
+        httpContextAccessor.HttpContext.Request.Scheme = "https";
+        httpContextAccessor.HttpContext.Request.Host = new HostString("platform.example");
+        var service = new TestUcpProfileService(
+            Options.Create(new UcpOptions { DefaultStoreId = "store-acme", AnonymousCatalog = option }),
+            httpContextAccessor,
+            store: new Store
+            {
+                Id = "store-acme",
+                Settings =
+                [
+                    new ObjectSettingEntry { Name = StoreSetting.AllowAnonymousUsers.Name, Value = storeAllows },
+                ],
+            });
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Equal(expected, profile.Auth.AnonymousCatalog);
     }
 
     private sealed class TestUcpProfileService : UcpProfileService

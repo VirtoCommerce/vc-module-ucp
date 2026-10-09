@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Options;
 using VirtoCommerce.Platform.Core.Common;
+using VirtoCommerce.Platform.Core.Settings;
 using VirtoCommerce.StoreModule.Core.Model;
 using VirtoCommerce.StoreModule.Core.Model.Search;
 using VirtoCommerce.StoreModule.Core.Services;
@@ -13,6 +14,7 @@ using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
+using StoreSetting = VirtoCommerce.StoreModule.Core.ModuleConstants.Settings.General;
 
 namespace VirtoCommerce.UCP.Data.Services;
 
@@ -151,7 +153,8 @@ public class UcpProfileService : IUcpProfileService
     public virtual async Task<UcpProfile> GetProfile(CancellationToken cancellationToken = default)
     {
         var publicOrigin = await _publicOriginResolver.GetOriginAsync();
-        var storeProfiles = await GetStoreProfiles();
+        var configuredStore = await GetConfiguredDefaultStore();
+        var storeProfiles = await GetStoreProfiles(configuredStore);
         var storeProfile = storeProfiles.FirstOrDefault(x => x.IsDefault);
         var origin = !string.IsNullOrWhiteSpace(_options.PublicOrigin)
             ? publicOrigin
@@ -173,7 +176,7 @@ public class UcpProfileService : IUcpProfileService
             Auth = new UcpProfileAuth
             {
                 Agent = "mcp_transport",
-                AnonymousCatalog = _options.AnonymousCatalog,
+                AnonymousCatalog = _options.AnonymousCatalog && StoreAllowsAnonymousUsers(configuredStore),
                 BuyerDelegation = "platform_oauth_bearer",
                 BuyerIdentitySource = "platform_claims_principal",
                 AuthorizationServer = publicOrigin == null ? null : publicOrigin + "/",
@@ -321,15 +324,19 @@ public class UcpProfileService : IUcpProfileService
         }
     }
 
-    protected virtual async Task<IList<UcpStoreProfile>> GetStoreProfiles()
+    protected virtual async Task<IList<UcpStoreProfile>> GetStoreProfiles(Store configuredStore)
     {
-        var configuredStore = await GetConfiguredDefaultStore();
         if (HasConfiguredDefaultStore(configuredStore))
         {
             return CreateConfiguredStoreProfiles(configuredStore);
         }
 
         return await GetDiscoveredStoreProfiles();
+    }
+
+    protected virtual bool StoreAllowsAnonymousUsers(Store store)
+    {
+        return store is null || store.Settings?.GetValue<bool>(StoreSetting.AllowAnonymousUsers) == true;
     }
 
     protected virtual bool HasConfiguredDefaultStore(Store configuredStore)
