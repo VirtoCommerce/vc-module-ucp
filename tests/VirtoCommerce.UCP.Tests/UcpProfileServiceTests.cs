@@ -64,11 +64,20 @@ public class UcpProfileServiceTests
 
         var profile = await service.GetProfile(TestContext.Current.CancellationToken);
 
-        var declaredTools = typeof(UcpMcpCommerceTools).Assembly
+        // Mirrors WithToolsFromAssembly in Module.cs: only [McpServerToolType] types, and every
+        // public or non-public, static or instance method of them (ModelContextProtocol 1.4.0).
+        var registeredToolAttributes = typeof(UcpMcpCommerceTools).Assembly
             .GetTypes()
-            .SelectMany(x => x.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
-            .Select(x => x.GetCustomAttribute<McpServerToolAttribute>()?.Name)
-            .Where(x => x != null)
+            .Where(x => x.GetCustomAttribute<McpServerToolTypeAttribute>() is not null)
+            .SelectMany(x => x.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance))
+            .Select(x => x.GetCustomAttribute<McpServerToolAttribute>())
+            .Where(x => x is not null)
+            .ToList();
+        Assert.NotEmpty(registeredToolAttributes);
+        Assert.All(registeredToolAttributes, x => Assert.False(string.IsNullOrWhiteSpace(x.Name)));
+
+        var declaredTools = registeredToolAttributes
+            .Select(x => x.Name)
             .OrderBy(x => x, System.StringComparer.Ordinal)
             .ToList();
         Assert.Equal(declaredTools, profile.McpTools.OrderBy(x => x, System.StringComparer.Ordinal).ToList());
