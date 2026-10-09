@@ -66,7 +66,7 @@ public static class ModuleConstants
         A read-only XAPI failure from search_products or get_product may be transient; retry the same read-only tool at most once. Do not automatically retry mutating cart or checkout tools.
         For hosted checkout, return checkout.continue_url to the buyer and keep cart_id and the handoff issued_at (placed_after) for later track_order.
         After hosted checkout, use the saved cart_id and buyer_id, plus placed_after (the handoff issued_at), with track_order when the user asks about the order; do not require an order number when those saved identifiers are available.
-        One hosted checkout can produce several orders (for example, one per supplier). Lookup by cart_id with placed_after returns the orders placed since the handoff in orders, newest first; order is the newest; not found means the buyer has not placed the order yet. Without placed_after only the newest order of the cart is returned. Read orders, not only order, before answering about a checkout's orders.
+        One hosted checkout can produce a main order plus child orders (each child carries parent_order_id). Lookup by cart_id with placed_after returns all orders placed since the handoff in orders, newest first, child orders included; order is the newest top-level order; not found means the buyer has not placed the order yet. Without placed_after, lookup by cart_id returns the newest top-level order of the cart and its child orders. Read orders, not only order, before answering about a checkout's orders.
         """;
 
     public static class Capabilities

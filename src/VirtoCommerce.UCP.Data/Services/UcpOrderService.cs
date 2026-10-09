@@ -61,7 +61,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
         }
 
         var orders = orderModels.Select(MapOrder).ToList();
-        var order = orders[0];
+        var order = orders.Find(x => string.IsNullOrEmpty(x.ParentOrderId)) ?? orders[0];
 
         return new UcpOrderResponse
         {
@@ -152,24 +152,55 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
 
     private async Task<IList<CustomerOrder>> FindOrdersByCartId(OrderExecutionRequest request, CancellationToken cancellationToken)
     {
-        var orders = new List<CustomerOrder>();
         if (!HasOrderScope(request))
         {
-            return orders;
+            return [];
         }
 
-        // Offset paging can serve the same row twice when an order is created mid-scan.
-        var seenOrderIds = new HashSet<string>(StringComparer.Ordinal);
-        var criteria = new CustomerOrderSearchCriteria
+        if (request.PlacedAfter is not null)
+        {
+            return await SearchOrdersOfCart(request, CreateCartOrderCriteria(request), firstMatchOnly: false, cancellationToken);
+        }
+
+        var mainCriteria = CreateCartOrderCriteria(request);
+        mainCriteria.HasParentOperation = false;
+        var mainOrders = await SearchOrdersOfCart(request, mainCriteria, firstMatchOnly: true, cancellationToken);
+        if (mainOrders.Count == 0)
+        {
+            return mainOrders;
+        }
+
+        var main = mainOrders[0];
+        var childCriteria = CreateCartOrderCriteria(request);
+        childCriteria.ParentOperationId = main.Id;
+        var childOrders = await SearchOrdersOfCart(request, childCriteria, firstMatchOnly: false, cancellationToken);
+
+        return childOrders.Append(main).OrderByDescending(x => x.CreatedDate).ToList();
+    }
+
+    private CustomerOrderSearchCriteria CreateCartOrderCriteria(OrderExecutionRequest request)
+    {
+        return new CustomerOrderSearchCriteria
         {
             CustomerId = request.UserId,
             OrganizationId = request.OrganizationId,
-            HasParentOperation = false,
             StartDate = request.PlacedAfter?.UtcDateTime,
             Take = _orderLookupPageSize,
             Sort = "CreatedDate:desc",
             ResponseGroup = _orderResponseGroup,
         };
+    }
+
+    private async Task<List<CustomerOrder>> SearchOrdersOfCart(
+        OrderExecutionRequest request,
+        CustomerOrderSearchCriteria criteria,
+        bool firstMatchOnly,
+        CancellationToken cancellationToken)
+    {
+        var orders = new List<CustomerOrder>();
+
+        // Offset paging can serve the same row twice when an order is created mid-scan.
+        var seenOrderIds = new HashSet<string>(StringComparer.Ordinal);
 
         while (true)
         {
@@ -182,7 +213,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
                 string.Equals(x.ShoppingCartId, request.CartId, StringComparison.OrdinalIgnoreCase) &&
                 seenOrderIds.Add(x.Id)));
 
-            if (orders.Count > 0 && request.PlacedAfter is null)
+            if (orders.Count > 0 && firstMatchOnly)
             {
                 return [orders[0]];
             }
@@ -206,6 +237,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             StatusDisplayValue = orderModel.Status,
             CreatedAt = orderModel.CreatedDate.ToString("O"),
             CartId = orderModel.ShoppingCartId,
+            ParentOrderId = orderModel.ParentOperationId,
             StoreId = orderModel.StoreId,
             BuyerId = orderModel.CustomerId,
             CustomerName = orderModel.CustomerName,

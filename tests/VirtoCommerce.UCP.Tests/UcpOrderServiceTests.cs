@@ -52,7 +52,7 @@ public class UcpOrderServiceTests
         Assert.Equal("Paid", response.Order.Payments[0].Status);
         Assert.Contains(response.Messages, x => x.Code == "shipment_tracking_available");
 
-        var criteria = orderSearchService.Criteria.Single();
+        var criteria = orderSearchService.Criteria.Single(x => x.HasParentOperation == false);
         Assert.Equal("buyer-1", criteria.CustomerId);
         Assert.Equal(50, criteria.Take);
         Assert.Equal("CreatedDate:desc", criteria.Sort);
@@ -106,7 +106,7 @@ public class UcpOrderServiceTests
         }, TestContext.Current.CancellationToken);
 
         Assert.Equal("order-50", response.Order.Id);
-        Assert.Equal([0, 50], searchService.Criteria.Select(x => x.Skip));
+        Assert.Equal([0, 50], searchService.Criteria.Where(x => x.HasParentOperation == false).Select(x => x.Skip));
         Assert.All(searchService.Criteria, x => Assert.Equal("buyer-1", x.CustomerId));
     }
 
@@ -128,7 +128,7 @@ public class UcpOrderServiceTests
 
         Assert.Equal(["order-3"], response.Orders.Select(x => x.Id));
         Assert.Equal("order-3", response.Order.Id);
-        Assert.Equal([0], searchService.Criteria.Select(x => x.Skip));
+        Assert.Equal([0], searchService.Criteria.Where(x => x.HasParentOperation == false).Select(x => x.Skip));
     }
 
     [Fact]
@@ -179,13 +179,45 @@ public class UcpOrderServiceTests
     }
 
     [Fact]
-    public async Task TrackOrder_ByCartId_ExcludesChildOrders()
+    public async Task TrackOrder_ByCartId_WithPlacedAfter_ReturnsChildOrdersWithParentOrderId()
     {
-        var child = CreateOrder("order-child", "cart-1", "buyer-1");
-        child.ParentOperationId = "order-main";
+        var placedAfter = new DateTimeOffset(2026, 6, 16, 8, 0, 0, TimeSpan.Zero);
         var main = CreateOrder("order-main", "cart-1", "buyer-1");
-        var searchService = new StubCustomerOrderSearchService(child, main);
+        var child1 = CreateOrder("order-child-1", "cart-1", "buyer-1");
+        child1.ParentOperationId = main.Id;
+        child1.CreatedDate = main.CreatedDate.AddMinutes(10);
+        var child2 = CreateOrder("order-child-2", "cart-1", "buyer-1");
+        child2.ParentOperationId = main.Id;
+        child2.CreatedDate = main.CreatedDate.AddMinutes(20);
+        var searchService = new StubCustomerOrderSearchService(child2, child1, main);
         var service = CreateService(orderSearchService: searchService);
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            CartId = "cart-1",
+            PlacedAfter = placedAfter,
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["order-child-2", "order-child-1", "order-main"], response.Orders.Select(x => x.Id));
+        Assert.Equal("order-main", response.Order.Id);
+        Assert.Equal(["order-main", "order-main", null], response.Orders.Select(x => x.ParentOrderId));
+        Assert.All(searchService.Criteria, x => Assert.Null(x.HasParentOperation));
+    }
+
+    [Fact]
+    public async Task TrackOrder_ByCartId_WithoutPlacedAfter_ReturnsNewestOrderWithItsChildOrders()
+    {
+        var mainA = CreateOrder("order-a", "cart-1", "buyer-1");
+        mainA.CreatedDate = mainA.CreatedDate.AddHours(-2);
+        var childA = CreateOrder("order-a1", "cart-1", "buyer-1");
+        childA.ParentOperationId = mainA.Id;
+        childA.CreatedDate = mainA.CreatedDate.AddMinutes(5);
+        var mainB = CreateOrder("order-b", "cart-1", "buyer-1");
+        var childB = CreateOrder("order-b1", "cart-1", "buyer-1");
+        childB.ParentOperationId = mainB.Id;
+        childB.CreatedDate = mainB.CreatedDate.AddMinutes(5);
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(childB, mainB, childA, mainA));
 
         var response = await service.TrackOrder(new UcpOrderTrackingRequest
         {
@@ -193,9 +225,8 @@ public class UcpOrderServiceTests
             Context = new UcpCartContext { BuyerId = "buyer-1" },
         }, TestContext.Current.CancellationToken);
 
-        Assert.Equal("order-main", response.Order.Id);
-        Assert.Equal("order-main", Assert.Single(response.Orders).Id);
-        Assert.All(searchService.Criteria, x => Assert.False(x.HasParentOperation));
+        Assert.Equal(["order-b1", "order-b"], response.Orders.Select(x => x.Id));
+        Assert.Equal("order-b", response.Order.Id);
     }
 
     [Fact]
@@ -539,6 +570,7 @@ public class UcpOrderServiceTests
                 Number = criteria.Number,
                 StartDate = criteria.StartDate,
                 HasParentOperation = criteria.HasParentOperation,
+                ParentOperationId = criteria.ParentOperationId,
                 Take = criteria.Take,
                 Skip = criteria.Skip,
                 Sort = criteria.Sort,
@@ -550,6 +582,7 @@ public class UcpOrderServiceTests
                 .Where(order => string.IsNullOrWhiteSpace(criteria.OrganizationId) || order.OrganizationId == criteria.OrganizationId)
                 .Where(order => string.IsNullOrWhiteSpace(criteria.Number) || order.Number == criteria.Number)
                 .Where(order => criteria.StartDate == null || order.CreatedDate >= criteria.StartDate)
+                .Where(order => criteria.ParentOperationId == null || order.ParentOperationId == criteria.ParentOperationId)
                 .Where(order => criteria.HasParentOperation == null || (order.ParentOperationId != null) == criteria.HasParentOperation)
                 .ToList();
 

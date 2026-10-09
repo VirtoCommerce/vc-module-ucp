@@ -23,6 +23,9 @@ public class UcpOrder
     [JsonProperty("cart_id")]
     public string CartId { get; set; }
 
+    [JsonProperty("parent_order_id")]
+    public string ParentOrderId { get; set; }
+
     [JsonProperty("store_id")]
     public string StoreId { get; set; }
 
