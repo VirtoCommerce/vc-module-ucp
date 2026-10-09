@@ -89,7 +89,7 @@ public class UcpProfileService : IUcpProfileService
         (ModuleConstants.McpTools.CreateCart, "POST", ModuleConstants.Endpoints.CartCreate, ModuleConstants.Capabilities.Cart, "available", "Create a cart and optionally add the first item."),
         (ModuleConstants.McpTools.ListCarts, "GET", ModuleConstants.Endpoints.CartList, ModuleConstants.Capabilities.Cart, "available", "List recent buyer-scoped carts."),
         (ModuleConstants.McpTools.GetCart, "GET", ModuleConstants.Endpoints.CartGet, ModuleConstants.Capabilities.Cart, "available", "Read cart lines, totals, coupons, addresses, shipments, payments, and continue_url."),
-        (ModuleConstants.McpTools.UpdateCart, "PUT", ModuleConstants.Endpoints.CartUpdate, ModuleConstants.Capabilities.Cart, "available", "Update cart items and coupons. With a linked Platform identity it can safely merge the saved anonymous cart through XCart."),
+        (ModuleConstants.McpTools.UpdateCart, "PUT", ModuleConstants.Endpoints.CartUpdate, ModuleConstants.Capabilities.Cart, "available", "Replace the cart's line items with the complete desired state (lines not listed are removed) and apply coupons. With a linked Platform identity it can also merge the saved anonymous cart into the buyer's cart through XCart."),
         (
             ModuleConstants.McpTools.CreateCheckout,
             "POST",
