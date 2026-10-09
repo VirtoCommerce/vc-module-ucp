@@ -44,27 +44,31 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
         request ??= new UcpOrderTrackingRequest();
         var orderRequest = BuildOrderExecutionRequest(request);
 
-        CustomerOrder orderModel;
+        IList<CustomerOrder> orderModels;
         if (!string.IsNullOrWhiteSpace(orderRequest.CartId))
         {
-            orderModel = await FindOrderByCartId(orderRequest, cancellationToken);
+            orderModels = await FindOrdersByCartId(orderRequest, cancellationToken);
         }
         else
         {
-            orderModel = await FindOrderByIdOrNumber(orderRequest);
+            var orderModel = await FindOrderByIdOrNumber(orderRequest);
+            orderModels = orderModel == null ? [] : [orderModel];
         }
 
-        if (orderModel == null)
+        if (orderModels.Count == 0)
         {
             var lookup = FirstNotEmpty(orderRequest.OrderId, orderRequest.OrderNumber, orderRequest.CartId);
             throw CreateException(ModuleConstants.ErrorCodes.OrderNotFound, $"Order '{lookup}' was not found.", StatusCodes.Status404NotFound);
         }
 
-        var order = MapOrder(orderModel);
+        var orders = orderModels.Select(MapOrder).ToList();
+        var order = orders[0];
+
         return new UcpOrderResponse
         {
             Ucp = CreateMetadata("success", "dev.ucp.shopping.order.track"),
             Order = order,
+            Orders = orders,
             Messages = order.Messages,
         };
     }
@@ -134,11 +138,12 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
         return result.Results.FirstOrDefault(x => IsOrderInScope(x, request));
     }
 
-    private async Task<CustomerOrder> FindOrderByCartId(OrderExecutionRequest request, CancellationToken cancellationToken)
+    private async Task<IList<CustomerOrder>> FindOrdersByCartId(OrderExecutionRequest request, CancellationToken cancellationToken)
     {
+        var orders = new List<CustomerOrder>();
         if (!HasOrderScope(request))
         {
-            return null;
+            return orders;
         }
 
         var criteria = new CustomerOrderSearchCriteria
@@ -157,17 +162,13 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
                 "orders",
                 "SearchOrdersByCartScoped",
                 () => _customerOrderSearchService.SearchAsync(criteria, clone: false));
-            var order = result.Results.FirstOrDefault(x => IsOrderInScope(x, request) &&
-                string.Equals(x.ShoppingCartId, request.CartId, StringComparison.OrdinalIgnoreCase));
-            if (order != null)
-            {
-                return order;
-            }
+            orders.AddRange(result.Results.Where(x => IsOrderInScope(x, request) &&
+                string.Equals(x.ShoppingCartId, request.CartId, StringComparison.OrdinalIgnoreCase)));
 
             criteria.Skip += result.Results.Count;
             if (result.Results.Count == 0 || criteria.Skip >= result.TotalCount)
             {
-                return null;
+                return orders;
             }
         }
     }

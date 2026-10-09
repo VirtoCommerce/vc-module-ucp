@@ -66,6 +66,7 @@ public static class ModuleConstants
         A read-only XAPI failure from search_products or get_product may be transient; retry the same read-only tool at most once. Do not automatically retry mutating cart or checkout tools.
         For hosted checkout, return checkout.continue_url to the buyer and keep cart_id for later track_order.
         After hosted checkout, use the saved cart_id and buyer_id with track_order when the user asks about the order; do not require an order number when those saved identifiers are available.
+        One cart can produce several orders (for example, one per supplier). Lookup by cart_id returns all of them in orders, newest first; order is the newest. Read orders, not only order, before answering about a cart's orders.
         """;
 
     public static class Capabilities

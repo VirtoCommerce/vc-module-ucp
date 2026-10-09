@@ -147,6 +147,10 @@ public class UcpMcpCommerceToolsTests
         var listCartsTypeParameter = listCartsMethod
             ?.GetParameters()
             .Single(parameter => parameter.Name == "cart_type");
+        var trackOrderDescription = typeof(UcpMcpCommerceTools)
+            .GetMethod(nameof(UcpMcpCommerceTools.TrackOrder))
+            ?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()
+            ?.Description;
         var checkoutDescription = typeof(UcpMcpCommerceTools)
             .GetMethod(nameof(UcpMcpCommerceTools.CheckoutAndHandoff))
             ?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()
@@ -157,6 +161,7 @@ public class UcpMcpCommerceToolsTests
         Assert.Contains("Required for anonymous continuation", listCartsBuyerParameter?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
         Assert.Null(listCartsBuyerParameter?.GetCustomAttribute<System.ComponentModel.DataAnnotations.RequiredAttribute>());
         Assert.Contains("Omit to list the storefront cart", listCartsTypeParameter?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description);
+        Assert.Contains("every order created from that cart in orders", trackOrderDescription);
         Assert.Contains("shipping_address.postal_code", checkoutDescription);
         Assert.Contains("ask the user", checkoutDescription);
     }

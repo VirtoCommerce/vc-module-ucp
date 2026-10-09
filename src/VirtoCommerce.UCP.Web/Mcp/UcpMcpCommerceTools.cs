@@ -521,7 +521,10 @@ public static class UcpMcpCommerceTools
     }
 
     [McpServerTool(Name = ModuleConstants.McpTools.TrackOrder, ReadOnly = true, Destructive = false)]
-    [Description("Track order by order id, order number, or cart id in this Virto Commerce storefront. For the user's account, organization, or orders, do not call this tool until link_buyer_identity succeeds.")]
+    [Description(
+        "Track order by order id, order number, or cart id in this Virto Commerce storefront. " +
+        "By cart_id it returns every order created from that cart in orders (newest first); order is the newest one. " +
+        "For the user's account, organization, or orders, do not call this tool until link_buyer_identity succeeds.")]
     public static Task<object> TrackOrder(
         IUcpProfileService profileService,
         IUcpOrderService orderService,

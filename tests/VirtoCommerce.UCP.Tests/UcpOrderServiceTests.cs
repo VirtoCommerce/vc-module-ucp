@@ -111,6 +111,62 @@ public class UcpOrderServiceTests
     }
 
     [Fact]
+    public async Task TrackOrder_ByCartId_ReturnsEveryOrderOfTheCartNewestFirst()
+    {
+        var orders = Enumerable.Range(0, 56).Select(x => CreateOrder($"order-{x}", $"cart-{x}", "buyer-1")).ToArray();
+        orders[3].ShoppingCartId = "cart-split";
+        orders[49].ShoppingCartId = "cart-split";
+        orders[52].ShoppingCartId = "CART-SPLIT";
+        var searchService = new StubCustomerOrderSearchService(orders);
+        var service = CreateService(orderSearchService: searchService);
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            CartId = "cart-split",
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["order-3", "order-49", "order-52"], response.Orders.Select(x => x.Id));
+        Assert.Equal("order-3", response.Order.Id);
+        Assert.Equal([0, 50], searchService.Criteria.Select(x => x.Skip));
+    }
+
+    [Fact]
+    public async Task TrackOrder_ByCartId_WithSingleOrder_ReturnsItInOrders()
+    {
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(
+            CreateOrder("order-1", "cart-1", "buyer-1"),
+            CreateOrder("order-2", "cart-2", "buyer-1")));
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            CartId = "cart-1",
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("order-1", Assert.Single(response.Orders).Id);
+        Assert.Equal("order-1", response.Order.Id);
+    }
+
+    [Fact]
+    public async Task TrackOrder_ByOrderNumber_ReturnsOnlyThatOrderInOrders()
+    {
+        var order = CreateOrder("order-1", "cart-1", "buyer-1");
+        order.Number = "CO-777";
+        var other = CreateOrder("order-2", "cart-1", "buyer-1");
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(order, other));
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            OrderNumber = "CO-777",
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("order-1", Assert.Single(response.Orders).Id);
+        Assert.Equal("order-1", response.Order.Id);
+    }
+
+    [Fact]
     public async Task TrackOrder_ByCartId_RejectsAnotherOrganization()
     {
         var order = CreateOrder("order-1", "cart-1", "buyer-1");

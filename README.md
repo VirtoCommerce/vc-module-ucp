@@ -665,6 +665,8 @@ GET /ucp/v1/orders?cart_id={cartId}&buyer_id=user-42&culture_name=en-US
 
 After hosted handoff, the client usually does not know `order_id` yet. The primary path is lookup by the original `cart_id`, matched against `CustomerOrder.ShoppingCartId` through Orders module services. Lookup stays within the resolved buyer and organization context. If the buyer signed in during guest checkout, link that identity before tracking the order.
 
+A cart can produce several orders, for example when the storefront checks out per supplier. Lookup by `cart_id` returns every matching order in `orders`, newest first, and `order` is the newest of them. Lookup by order id or number returns that single order in `orders` as well.
+
 If the order has not been created yet or is not found within that buyer context, the endpoint returns the structured error `order_not_found`.
 
 ## MCP Server
