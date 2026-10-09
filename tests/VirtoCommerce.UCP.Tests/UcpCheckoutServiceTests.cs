@@ -10,13 +10,13 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
+using VirtoCommerce.Platform.Core.DistributedLock;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Data.Services;
-using VirtoCommerce.Platform.Core.DistributedLock;
 using Xunit;
 
 namespace VirtoCommerce.UCP.Tests;
