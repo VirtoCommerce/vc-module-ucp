@@ -60,8 +60,12 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             throw CreateException(ModuleConstants.ErrorCodes.OrderNotFound, CreateOrderNotFoundMessage(orderRequest), StatusCodes.Status404NotFound);
         }
 
-        var orders = orderModels.Select(MapOrder).ToList();
-        var order = orders.Find(x => string.IsNullOrEmpty(x.ParentOrderId)) ?? orders[0];
+        var orders = orderModels
+            .OrderBy(x => x.CreatedDate)
+            .ThenBy(x => !string.IsNullOrEmpty(x.ParentOperationId))
+            .Select(MapOrder)
+            .ToList();
+        var order = orders.FindLast(x => string.IsNullOrEmpty(x.ParentOrderId)) ?? orders[^1];
 
         return new UcpOrderResponse
         {
@@ -175,7 +179,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
         childCriteria.ParentOperationId = main.Id;
         var childOrders = await SearchOrdersOfCart(request, childCriteria, firstMatchOnly: false, cancellationToken);
 
-        return childOrders.Append(main).OrderByDescending(x => x.CreatedDate).ToList();
+        return childOrders.Append(main).ToList();
     }
 
     private CustomerOrderSearchCriteria CreateCartOrderCriteria(OrderExecutionRequest request)
