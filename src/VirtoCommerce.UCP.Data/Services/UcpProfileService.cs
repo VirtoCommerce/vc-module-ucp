@@ -75,7 +75,6 @@ public class UcpProfileService : IUcpProfileService
         "When the buyer is ready to pay or continue to hosted checkout, prefer checkout_and_handoff so the response includes the final continue_url.",
         "After hosted checkout, track_order can use the original cart_id with placed_after set to the handoff issued_at before an order_id is available.",
         "requires_escalation means the buyer must continue in hosted checkout; it does not mean an order approval rule was triggered. Approval rules and payment terms are enforced by the existing storefront checkout.",
-        "For ordinary shopping, call commerce tools directly without linking an account.",
         "When the user explicitly asks to act on their behalf or use their account, organization, personalized prices, saved data, or orders, call link_buyer_identity before buyer-sensitive commerce tools.",
         "Authenticated buyer and organization identity come only from the validated Platform OAuth token. Never send user or organization identity headers.",
         "To upgrade an anonymous cart, call link_buyer_identity and then update_cart with the saved anonymous buyer_id; UCP verifies ownership and delegates merging to XCart.",
@@ -317,6 +316,10 @@ public class UcpProfileService : IUcpProfileService
         {
             profile.AgentGuidance.Add(guidance);
         }
+
+        profile.AgentGuidance.Add(profile.Auth?.AnonymousCatalog == true
+            ? ModuleConstants.AnonymousCatalogGuidance
+            : ModuleConstants.SignInRequiredCatalogGuidance);
 
         if (_options.StoreManagedAddresses)
         {

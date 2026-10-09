@@ -413,6 +413,26 @@ public class UcpProfileServiceTests
         Assert.False(profile.Auth.AnonymousCatalog);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetProfile_CatalogAccessGuidance_MatchesAnonymousCatalog(bool storeAllows)
+    {
+        var service = CreateAnonymousCatalogService(
+            new UcpOptions { DefaultStoreId = "store-acme" },
+            store: new Store
+            {
+                Id = "store-acme",
+                Settings = [new ObjectSettingEntry { Name = StoreSetting.AllowAnonymousUsers.Name, Value = storeAllows }],
+            });
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Equal(storeAllows, profile.Auth.AnonymousCatalog);
+        Assert.Equal(storeAllows, profile.AgentGuidance.Contains(ModuleConstants.AnonymousCatalogGuidance));
+        Assert.Equal(!storeAllows, profile.AgentGuidance.Contains(ModuleConstants.SignInRequiredCatalogGuidance));
+    }
+
     private static TestUcpProfileService CreateAnonymousCatalogService(UcpOptions options, Store store = null, IEnumerable<Store> stores = null)
     {
         var httpContextAccessor = new HttpContextAccessor

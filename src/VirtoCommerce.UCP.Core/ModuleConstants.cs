@@ -18,8 +18,7 @@ public static class ModuleConstants
         Commerce tools execute local UCP services directly in this platform process.
         Do not use browser/web/search tools to execute UCP operations when MCP tools are available.
         MCP tool calls are stateless. Arguments from earlier calls are never carried automatically.
-        For ordinary public shopping requests, call commerce tools directly without linking an account.
-        When UCP:AnonymousCatalog is false or the default store does not allow anonymous users, the MCP endpoint requires Platform OAuth from the first request.
+        When get_store_capabilities reports auth.anonymous_catalog true, call commerce tools directly for ordinary public shopping without linking an account; when it is false, the store requires buyer sign-in for catalog access, so call link_buyer_identity before search_products or get_product.
         When the user explicitly asks to act on their behalf, use their account, personalized prices, organization,
         saved data, or orders, you MUST call link_buyer_identity before any buyer-sensitive commerce tool.
         Do not call search_products, get_product, create_cart, list_carts, get_cart, update_cart, checkout, or order tools
@@ -100,6 +99,11 @@ public static class ModuleConstants
         public const string NativeCard = "native_card";
         public const string GooglePay = "google_pay";
     }
+
+    public const string AnonymousCatalogGuidance = "For ordinary shopping, call commerce tools directly without linking an account.";
+
+    public const string SignInRequiredCatalogGuidance =
+        "This store requires buyer sign-in for catalog access: call link_buyer_identity before search_products or get_product.";
 
     public const string StoreManagedAddressesInstruction =
         "This store assigns cart addresses itself, so the shipping_address and billing_address requirements for checkout do not apply: " +
