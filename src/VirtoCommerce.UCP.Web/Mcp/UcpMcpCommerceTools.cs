@@ -6,14 +6,17 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ModelContextProtocol.Server;
+using VirtoCommerce.MCP.Core.Attributes;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Mcp.Models;
+using McpScopes = VirtoCommerce.MCP.Core.McpScopes;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
 
 [McpServerToolType]
+[McpScope(McpScopes.Ucp)]
 public static class UcpMcpCommerceTools
 {
     [McpServerTool(Name = ModuleConstants.McpTools.GetStoreCapabilities, ReadOnly = true, Destructive = false)]
@@ -259,12 +262,12 @@ public static class UcpMcpCommerceTools
         string currency = null,
         string language = null,
         string buyer_id = null,
-        UcpCheckoutBuyer buyer = null,
-        string buyer_email = null,
-        string buyer_name = null,
-        string buyer_phone = null,
-        UcpCheckoutAddress shipping_address = null,
-        UcpCheckoutAddress billing_address = null,
+        [McpSensitive] UcpCheckoutBuyer buyer = null,
+        [McpSensitive] string buyer_email = null,
+        [McpSensitive] string buyer_name = null,
+        [McpSensitive] string buyer_phone = null,
+        [McpSensitive] UcpCheckoutAddress shipping_address = null,
+        [McpSensitive] UcpCheckoutAddress billing_address = null,
         string payment_handler = null,
         string notes = null,
         CancellationToken cancellationToken = default)
@@ -304,12 +307,12 @@ public static class UcpMcpCommerceTools
         string currency = null,
         string language = null,
         string buyer_id = null,
-        UcpCheckoutBuyer buyer = null,
-        string buyer_email = null,
-        string buyer_name = null,
-        string buyer_phone = null,
-        UcpCheckoutAddress shipping_address = null,
-        UcpCheckoutAddress billing_address = null,
+        [McpSensitive] UcpCheckoutBuyer buyer = null,
+        [McpSensitive] string buyer_email = null,
+        [McpSensitive] string buyer_name = null,
+        [McpSensitive] string buyer_phone = null,
+        [McpSensitive] UcpCheckoutAddress shipping_address = null,
+        [McpSensitive] UcpCheckoutAddress billing_address = null,
         string payment_handler = null,
         string notes = null,
         CancellationToken cancellationToken = default)
@@ -373,12 +376,12 @@ public static class UcpMcpCommerceTools
         string currency = null,
         string language = null,
         string buyer_id = null,
-        UcpCheckoutBuyer buyer = null,
-        string buyer_email = null,
-        string buyer_name = null,
-        string buyer_phone = null,
-        UcpCheckoutAddress shipping_address = null,
-        UcpCheckoutAddress billing_address = null,
+        [McpSensitive] UcpCheckoutBuyer buyer = null,
+        [McpSensitive] string buyer_email = null,
+        [McpSensitive] string buyer_name = null,
+        [McpSensitive] string buyer_phone = null,
+        [McpSensitive] UcpCheckoutAddress shipping_address = null,
+        [McpSensitive] UcpCheckoutAddress billing_address = null,
         string payment_handler = null,
         string notes = null,
         CancellationToken cancellationToken = default)
@@ -430,12 +433,12 @@ public static class UcpMcpCommerceTools
         string currency = null,
         string language = null,
         string buyer_id = null,
-        UcpCheckoutBuyer buyer = null,
-        string buyer_email = null,
-        string buyer_name = null,
-        string buyer_phone = null,
-        UcpCheckoutAddress shipping_address = null,
-        UcpCheckoutAddress billing_address = null,
+        [McpSensitive] UcpCheckoutBuyer buyer = null,
+        [McpSensitive] string buyer_email = null,
+        [McpSensitive] string buyer_name = null,
+        [McpSensitive] string buyer_phone = null,
+        [McpSensitive] UcpCheckoutAddress shipping_address = null,
+        [McpSensitive] UcpCheckoutAddress billing_address = null,
         string payment_handler = null,
         string notes = null,
         CancellationToken cancellationToken = default)

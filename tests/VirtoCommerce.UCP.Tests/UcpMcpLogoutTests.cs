@@ -3,11 +3,8 @@ using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
-using OpenIddict.Abstractions;
-using VirtoCommerce.Platform.Core.Security;
-using VirtoCommerce.UCP.Core.Services;
+using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.UCP.Web.Mcp;
-using VirtoCommerce.UCP.Web.Services;
 using Xunit;
 
 namespace VirtoCommerce.UCP.Tests;
@@ -16,65 +13,53 @@ namespace VirtoCommerce.UCP.Tests;
 public class UcpMcpLogoutTests
 {
     [Fact]
-    public async Task Logout_RevokesOnlyTheAuthorizationFromTheValidatedPrincipal()
+    public async Task LogoutBuyer_SignsOutTheValidatedPrincipal()
     {
-        var sessions = new RecordingSessionsService();
-        var service = new UcpMcpSessionService(null, sessions);
         var principal = new ClaimsPrincipal(new ClaimsIdentity("Bearer"));
-        principal.SetAuthorizationId("current-authorization");
+        var context = new HttpContextAccessor { HttpContext = new DefaultHttpContext { User = principal } };
+        var sessions = new RecordingSessionService();
 
-        await service.Logout(principal, TestContext.Current.CancellationToken);
+        var result = await UcpMcpIdentityTools.LogoutBuyer(context, sessions, TestContext.Current.CancellationToken);
 
-        Assert.Equal("current-authorization", sessions.RevokedGroupId);
-    }
-
-    [Fact]
-    public async Task Logout_WithoutAuthorizationDoesNotRevokeAllUserSessions()
-    {
-        var sessions = new RecordingSessionsService();
-        var service = new UcpMcpSessionService(null, sessions);
-
-        await Assert.ThrowsAsync<UcpException>(() => service.Logout(
-            new ClaimsPrincipal(new ClaimsIdentity("Bearer")), TestContext.Current.CancellationToken));
-
-        Assert.Null(sessions.RevokedGroupId);
-    }
-
-    [Fact]
-    public async Task Logout_CanceledRequestDoesNotRevokeAuthorization()
-    {
-        var sessions = new RecordingSessionsService();
-        var service = new UcpMcpSessionService(null, sessions);
-        var principal = new ClaimsPrincipal(new ClaimsIdentity("Bearer"));
-        principal.SetAuthorizationId("current-authorization");
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.Logout(principal, new CancellationToken(true)));
-
-        Assert.Null(sessions.RevokedGroupId);
+        Assert.Same(principal, sessions.SignedOut);
+        Assert.True((bool)result.GetType().GetProperty("logged_out").GetValue(result));
     }
 
     [Fact]
     public async Task LogoutBuyer_AlreadyAnonymousDoesNotRequireAuthorization()
     {
         var context = new HttpContextAccessor { HttpContext = new DefaultHttpContext() };
+        var sessions = new RecordingSessionService();
 
-        var result = await UcpMcpIdentityTools.LogoutBuyer(context, null, TestContext.Current.CancellationToken);
+        var result = await UcpMcpIdentityTools.LogoutBuyer(context, sessions, TestContext.Current.CancellationToken);
 
+        Assert.Null(sessions.SignedOut);
         Assert.True((bool)result.GetType().GetProperty("logged_out").GetValue(result));
     }
 
-    private sealed class RecordingSessionsService : IUserSessionsService
+    [Fact]
+    public async Task LogoutBuyer_CanceledRequestDoesNotSignOut()
     {
-        public string RevokedGroupId { get; private set; }
+        var principal = new ClaimsPrincipal(new ClaimsIdentity("Bearer"));
+        var context = new HttpContextAccessor { HttpContext = new DefaultHttpContext { User = principal } };
+        var sessions = new RecordingSessionService();
 
-        public Task TerminateUserSessionGroup(string sessionGroupId)
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            UcpMcpIdentityTools.LogoutBuyer(context, sessions, new CancellationToken(true)));
+
+        Assert.Null(sessions.SignedOut);
+    }
+
+    private sealed class RecordingSessionService : IMcpSessionService
+    {
+        public ClaimsPrincipal SignedOut { get; private set; }
+
+        public Task<bool> IsActiveAsync(ClaimsPrincipal principal, CancellationToken cancellationToken = default) => Task.FromResult(true);
+
+        public Task SignOutAsync(ClaimsPrincipal principal, CancellationToken cancellationToken = default)
         {
-            RevokedGroupId = sessionGroupId;
+            SignedOut = principal;
             return Task.CompletedTask;
         }
-
-        public Task TerminateUserSession(string sessionId) => throw new NotSupportedException();
-        public Task TerminateAllUserSessions(string userId) => throw new NotSupportedException();
-        public Task TerminateUserSessions(TerminateUserSessionsRequest request) => throw new NotSupportedException();
     }
 }

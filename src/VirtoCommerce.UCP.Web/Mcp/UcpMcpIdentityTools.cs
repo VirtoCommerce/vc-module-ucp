@@ -3,17 +3,21 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using ModelContextProtocol.Server;
+using VirtoCommerce.MCP.Core.Attributes;
+using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Services;
-using VirtoCommerce.UCP.Web.Services;
+using McpScopes = VirtoCommerce.MCP.Core.McpScopes;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
 
 [McpServerToolType]
+[McpScope(McpScopes.Ucp)]
 public static class UcpMcpIdentityTools
 {
     [McpServerTool(Name = ModuleConstants.McpTools.LinkBuyerIdentity, ReadOnly = true, Destructive = false)]
+    [McpRequiresUser]
     [Description(
         "REQUIRED first step for an authenticated buyer request. Call this before search_products, get_product, create_cart, " +
         "cart, checkout, or order tools whenever the user says 'my account', 'my cart', 'on my behalf', 'from my name', " +
@@ -51,14 +55,14 @@ public static class UcpMcpIdentityTools
         "Do not call link_buyer_identity until the user explicitly asks to sign in again. Never ask for passwords or tokens in chat.")]
     public static async Task<object> LogoutBuyer(
         IHttpContextAccessor httpContextAccessor,
-        UcpMcpSessionService sessionService,
+        IMcpSessionService sessionService,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var principal = httpContextAccessor.HttpContext.User;
         if (principal.Identity?.IsAuthenticated == true)
         {
-            await sessionService.Logout(principal, cancellationToken);
+            await sessionService.SignOutAsync(principal, cancellationToken);
         }
 
         return new

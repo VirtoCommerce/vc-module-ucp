@@ -66,7 +66,6 @@ public sealed class UcpMcpCallToolFilter
             : parentActivity?.TraceId.ToString();
         try
         {
-            ValidateRequiredArguments(context);
             await ValidateStore(context);
             var result = await next(context, cancellationToken);
             MarkRejectedResult(result, telemetryStarted);
@@ -98,26 +97,6 @@ public sealed class UcpMcpCallToolFilter
             if (telemetryStarted)
             {
                 _operationTelemetry.Complete();
-            }
-        }
-    }
-
-    private static void ValidateRequiredArguments(RequestContext<CallToolRequestParams> context)
-    {
-        if (context.MatchedPrimitive is not McpServerTool tool
-            || !tool.ProtocolTool.InputSchema.TryGetProperty("required", out var required))
-        {
-            return;
-        }
-
-        foreach (var property in required.EnumerateArray())
-        {
-            var name = property.GetString();
-            if (context.Params?.Arguments == null
-                || !context.Params.Arguments.TryGetValue(name, out var value)
-                || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
-            {
-                throw new UcpException(ModuleConstants.ErrorCodes.InvalidRequest, $"{name} is required.");
             }
         }
     }

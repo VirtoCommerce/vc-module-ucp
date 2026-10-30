@@ -1,4 +1,3 @@
-using System.Text.Json;
 using GraphQL.MicrosoftDI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Mvc;
@@ -6,6 +5,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Swashbuckle.AspNetCore.SwaggerGen;
+using VirtoCommerce.MCP.Core.Extensions;
+using VirtoCommerce.MCP.Core.Models;
+using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.Platform.Core.Modularity;
 using VirtoCommerce.Platform.Core.Security;
 using VirtoCommerce.Platform.Core.Settings;
@@ -23,6 +25,7 @@ using VirtoCommerce.UCP.Web.Services;
 using VirtoCommerce.UCP.Web.Swagger;
 using VirtoCommerce.Xapi.Core.Extensions;
 using VirtoCommerce.Xapi.Core.Infrastructure;
+using McpScopes = VirtoCommerce.MCP.Core.McpScopes;
 
 namespace VirtoCommerce.UCP.Web;
 
@@ -52,22 +55,21 @@ public class Module : IModule, IHasConfiguration
         {
             serviceCollection.AddHostedService<UcpApplicationInsightsActivityBridge>();
         }
+        serviceCollection.AddMcpScope(new McpScope
+        {
+            Name = McpScopes.Ucp,
+            Title = "Virto Commerce UCP",
+            Version = ModuleConstants.UcpVersion,
+            Instructions = ModuleConstants.McpInstructions,
+            RequireAuthenticatedUser = false,
+        });
+        serviceCollection.AddMcpToolsFromAssembly(typeof(UcpMcpCommerceTools).Assembly, UcpMcpSerialization.Options);
+        serviceCollection.AddTransient<McpChallengeWriter, UcpMcpChallengeWriter>();
+        serviceCollection.AddTransient<IMcpPublicOriginResolver, UcpMcpPublicOriginResolver>();
+
+        // Added after the MCP module's call filter, so it runs inside it: the MCP module checks the arguments and audits the call.
         serviceCollection.AddScoped<UcpMcpCallToolFilter>();
-        serviceCollection
-            .AddMcpServer(options =>
-            {
-                options.ServerInfo = new()
-                {
-                    Name = "Virto Commerce UCP Instructions",
-                    Version = ModuleConstants.UcpVersion,
-                };
-                options.ServerInstructions = ModuleConstants.McpInstructions;
-            })
-            .WithHttpTransport(options =>
-            {
-                options.Stateless = true;
-            })
-            .WithToolsFromAssembly(typeof(UcpMcpCommerceTools).Assembly, CreateMcpToolSerializerOptions())
+        serviceCollection.AddMcpServer()
             .WithMessageFilters(filters =>
             {
                 filters.AddIncomingFilter(UcpMcpActivityStatusFilter.Create());
@@ -81,7 +83,6 @@ public class Module : IModule, IHasConfiguration
         serviceCollection.AddTransient<IUcpPublicOriginResolver, UcpPublicOriginResolver>();
         serviceCollection.AddTransient<IUcpProfileService, UcpProfileService>();
         serviceCollection.AddScoped<IUcpBuyerContextAccessor, UcpBuyerContextAccessor>();
-        serviceCollection.AddScoped<UcpMcpSessionService>();
         serviceCollection.AddTransient<IUcpCatalogService, UcpCatalogService>();
         serviceCollection.AddTransient<IUcpCartService, UcpCartService>();
         serviceCollection.AddUcpHandoffSessionStore();
@@ -97,11 +98,6 @@ public class Module : IModule, IHasConfiguration
         });
 
         serviceCollection.AddSingleton<ScopedSchemaFactory<XapiAssemblyMarker>>();
-    }
-
-    private static JsonSerializerOptions CreateMcpToolSerializerOptions()
-    {
-        return UcpMcpSerialization.Options;
     }
 
     public void PostInitialize(IApplicationBuilder appBuilder)

@@ -4,8 +4,9 @@
   <version>3.1011.0</version>
   <version-tag></version-tag>
 
-  <platformVersion>3.1076.0</platformVersion>
+  <platformVersion>3.1085.0</platformVersion>
   <dependencies>
+    <dependency id="VirtoCommerce.MCP" version="3.1000.0" />
     <dependency id="VirtoCommerce.Xapi" version="3.1026.0" />
     <dependency id="VirtoCommerce.XCatalog" version="3.1023.0" />
     <dependency id="VirtoCommerce.XCart" version="3.1038.0" />
@@ -37,7 +38,6 @@
 
   <assemblyFile>VirtoCommerce.UCP.Web.dll</assemblyFile>
   <moduleType>VirtoCommerce.UCP.Web.Module, VirtoCommerce.UCP.Web</moduleType>
-  <startupType>VirtoCommerce.UCP.Web.UcpMcpStartup, VirtoCommerce.UCP.Web</startupType>
 
   <releaseNotes>Adds MCP-to-UCP-to-XAPI tracing, metrics, and AI-visible correlation. Breaking changes: REST XAPI failures now return HTTP 200 with the original GraphQL envelope instead of a synthetic 502; MCP UCP failures now return tools/call isError results instead of JSON-RPC errors; protected ParseGraphQlResult and CreateException overloads remain compatible.</releaseNotes>
   <copyright>Copyright © 2026 VirtoCommerce. All rights reserved</copyright>

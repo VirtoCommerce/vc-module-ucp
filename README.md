@@ -440,7 +440,7 @@ When a user explicitly asks to act through their account, the MCP client calls `
 
 With a valid bearer token, `link_buyer_identity` returns the current buyer and organization without starting another login. Signing in or out of the storefront does not switch the MCP connection's account. To switch buyers, reconnect the MCP client with a new OAuth authorization, then call `link_buyer_identity` and verify the returned identity before continuing. Repeating the tool call with the same token does not force reauthorization.
 
-Call `logout_buyer` when the user asks to sign out. It uses Platform to revoke the current OAuth authorization and its access and refresh tokens. Connections sharing that authorization are also signed out; other OAuth applications and storefront browser cookies are unaffected. Repeating logout does not start a login. Discard the previous buyer, organization, cart, and checkout identifiers, and do not start a new login until the user asks.
+Call `logout_buyer` when the user asks to sign out. It uses Platform to revoke the current OAuth authorization and its access and refresh tokens. Connections sharing that authorization are also signed out; other OAuth applications and storefront browser cookies are unaffected. Logout without a token succeeds without a login. Logout with a revoked or expired token is answered with an HTTP 401 challenge, as every MCP request with such a token is. Discard the previous buyer, organization, cart, and checkout identifiers, and do not start a new login until the user asks.
 
 MCP checks the existing Platform token and authorization records on authenticated requests, including when global persistent token validation is disabled. The query reads the shared database without OpenIddict's local entity cache, so revocation takes effect on other replicas. No separate session store or cache provider is registered.
 
@@ -657,7 +657,7 @@ POST /ucp/mcp
 GET /ucp/mcp
 ```
 
-The MCP server uses the official C# SDK `ModelContextProtocol.AspNetCore` with Streamable HTTP transport in stateless mode.
+The endpoint is the `ucp` scope of the Model Context Protocol module (`VirtoCommerce.MCP`), which UCP requires. The MCP module serves it with Streamable HTTP transport in stateless mode, checks bearer tokens, publishes the protected-resource metadata, and writes every tool call to its audit log; buyer names, emails, phone numbers and addresses are masked there. UCP registers the tools, keeps its `identity_required` challenge body, and resolves the public origin from the store.
 
 The MCP server exposes typed UCP commerce tools for the Virto Commerce storefront/platform where this module is installed:
 

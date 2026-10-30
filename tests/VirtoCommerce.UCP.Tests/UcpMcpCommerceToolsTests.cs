@@ -7,13 +7,15 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Server;
+using VirtoCommerce.MCP.Core.Attributes;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Mcp;
 using VirtoCommerce.UCP.Web.Mcp.Models;
 using Xunit;
-using UcpModule = VirtoCommerce.UCP.Web.Module;
+using McpScopes = VirtoCommerce.MCP.Core.McpScopes;
+using McpSensitiveArguments = VirtoCommerce.MCP.Core.McpSensitiveArguments;
 
 namespace VirtoCommerce.UCP.Tests;
 
@@ -61,6 +63,33 @@ public class UcpMcpCommerceToolsTests
         Assert.StartsWith("REQUIRED first step", description);
         Assert.Contains("Platform OAuth", description);
         Assert.Contains("for my organization", description);
+    }
+
+    [Fact]
+    public void UcpMcpTools_AreServedInUcpScopeAndOnlyIdentityLinkingRequiresUser()
+    {
+        var tools = new[] { typeof(UcpMcpCommerceTools), typeof(UcpMcpIdentityTools) }
+            .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
+            .Where(method => method.GetCustomAttribute<McpServerToolAttribute>() != null)
+            .ToArray();
+
+        Assert.All(tools, method => Assert.Contains(McpScopes.Ucp, method.DeclaringType.GetCustomAttribute<McpScopeAttribute>()?.Scopes ?? []));
+        Assert.Equal(
+            [ModuleConstants.McpTools.LinkBuyerIdentity],
+            tools.Where(method => method.GetCustomAttribute<McpRequiresUserAttribute>() != null)
+                .Select(method => method.GetCustomAttribute<McpServerToolAttribute>().Name));
+    }
+
+    [Theory]
+    [InlineData(nameof(UcpMcpCommerceTools.CreateCheckout))]
+    [InlineData(nameof(UcpMcpCommerceTools.UpdateCheckout))]
+    [InlineData(nameof(UcpMcpCommerceTools.CheckoutAndHandoff))]
+    [InlineData(nameof(UcpMcpCommerceTools.HandoffCheckout))]
+    public void UcpMcpCheckoutTools_MaskBuyerPersonalDataInAudit(string methodName)
+    {
+        var paths = McpSensitiveArguments.GetPaths(typeof(UcpMcpCommerceTools).GetMethod(methodName));
+
+        Assert.Equal(["buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address"], paths);
     }
 
     [Fact]
@@ -414,13 +443,10 @@ public class UcpMcpCommerceToolsTests
             : [type.GetString()];
     }
 
+    // The options Module passes to AddMcpToolsFromAssembly.
     private static JsonSerializerOptions CreateMcpToolSerializerOptions()
     {
-        var factory = typeof(UcpModule).GetMethod(
-            "CreateMcpToolSerializerOptions",
-            BindingFlags.NonPublic | BindingFlags.Static);
-
-        return Assert.IsType<JsonSerializerOptions>(factory?.Invoke(null, null));
+        return UcpMcpSerialization.Options;
     }
 
     private sealed class StubProfileService : IUcpProfileService
