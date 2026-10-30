@@ -1,5 +1,7 @@
+using System;
 using GraphQL.MicrosoftDI;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -68,6 +70,7 @@ public class Module : IModule, IHasConfiguration
         serviceCollection.AddTransient<IMcpPublicOriginResolver, UcpMcpPublicOriginResolver>();
 
         // Added after the MCP module's call filter, so it runs inside it: the MCP module checks the arguments and audits the call.
+        // It applies to the ucp scope only.
         serviceCollection.AddScoped<UcpMcpCallToolFilter>();
         serviceCollection.AddMcpServer()
             .WithMessageFilters(filters =>
@@ -76,8 +79,9 @@ public class Module : IModule, IHasConfiguration
             })
             .WithRequestFilters(filters =>
             {
-                filters.AddCallToolFilter(next => (context, cancellationToken) =>
-                    context.Services.GetRequiredService<UcpMcpCallToolFilter>().InvokeAsync(next, context, cancellationToken));
+                filters.AddCallToolFilter(next => (context, cancellationToken) => IsUcpScope(context.Services)
+                    ? context.Services.GetRequiredService<UcpMcpCallToolFilter>().InvokeAsync(next, context, cancellationToken)
+                    : next(context, cancellationToken));
             });
 
         serviceCollection.AddTransient<IUcpPublicOriginResolver, UcpPublicOriginResolver>();
@@ -121,6 +125,13 @@ public class Module : IModule, IHasConfiguration
         permissionsRegistrar.RegisterPermissions(ModuleInfo.Id, "UCP", ModuleConstants.Security.Permissions.AllPermissions);
 
         appBuilder.UseScopedSchema<XapiAssemblyMarker>("ucp");
+    }
+
+    internal static bool IsUcpScope(IServiceProvider services)
+    {
+        var scope = services?.GetService<IHttpContextAccessor>()?.HttpContext.GetMcpScope();
+
+        return string.Equals(scope?.Name, McpScopes.Ucp, StringComparison.OrdinalIgnoreCase);
     }
 
     internal static bool HasConfiguredOtelExporter(IConfiguration configuration)

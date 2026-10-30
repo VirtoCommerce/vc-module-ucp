@@ -2,7 +2,9 @@ using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using VirtoCommerce.MCP.Core.Extensions;
 using VirtoCommerce.MCP.Core.Models;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Services;
@@ -96,6 +98,25 @@ public class UcpMcpChallengeWriterTests
 
         Assert.Equal("https://store.example", await resolver.GetOriginAsync(context, _ucpScope));
         Assert.Equal("https://admin.example", await resolver.GetOriginAsync(context, new McpScope { Name = McpScopes.Admin }));
+    }
+
+    [Theory]
+    [InlineData(McpScopes.Ucp, true)]
+    [InlineData(McpScopes.Admin, false)]
+    [InlineData(null, false)]
+    public void IsUcpScope_LimitsTheUcpCallFilterToTheUcpScope(string scopeName, bool expected)
+    {
+        var context = new DefaultHttpContext();
+        if (scopeName != null)
+        {
+            context.SetMcpScope(new McpScope { Name = scopeName });
+        }
+
+        using var services = new ServiceCollection()
+            .AddSingleton<IHttpContextAccessor>(new HttpContextAccessor { HttpContext = context })
+            .BuildServiceProvider();
+
+        Assert.Equal(expected, VirtoCommerce.UCP.Web.Module.IsUcpScope(services));
     }
 
     private static DefaultHttpContext CreateContext()
