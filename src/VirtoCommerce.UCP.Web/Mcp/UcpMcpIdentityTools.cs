@@ -13,7 +13,7 @@ using McpScopes = VirtoCommerce.MCP.Core.McpScopes;
 namespace VirtoCommerce.UCP.Web.Mcp;
 
 [McpServerToolType]
-[McpScope(McpScopes.Ucp)]
+[McpScope(ModuleConstants.McpScopeName)]
 public static class UcpMcpIdentityTools
 {
     [McpServerTool(Name = ModuleConstants.McpTools.LinkBuyerIdentity, ReadOnly = true, Destructive = false)]

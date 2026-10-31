@@ -9,6 +9,8 @@ public static class ModuleConstants
     public const string DiscoveryVersion = "2026-04-08";
     public const string Source = "UCP";
     public const string Platform = "VirtoCommerce";
+    // The MCP scope of the buyer tools, served by the MCP module at /ucp/mcp.
+    public const string McpScopeName = "ucp";
     public const string McpInstructions = """
         This MCP endpoint exposes Virto Commerce UCP tools for the storefront/platform where this MCP server is installed.
         Use typed MCP tools for commerce operations.

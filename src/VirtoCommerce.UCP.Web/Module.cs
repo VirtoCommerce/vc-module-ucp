@@ -48,7 +48,7 @@ public class Module : IModule, IHasConfiguration
         serviceCollection.AddScoped<IUcpOperationTelemetry>(serviceProvider => serviceProvider.GetRequiredService<UcpOperationTelemetry>());
         serviceCollection.AddMcpScope(new McpScope
         {
-            Name = McpScopes.Ucp,
+            Name = ModuleConstants.McpScopeName,
             Title = "Virto Commerce UCP",
             Version = ModuleConstants.UcpVersion,
             Instructions = ModuleConstants.McpInstructions,
@@ -59,7 +59,7 @@ public class Module : IModule, IHasConfiguration
         serviceCollection.AddTransient<IMcpPublicOriginResolver, UcpMcpPublicOriginResolver>();
 
         // UCP's errors and telemetry for the calls of the ucp scope, inside the MCP module's checks and audit.
-        serviceCollection.AddMcpCallToolFilter<UcpMcpCallToolFilter>(McpScopes.Ucp);
+        serviceCollection.AddMcpCallToolFilter<UcpMcpCallToolFilter>(ModuleConstants.McpScopeName);
 
         serviceCollection.AddTransient<IUcpPublicOriginResolver, UcpPublicOriginResolver>();
         serviceCollection.AddTransient<IUcpProfileService, UcpProfileService>();

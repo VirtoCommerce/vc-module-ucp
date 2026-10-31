@@ -16,7 +16,7 @@ using McpScopes = VirtoCommerce.MCP.Core.McpScopes;
 namespace VirtoCommerce.UCP.Web.Mcp;
 
 [McpServerToolType]
-[McpScope(McpScopes.Ucp)]
+[McpScope(ModuleConstants.McpScopeName)]
 public static class UcpMcpCommerceTools
 {
     [McpServerTool(Name = ModuleConstants.McpTools.GetStoreCapabilities, ReadOnly = true, Destructive = false)]

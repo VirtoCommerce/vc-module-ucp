@@ -36,7 +36,7 @@ public class UcpMcpChallengeWriter : McpChallengeWriter
 
     private static bool IsUcpScope(McpScope scope)
     {
-        return string.Equals(scope?.Name, McpScopes.Ucp, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(scope?.Name, ModuleConstants.McpScopeName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static object CreateBody(string code, string message)

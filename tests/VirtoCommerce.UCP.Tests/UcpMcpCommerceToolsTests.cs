@@ -73,7 +73,7 @@ public class UcpMcpCommerceToolsTests
             .Where(method => method.GetCustomAttribute<McpServerToolAttribute>() != null)
             .ToArray();
 
-        Assert.All(tools, method => Assert.Contains(McpScopes.Ucp, method.DeclaringType.GetCustomAttribute<McpScopeAttribute>()?.Scopes ?? []));
+        Assert.All(tools, method => Assert.Contains(ModuleConstants.McpScopeName, method.DeclaringType.GetCustomAttribute<McpScopeAttribute>()?.Scopes ?? []));
         Assert.Equal(
             [ModuleConstants.McpTools.LinkBuyerIdentity],
             tools.Where(method => method.GetCustomAttribute<McpRequiresUserAttribute>() != null)

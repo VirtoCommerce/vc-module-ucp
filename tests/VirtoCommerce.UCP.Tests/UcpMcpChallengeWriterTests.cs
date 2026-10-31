@@ -17,7 +17,7 @@ namespace VirtoCommerce.UCP.Tests;
 [Trait("Category", "Unit")]
 public class UcpMcpChallengeWriterTests
 {
-    private static readonly McpScope _ucpScope = new() { Name = McpScopes.Ucp };
+    private static readonly McpScope _ucpScope = new() { Name = ModuleConstants.McpScopeName };
 
     [Fact]
     public async Task WriteChallengeAsync_IdentityLinkingToolKeepsUcpChallengeAndBody()

@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using VirtoCommerce.MCP.Core.Models;
 using VirtoCommerce.MCP.Core.Services;
+using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Services;
 using McpScopes = VirtoCommerce.MCP.Core.McpScopes;
 
@@ -18,7 +19,7 @@ public class UcpMcpPublicOriginResolver(
 {
     public override async Task<string> GetOriginAsync(HttpContext context, McpScope scope)
     {
-        return string.Equals(scope?.Name, McpScopes.Ucp, StringComparison.OrdinalIgnoreCase)
+        return string.Equals(scope?.Name, ModuleConstants.McpScopeName, StringComparison.OrdinalIgnoreCase)
             ? await ucpOriginResolver.GetOriginAsync()
             : await base.GetOriginAsync(context, scope);
     }

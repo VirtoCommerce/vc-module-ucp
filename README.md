@@ -3,7 +3,7 @@
 The Virto Commerce UCP module exposes HTTP APIs for Universal Commerce Protocol (UCP) on top of existing Virto Commerce Platform capabilities.
 
 It provides public UCP endpoints for discovery, catalog, cart, checkout handoff, geography, and order tracking operations. Requests are adapted to in-process Virto Commerce XAPI calls and platform services without an additional HTTP hop inside the platform process.
-It also exposes a Streamable HTTP MCP endpoint at `/ucp/mcp`.
+Its buyer MCP endpoint, `/ucp/mcp`, is the `ucp` scope of the [MCP module](https://github.com/VirtoCommerce/vc-module-mcp): the MCP module serves the endpoint, checks tokens, audits every call and exports the telemetry, and UCP provides the commerce tools.
 
 ## Overview
 
@@ -72,7 +72,7 @@ sequenceDiagram
 * **Checkout handoff** — checkout snapshot and hosted handoff with address prefill; temporary handoff sessions stored in Redis with TTL when the Platform Redis connection is configured. Without Redis, sessions are kept in process memory, which is only suitable for a single instance.
 * **Order tracking** — order status, totals, line items, and shipment tracking by order id, order number, or cart id after handoff
 * **Geography lookup** — country and region resolution through the platform `ICountriesService` for checkout address normalization
-* **Streamable HTTP MCP server** — `/ucp/mcp` with typed UCP commerce tools for the installed storefront/platform, built on the official C# MCP SDK
+* **Buyer MCP endpoint** — `/ucp/mcp` with typed UCP commerce tools for the installed storefront/platform, served as the `ucp` scope of the MCP module, with its audit log, tool switches and connected agents in the back office
 * **Unified anonymous and authenticated buyer flows** — the same `/ucp/mcp` endpoint and the same tools support anonymous shopping or buyer identity from Virto Commerce Platform OAuth claims
 * **Safe cart upgrade** — `update_cart` can verify an anonymous buyer capability and delegate anonymous-to-authenticated cart merging to XCart
 * **Structured UCP errors** — machine-readable error codes with correlation id support
@@ -400,8 +400,10 @@ Public UCP protocol endpoints (`/.well-known/ucp`, `/ucp/v1/*`, `/ucp/mcp`) are 
 flowchart LR
     Client["UCP client"]
     McpClient["MCP client"]
-    UcpHttp["UCP HTTP API<br/>/.well-known/ucp<br/>/ucp/v1/*<br/>/ucp/mcp"]
+    UcpHttp["UCP HTTP API<br/>/.well-known/ucp<br/>/ucp/v1/*"]
+    Mcp["MCP module, scope ucp<br/>/ucp/mcp<br/>tokens, audit, switches, telemetry"]
     Controllers["ASP.NET Core controllers"]
+    Tools["UCP MCP tools<br/>UcpMcpCallToolFilter"]
     Services["UCP services<br/>VirtoCommerce.UCP.Data"]
     Cache["Handoff session store<br/>Platform Redis or in-memory fallback<br/>handoff sessions"]
     Executor["IXApiInProcessExecutor"]
@@ -409,9 +411,11 @@ flowchart LR
     Modules["Commerce modules<br/>XCatalog, XCart, Orders,<br/>Marketing, Store, Pricing, Inventory"]
 
     Client --> UcpHttp
-    McpClient --> UcpHttp
+    McpClient --> Mcp
     UcpHttp --> Controllers
+    Mcp --> Tools
     Controllers --> Services
+    Tools --> Services
     Services --> Cache
     Services --> Executor
     Executor --> XApi
@@ -420,8 +424,8 @@ flowchart LR
 
 ### Request Flow
 
-1. A client calls a canonical UCP endpoint.
-2. The controller accepts the HTTP request and delegates work to a UCP service.
+1. A client calls a canonical UCP endpoint, or an MCP client calls a tool on `/ucp/mcp`.
+2. The controller accepts the HTTP request and delegates work to a UCP service. For an MCP call, the MCP module checks the token, the tool switch and the arguments, then runs `UcpMcpCallToolFilter` (store checks, UCP errors and telemetry) and the tool, which calls the same UCP service.
 3. The service normalizes UCP request context and derives any authenticated buyer identity from the validated Platform principal.
 4. Catalog operations are translated to XCatalog GraphQL queries.
 5. Cart operations are translated to XCart GraphQL queries and mutations.
@@ -460,16 +464,21 @@ The module manifest declares these runtime dependencies:
 
 | Module | Version |
 | --- | --- |
-| `VirtoCommerce.Xapi` | `3.1015.0` |
-| `VirtoCommerce.XCatalog` | `3.1000.0` |
-| `VirtoCommerce.XCart` | `3.1016.0` |
-| `VirtoCommerce.Store` | `3.1004.0` |
-| `VirtoCommerce.Orders` | `3.1000.0` |
-| `VirtoCommerce.Marketing` | `3.1000.0` |
+| `VirtoCommerce.MCP` | `3.1000.0-alpha.15-vcst-6155-core-mcp-module` |
+| `VirtoCommerce.Xapi` | `3.1026.0` |
+| `VirtoCommerce.XCatalog` | `3.1023.0` |
+| `VirtoCommerce.XCart` | `3.1038.0` |
+| `VirtoCommerce.XOrder` | `3.1014.0` |
+| `VirtoCommerce.Store` | `3.1009.0` |
+| `VirtoCommerce.Orders` | `3.1018.0` |
+| `VirtoCommerce.Marketing` | `3.1009.0` |
+| `VirtoCommerce.OpenTelemetry` | `3.1002.0`, optional |
+
+UCP builds against the `VirtoCommerce.MCP.Core` package of the same version as the MCP module.
 
 Target framework: `.NET 10`.
 
-Minimum Virto Commerce Platform version: `3.1039.0`. Platform `3.1038.0` contains the Microsoft.OpenApi security upgrade, but the required `VirtoCommerce.Xapi 3.1015.0` itself requires Platform `3.1039.0`.
+Minimum Virto Commerce Platform version: `3.1085.0`.
 
 ## Web API
 
@@ -655,7 +664,34 @@ POST /ucp/mcp
 GET /ucp/mcp
 ```
 
-The endpoint is the `ucp` scope of the Model Context Protocol module (`VirtoCommerce.MCP`), which UCP requires. The MCP module serves it with Streamable HTTP transport in stateless mode, checks bearer tokens, publishes the protected-resource metadata, and writes every tool call to its audit log; buyer names, emails, phone numbers and addresses are masked there. UCP registers the tools, keeps its `identity_required` challenge body, and resolves the public origin from the store.
+The endpoint is the `ucp` scope of the Model Context Protocol module (`VirtoCommerce.MCP`), which UCP requires. UCP registers the scope in `Module.Initialize`; its name is `ModuleConstants.McpScopeName`:
+
+```csharp
+serviceCollection.AddMcpScope(new McpScope
+{
+    Name = ModuleConstants.McpScopeName, // "ucp", served at /ucp/mcp
+    Title = "Virto Commerce UCP",
+    Version = ModuleConstants.UcpVersion,
+    Instructions = ModuleConstants.McpInstructions,
+    RequireAuthenticatedUser = false, // anonymous shopping; link_buyer_identity asks for a sign-in
+});
+serviceCollection.AddMcpCallToolFilter<UcpMcpCallToolFilter>(ModuleConstants.McpScopeName);
+```
+
+A scope is the MCP module's unit of an endpoint: its own path, server name and instructions, tools, OAuth resource and access rules. The buyer tools therefore never appear on the back-office endpoints (`/admin/mcp`, `/vendor/mcp`), and the back-office tools never appear on `/ucp/mcp`; a token issued for one endpoint is refused by the other.
+
+What each module does for a call:
+
+| MCP module | UCP |
+| --- | --- |
+| Streamable HTTP transport, stateless | The 18 tools, their models and serialization |
+| Bearer token, audience and revocation checks; the protected-resource metadata | The `identity_required` challenge body (`UcpMcpChallengeWriter`) |
+| Public origin of the endpoint | The store-based origin for the `ucp` scope (`UcpMcpPublicOriginResolver`) |
+| Tool switches, required arguments | `store_id` checks, UCP and XAPI error envelopes (`UcpMcpCallToolFilter`) |
+| Audit log of every call, with buyer names, emails, phone numbers and addresses masked | The buyer identity rules of `link_buyer_identity` and `logout_buyer` |
+| `MCP tool {tool}` span and metrics, trace id in `_meta.trace_id` | `UCP {operation}` and XAPI spans inside it, the trace id also in the text of an error |
+
+In the back office, the MCP module's screens cover the `ucp` scope too: the agent audit log (filter by the `ucp` scope, or search by the trace id a buyer reports), the tool switches (turn off a buyer tool, for example `checkout_and_handoff`, without a deployment), and the connected agents. To serve the buyer endpoint at `https://store.example.com/mcp` as well, set `MCP:Scopes:ucp:Hosts`; see the MCP module's configuration.
 
 The MCP server exposes typed UCP commerce tools for the Virto Commerce storefront/platform where this module is installed:
 
@@ -675,6 +711,11 @@ The MCP server exposes typed UCP commerce tools for the Virto Commerce storefron
 - `resolve_country`
 - `list_regions`
 - `track_order`
+
+Buyer identity tools:
+
+- `link_buyer_identity`: signs the buyer in with an HTTP 401 challenge when the request has no token, then returns the linked buyer and organization
+- `logout_buyer`: revokes the current OAuth authorization
 
 Commerce tools do not accept storefront URLs. The MCP endpoint itself represents the target Virto Commerce UCP installation, and tools execute the module's local UCP services directly inside the platform process.
 
@@ -813,6 +854,18 @@ Recommended smoke checks after installation:
 11. `GET /ucp/v1/geography/countries/resolve?query=KZ` returns the platform country id for checkout address normalization.
 12. `GET /ucp/v1/geography/countries/{countryId}/regions` returns regions when they exist in the platform dictionary.
 13. After storefront checkout, `GET /ucp/v1/orders?cart_id={cartId}&buyer_id={buyerId}` returns the order tracking snapshot.
+14. `POST /ucp/mcp` with `initialize` reports the server `Virto Commerce UCP`, and `tools/list` returns the 18 UCP tools without a token.
+15. An anonymous `tools/call` of `link_buyer_identity` returns HTTP 401 with a `WWW-Authenticate` header that points to `/.well-known/oauth-protected-resource/ucp/mcp`.
+16. The calls appear in the back office under **Configuration → AI agents (MCP) → Agent audit log**, in the `ucp` scope.
+
+### Upgrading from a version that hosted its own MCP endpoint
+
+Earlier versions mapped `/ucp/mcp` themselves. This version moves the endpoint to the MCP module; the URL, the tools and their results are unchanged for agents. Breaking changes for a deployment:
+
+- Install the `VirtoCommerce.MCP` module; UCP depends on it.
+- `UCP:Observability:EnableApplicationInsightsCompatibilityBridge` is removed, with the optional dependency on the `VirtoCommerce.ApplicationInsights` module. To send traces to Application Insights, set `OpenTelemetry:AzureMonitor:ConnectionString` in the OpenTelemetry module (see [Observability and Logging](#observability-and-logging)).
+- Code that referenced `UcpDiagnostics.McpActivitySourceName` uses `McpDiagnostics.SdkActivitySourceName` from `VirtoCommerce.MCP.Core`.
+- Every MCP call is now in the MCP module's audit log; its retention is the MCP module setting `MCP.Cleanup.AuditRetentionDays`.
 
 ## Roadmap
 

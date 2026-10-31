@@ -24,7 +24,7 @@
     <ProjectReference Include="..\VirtoCommerce.UCP.ExperienceApi\VirtoCommerce.UCP.ExperienceApi.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="VirtoCommerce.MCP.Core" Version="3.1000.0" />
+    <PackageReference Include="VirtoCommerce.MCP.Core" Version="3.1000.0-alpha.15-vcst-6155-core-mcp-module" />
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.2.3" PrivateAssets="all" ExcludeAssets="runtime" />
     <PackageReference Include="VirtoCommerce.XCatalog.Core" Version="3.1023.0" />
     <PackageReference Include="VirtoCommerce.XCatalog.Data" Version="3.1023.0" />
