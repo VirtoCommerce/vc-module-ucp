@@ -251,7 +251,7 @@ Each AI assistant signs buyers in through a registered OAuth client:
 | Field | Value |
 | --- | --- |
 | Client type | `public` (no client secret) |
-| Consent type | `systematic` |
+| Consent type | `explicit` (the buyer sees which assistant they let shop as them, once per buyer and assistant) |
 | Redirect URI | The callback URL of the AI assistant. For Claude custom connectors this is `https://claude.ai/api/mcp/auth_callback` (*to verify against the current Anthropic documentation*). |
 | Permissions | `rsrc:https://store.example.com/ucp/mcp` |
 
@@ -264,7 +264,7 @@ The **Security > OAuth applications** screen has no field for `rsrc:` permission
   app.displayName = "Claude";
   app.clientType = "public";
   app.clientSecret = null;
-  app.consentType = "systematic";
+  app.consentType = "explicit";
   app.redirectUris = ["https://claude.ai/api/mcp/auth_callback"];
   app.permissions = ["rsrc:https://store.example.com/ucp/mcp"];
   const saved = await api.save({}, app).$promise;
