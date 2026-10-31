@@ -831,6 +831,9 @@ The module has no database tables and no migrations.
 | `UcpMcpCallToolFilter` | `IMcpCallToolFilter` | Store checks, UCP errors and telemetry of the commerce tools on `/ucp/mcp` |
 | `UcpMcpChallengeWriter` | `McpChallengeWriter` | UCP's `identity_required` body of the HTTP 401 and 403 responses on `/ucp/mcp` |
 | `UcpMcpPublicOriginResolver` | `IMcpPublicOriginResolver` | The store-based public origin of the `ucp` scope |
+| `UcpStoreContextResolver` | | The store of a request: its host, `Origin` or `Referer`, the platform's default store, the only open store |
+| `UcpRequestOptions` | `IUcpRequestOptions` | The options of the request's store: id, currency, language, URLs and the UCP store settings, with the configuration as the fallback |
+| `UcpStartupFilter` | `IStartupFilter` | Puts the scope-switch gate, the store of the request and the closed-catalog sign-in rule ahead of the MCP module's `/ucp/mcp` branch |
 
 ### Dependencies
 
