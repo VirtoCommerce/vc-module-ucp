@@ -6,10 +6,6 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using GraphQL;
 using GraphQL.Execution;
-using Microsoft.ApplicationInsights;
-using Microsoft.ApplicationInsights.Channel;
-using Microsoft.ApplicationInsights.DataContracts;
-using Microsoft.ApplicationInsights.Extensibility;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -511,28 +507,6 @@ public class XApiInProcessExecutorTests
     }
 
     private sealed record LogEntry(LogLevel Level, EventId EventId, Exception Exception, IReadOnlyDictionary<string, object> Properties);
-
-    private sealed class CapturingTelemetryChannel : ITelemetryChannel
-    {
-        public List<ITelemetry> Items { get; } = [];
-
-        public bool? DeveloperMode { get; set; }
-
-        public string EndpointAddress { get; set; }
-
-        public void Send(ITelemetry item)
-        {
-            Items.Add(item);
-        }
-
-        public void Flush()
-        {
-        }
-
-        public void Dispose()
-        {
-        }
-    }
 
     private sealed class NullScope : IDisposable
     {

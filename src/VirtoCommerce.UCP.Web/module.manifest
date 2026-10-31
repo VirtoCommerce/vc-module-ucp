@@ -38,7 +38,7 @@
   <assemblyFile>VirtoCommerce.UCP.Web.dll</assemblyFile>
   <moduleType>VirtoCommerce.UCP.Web.Module, VirtoCommerce.UCP.Web</moduleType>
 
-  <releaseNotes>Adds MCP-to-UCP-to-XAPI tracing, metrics, and AI-visible correlation. Breaking changes: REST XAPI failures now return HTTP 200 with the original GraphQL envelope instead of a synthetic 502; MCP UCP failures now return tools/call isError results instead of JSON-RPC errors; protected ParseGraphQlResult and CreateException overloads remain compatible.</releaseNotes>
+  <releaseNotes>The buyer MCP endpoint /ucp/mcp is served by the MCP module (VirtoCommerce.MCP) as the ucp scope: sign-in and token checks, tool switches, the audit log and connected agents in the back office, and one trace per call from the MCP tool span through UCP to XAPI. Breaking changes: requires the MCP module and platform 3.1085.0; the Application Insights compatibility bridge and UCP:Observability:EnableApplicationInsightsCompatibilityBridge are removed (send telemetry with the OpenTelemetry module, OpenTelemetry:AzureMonitor:ConnectionString); UcpMcpStartup, UcpMcpSessionService, UcpMcpBuyerAuthenticationMiddleware, UcpOAuthMetadataController, UcpProtectedResourceMetadata, UcpMcpActivityStatusFilter and UcpApplicationInsightsActivityBridge are removed; REST XAPI failures return HTTP 200 with the original GraphQL envelope, and MCP failures return tools/call isError results.</releaseNotes>
   <copyright>Copyright © 2026 VirtoCommerce. All rights reserved</copyright>
   <tags>ucp commerce mcp checkout catalog cart</tags>
   <useFullTypeNameInSwagger>false</useFullTypeNameInSwagger>

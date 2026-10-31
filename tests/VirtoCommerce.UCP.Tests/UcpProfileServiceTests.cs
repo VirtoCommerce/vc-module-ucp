@@ -41,7 +41,9 @@ public class UcpProfileServiceTests
         Assert.Equal("https://shop.example/ucp/mcp", Assert.Single(profile.Ucp.Services[ModuleConstants.Discovery.Service]).Endpoint);
         Assert.Equal("https://shop.example/ucp/v1", profile.Endpoints.UcpBaseUrl);
         Assert.Equal("https://shop.example", profile.StorefrontOrigin);
-        Assert.Equal("https://shop.example/checkout?ucp_session={token}", profile.Endpoints.HandoffUrlTemplate);
+        // Checkout links follow the store, then UCP:StorefrontOrigin, as UcpCheckoutService builds them; PublicOrigin does not change them.
+        Assert.Equal(publicOverride ? "https://other.example/checkout?ucp_session={token}" : "https://shop.example/checkout?ucp_session={token}",
+            profile.Endpoints.HandoffUrlTemplate);
         Assert.Equal("https://shop.example/", profile.Auth.AuthorizationServer);
         Assert.Equal("https://shop.example/.well-known/oauth-protected-resource/ucp/mcp", profile.Auth.ProtectedResourceMetadata);
     }
@@ -195,6 +197,39 @@ public class UcpProfileServiceTests
         Assert.Single(profile.Stores);
         Assert.Equal("https://localhost:3000", profile.StorefrontOrigin);
         Assert.Equal("https://localhost:3000/checkout?ucp_session={token}", profile.Endpoints.HandoffUrlTemplate);
+    }
+
+    [Fact]
+    public async Task GetProfile_AdvertisesTheCheckoutLinkOfTheStore_When_PublicAndStorefrontOriginsDiffer()
+    {
+        var httpContextAccessor = new HttpContextAccessor { HttpContext = new DefaultHttpContext() };
+        var service = new TestUcpProfileService(
+            Options.Create(new UcpOptions
+            {
+                DefaultStoreId = "store-acme",
+                PublicOrigin = "https://agents.example",
+                StorefrontOrigin = "https://fallback.example",
+            }),
+            httpContextAccessor,
+            new Store { Id = "store-acme", Name = "ACME", SecureUrl = "https://shop.example/" });
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Equal("https://shop.example/checkout?ucp_session={token}", profile.Endpoints.HandoffUrlTemplate);
+    }
+
+    [Fact]
+    public async Task GetProfile_ListsEveryMcpTool_And_EveryErrorCode()
+    {
+        var service = new UcpProfileService(
+            Options.Create(new UcpOptions()),
+            UcpPublicOriginResolverTests.CreateResolver(new HttpContextAccessor()));
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Contains(ModuleConstants.McpTools.LogoutBuyer, profile.McpTools);
+        Assert.Equal(18, profile.McpTools.Count);
+        Assert.Contains(ModuleConstants.ErrorCodes.HandoffInProgress, profile.Errors.Codes);
     }
 
     [Fact]

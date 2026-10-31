@@ -39,6 +39,7 @@ public class UcpProfileService : IUcpProfileService
     private static readonly string[] SupportedMcpTools =
     [
         ModuleConstants.McpTools.LinkBuyerIdentity,
+        ModuleConstants.McpTools.LogoutBuyer,
         ModuleConstants.McpTools.GetStoreCapabilities,
         ModuleConstants.McpTools.SearchProducts,
         ModuleConstants.McpTools.GetProduct,
@@ -62,7 +63,7 @@ public class UcpProfileService : IUcpProfileService
         "For physical goods, shipping_address is required before hosted handoff when it is not already present on the cart.",
         "create_checkout and handoff_checkout accept shipping_address; billing_address can mirror shipping_address unless a separate billing address is supplied.",
         "Delivery and shipping addresses belong in shipping_address, not notes. Notes are order comments only.",
-        "shipping_address and billing_address require recipient first_name and last_name.",
+        "shipping_address requires recipient first_name, last_name, and postal_code; billing_address requires first_name and last_name.",
         "Hosted checkout address editing works best with recipient first_name, last_name, email, and postal_code.",
         "Country names should be resolved with resolve_country or list_countries before checkout; list_regions resolves province or region ids when the selected country defines regions.",
         "country_code may be ISO2 in tool input, but UCP normalizes it with Virto Commerce platform ICountriesService before writing XCart. region/region_id are normalized with platform country regions when the selected country has regions; city remains a free-text field.",
@@ -81,6 +82,7 @@ public class UcpProfileService : IUcpProfileService
     private static readonly (string Name, string Method, string Path, string Capability, string Status, string Description)[] EndpointOperations =
     [
         (ModuleConstants.McpTools.LinkBuyerIdentity, "MCP", ModuleConstants.Endpoints.Mcp, "identity_linking", "available", "Trigger Platform OAuth account linking before buyer-sensitive commerce operations."),
+        (ModuleConstants.McpTools.LogoutBuyer, "MCP", ModuleConstants.Endpoints.Mcp, "identity_linking", "available", "Sign the buyer out by revoking the current Platform OAuth authorization, when the buyer asks to log out."),
         (ModuleConstants.McpTools.GetStoreCapabilities, "GET", ModuleConstants.Endpoints.Discovery, "profile", "available", "Read UCP capabilities, callable MCP tools, endpoint metadata, auth hints, headers, and integration guidance."),
         (ModuleConstants.McpTools.SearchProducts, "POST", ModuleConstants.Endpoints.CatalogSearch, ModuleConstants.Capabilities.Catalog, "available", "Search buyer-aware catalog products."),
         (ModuleConstants.McpTools.GetProduct, "GET", ModuleConstants.Endpoints.CatalogProduct, ModuleConstants.Capabilities.Catalog, "available", "Get one buyer-aware product by stable product id."),
@@ -166,7 +168,7 @@ public class UcpProfileService : IUcpProfileService
             Endpoints = new UcpEndpointProfile
             {
                 UcpBaseUrl = BuildUcpBaseUrl(publicOrigin),
-                HandoffUrlTemplate = GetHandoffTemplate(origin),
+                HandoffUrlTemplate = GetHandoffTemplate(storeProfile, origin),
             },
             Auth = new UcpProfileAuth
             {
@@ -192,6 +194,7 @@ public class UcpProfileService : IUcpProfileService
                     ModuleConstants.ErrorCodes.InvalidRequest,
                     ModuleConstants.ErrorCodes.IdentityRequired,
                     ModuleConstants.ErrorCodes.BuyerContextMismatch,
+                    ModuleConstants.ErrorCodes.HandoffInProgress,
                     ModuleConstants.ErrorCodes.MissingStoreId,
                     ModuleConstants.ErrorCodes.ProductNotFound,
                     ModuleConstants.ErrorCodes.CartNotFound,
@@ -463,12 +466,16 @@ public class UcpProfileService : IUcpProfileService
             : origin + ModuleConstants.Endpoints.McpProtectedResourceMetadata;
     }
 
-    protected virtual string GetHandoffTemplate(string origin)
+    // The template of the links UcpCheckoutService.BuildContinueUrl creates: the configured template, then the store's URL,
+    // then UCP:StorefrontOrigin; the profile's origin only when none of them is set.
+    protected virtual string GetHandoffTemplate(UcpStoreProfile store, string origin)
     {
         if (!string.IsNullOrWhiteSpace(_options.HandoffUrlTemplate))
         {
             return _options.HandoffUrlTemplate;
         }
+
+        origin = FirstNotEmpty(store?.SecureUrl, store?.Url, _options.StorefrontOrigin, origin)?.TrimEnd('/');
 
         return string.IsNullOrWhiteSpace(origin)
             ? "/checkout?ucp_session={token}"
