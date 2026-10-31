@@ -1,4 +1,4 @@
-# Virto Commerce UCP Module 
+# Universal Commerce Protocol (UCP) Module 
 
 The Virto Commerce UCP module exposes HTTP APIs for Universal Commerce Protocol (UCP) on top of existing Virto Commerce Platform capabilities.
 
@@ -349,8 +349,7 @@ Configuration is read from the `UCP` section:
     "HandoffTokenTtlMinutes": 15,
     "AnonymousCatalog": true,
     "Observability": {
-      "InputCaptureMode": "ErrorsOnly",
-      "EnableApplicationInsightsCompatibilityBridge": true
+      "InputCaptureMode": "ErrorsOnly"
     }
   }
 }
@@ -368,7 +367,6 @@ Configuration is read from the `UCP` section:
 | `UCP:HandoffTokenTtlMinutes` | Integer | `15` | Absolute expiration of temporary checkout handoff sessions in the handoff session store. |
 | `UCP:AnonymousCatalog` | Boolean | `true` | Allows anonymous catalog search and product detail requests. |
 | `UCP:Observability:InputCaptureMode` | Enum | `ErrorsOnly` | Controls the bounded allowlisted operation input in logs and span attributes: `None`, `ErrorsOnly`, or `Always`. Trace correlation, safe context attributes, and counters remain enabled in every mode. |
-| `UCP:Observability:EnableApplicationInsightsCompatibilityBridge` | Boolean | `true` | Exports UCP activities through the classic Virto Commerce Application Insights module. Disable it when OpenTelemetry already exports the same traces to the target Application Insights resource. |
 
 If `DefaultStoreId` is not configured, discovery reads open stores from the Store module. If one store is found, `/.well-known/ucp` returns it as `default_store_id`, `store`, and the only `stores[]` item. If multiple stores are found, discovery returns them in `stores[]` and the client must choose a store explicitly.
 
@@ -720,7 +718,7 @@ MCP/REST request
       └─ existing SQL, Elastic, HTTP, cache, and other dependency spans
 ```
 
-Each actual in-process XAPI execution gets its own span. UCP does not create or modify an OpenTelemetry provider and does not configure an OTLP exporter, endpoint, sampler, service resource, Serilog sink, or minimum logging level; those remain controlled by Platform and the installed observability module. When the classic Virto Commerce Application Insights module is installed, UCP can additionally use a small compatibility bridge to export these activities as correlated dependencies.
+Each actual in-process XAPI execution gets its own span. UCP does not create or modify an OpenTelemetry provider and does not configure an OTLP exporter, endpoint, sampler, service resource, Serilog sink, or minimum logging level; those remain controlled by Platform and the Virto Commerce OpenTelemetry module.
 
 Each UCP operation writes one structured terminal log: `Information` for success/rejection/cancellation and `Error` for failures. The log contains outcome, duration, XAPI call/failed/canceled/GraphQL-error counts, factual XAPI mutation attempt/failed counts, and trace/span ids. It does not infer transaction commit state or retry safety.
 
@@ -761,10 +759,12 @@ UCP deliberately does not register its sources or meter with the process-wide Op
     "Endpoint": "http://localhost:4317",
     "Sources": [
       "VirtoCommerce.UCP",
+      "VirtoCommerce.MCP",
       "Experimental.ModelContextProtocol"
     ],
     "Meters": [
-      "VirtoCommerce.UCP"
+      "VirtoCommerce.UCP",
+      "VirtoCommerce.MCP"
     ]
   }
 }
@@ -772,9 +772,11 @@ UCP deliberately does not register its sources or meter with the process-wide Op
 
 Set the process-wide `OTEL_SERVICE_NAME` as usual. `Sources` and `Meters` must be arrays, and every value must match the corresponding source or meter name exactly. Without this opt-in, UCP still works, but its custom spans or metrics are not exported by that provider. In Azure Monitor, UCP/XAPI `ActivityKind.Internal` spans map to dependencies and their attributes become custom dimensions; the trace id correlates them with ASP.NET requests and structured logs.
 
-The official Virto Commerce Application Insights module currently uses the classic Application Insights SDK, which does not export arbitrary UCP `ActivitySource` spans by itself. `EnableApplicationInsightsCompatibilityBridge=true` therefore maps UCP, XAPI, and MCP activities to classic `DependencyTelemetry` without creating a second OpenTelemetry provider. The bridge requests activity data without setting the W3C `Recorded` flag: the OpenTelemetry sampler remains authoritative for the OpenTelemetry pipeline, while the classic Application Insights telemetry processors and sampling settings apply to the bridge output. Set this option to `false` when the OpenTelemetry pipeline already exports the same traces to the target Application Insights resource, preventing duplicate dependencies.
+`VirtoCommerce.MCP` adds the MCP module's span for every tool call (`MCP tool <tool>`, with scope, client and outcome) and its metrics; UCP's `UCP <operation>` span and its XAPI spans run inside it, so one buyer agent call is one trace.
 
-The MCP C# SDK 1.4 copies the complete `content` of an `isError: true` result into the `tools/call` activity status description independently of logging levels. For the 16 UCP tools, an incoming MCP message filter keeps the `Error` status but replaces that description with the bounded `UCP tool returned an error.` after the response has been produced. The client still receives the lossless XAPI envelope. Foreign MCP tools and successful calls are not changed.
+To send these traces, metrics and logs to Application Insights, set `OpenTelemetry:AzureMonitor:ConnectionString` in the OpenTelemetry module: it exports the same signals with the Azure Monitor exporter, with or without an OTLP collector. UCP no longer has a bridge of its own to the classic Application Insights SDK; a deployment that used `UCP:Observability:EnableApplicationInsightsCompatibilityBridge` switches to the OpenTelemetry module.
+
+The MCP SDK copies the text of an `isError: true` result into the status description of its `tools/call` span. The MCP module keeps the `Error` status but replaces that description with a fixed text for every tool, so a buyer's data never reaches traces through it; the client still receives the lossless XAPI envelope.
 
 ## Build and Test
 

@@ -100,25 +100,6 @@ public class UcpMcpChallengeWriterTests
         Assert.Equal("https://admin.example", await resolver.GetOriginAsync(context, new McpScope { Name = McpScopes.Admin }));
     }
 
-    [Theory]
-    [InlineData(McpScopes.Ucp, true)]
-    [InlineData(McpScopes.Admin, false)]
-    [InlineData(null, false)]
-    public void IsUcpScope_LimitsTheUcpCallFilterToTheUcpScope(string scopeName, bool expected)
-    {
-        var context = new DefaultHttpContext();
-        if (scopeName != null)
-        {
-            context.SetMcpScope(new McpScope { Name = scopeName });
-        }
-
-        using var services = new ServiceCollection()
-            .AddSingleton<IHttpContextAccessor>(new HttpContextAccessor { HttpContext = context })
-            .BuildServiceProvider();
-
-        Assert.Equal(expected, VirtoCommerce.UCP.Web.Module.IsUcpScope(services));
-    }
-
     private static DefaultHttpContext CreateContext()
     {
         return new DefaultHttpContext { Response = { Body = new MemoryStream() } };

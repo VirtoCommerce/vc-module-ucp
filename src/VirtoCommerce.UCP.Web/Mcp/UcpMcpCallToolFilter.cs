@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.Platform.Core.Common;
 using VirtoCommerce.StoreModule.Core.Services;
 using VirtoCommerce.UCP.Core;
@@ -18,7 +19,7 @@ using VirtoCommerce.UCP.Web.Diagnostics;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
 
-public sealed class UcpMcpCallToolFilter
+public sealed class UcpMcpCallToolFilter : IMcpCallToolFilter
 {
     private static readonly EventId McpOperationExceptionEvent = new(2002, "UcpMcpOperationException");
 
@@ -53,9 +54,9 @@ public sealed class UcpMcpCallToolFilter
         string toolName,
         CancellationToken cancellationToken)
     {
-        var parentActivity = Activity.Current?.Source.Name == UcpDiagnostics.McpActivitySourceName
-            ? Activity.Current
-            : null;
+        // The MCP module's span of the call (or the SDK's, when only it is listened to): UCP's span runs inside it, and
+        // its trace is returned to the agent when UCP's spans are not exported.
+        var parentActivity = Activity.Current;
         var telemetryStarted = _operationTelemetry.TryBegin(toolName, "mcp", parentActivity?.Context);
         if (telemetryStarted)
         {

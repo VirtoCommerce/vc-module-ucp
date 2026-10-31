@@ -24,6 +24,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using VirtoCommerce.MCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Models;
@@ -155,7 +156,7 @@ public class UcpObservabilityContractTests
     [Fact]
     public async Task UcpMcpCallToolFilter_ReturnsExactXApiEnvelopeInStructuredContentAndModelVisibleText()
     {
-        const string parentSourceName = UcpDiagnostics.McpActivitySourceName;
+        const string parentSourceName = McpDiagnostics.SdkActivitySourceName;
         var stopped = new ConcurrentQueue<Activity>();
         using var listener = CreateActivityListener(parentSourceName, stopped);
         using var parentSource = new ActivitySource(parentSourceName);
@@ -195,7 +196,7 @@ public class UcpObservabilityContractTests
     [Fact]
     public async Task UcpMcpCallToolFilter_ReturnsUcpDetailAndTraceMetadata()
     {
-        const string parentSourceName = UcpDiagnostics.McpActivitySourceName;
+        const string parentSourceName = McpDiagnostics.SdkActivitySourceName;
         var stopped = new ConcurrentQueue<Activity>();
         using var listener = CreateActivityListener(parentSourceName, stopped);
         using var parentSource = new ActivitySource(parentSourceName);
@@ -236,9 +237,37 @@ public class UcpObservabilityContractTests
     }
 
     [Fact]
+    public async Task UcpMcpCallToolFilter_ReturnsTraceOfTheMcpModuleSpan_WhenUcpSpansAreNotExported()
+    {
+        // The MCP module's call filter runs outside UCP's, so its span is the current one; only the MCP sources are exported.
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == McpDiagnostics.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var parentSource = new ActivitySource(McpDiagnostics.ActivitySourceName);
+        using var parent = parentSource.StartActivity($"MCP tool {ModuleConstants.McpTools.GetProduct}");
+        Assert.NotNull(parent);
+
+        var filter = new UcpMcpCallToolFilter(
+            new UcpOperationTelemetry(new CapturingTelemetryLogger()),
+            NullLogger<UcpMcpCallToolFilter>.Instance);
+        var context = CreateCallToolContext(ModuleConstants.McpTools.GetProduct);
+        var exception = new UcpException("invalid_request", RawCanary, StatusCodes.Status400BadRequest);
+        McpRequestHandler<CallToolRequestParams, CallToolResult> next =
+            (_, _) => ValueTask.FromException<CallToolResult>(exception);
+
+        var result = await filter.InvokeAsync(next, context, TestContext.Current.CancellationToken);
+
+        Assert.Equal($"Trace ID: {parent.TraceId}", Assert.IsType<TextContentBlock>(result.Content[^1]).Text);
+        Assert.Equal(parent.TraceId.ToString(), result.Meta?["trace_id"]?.GetValue<string>());
+    }
+
+    [Fact]
     public async Task UcpMcpCallToolFilter_LogsHandledServerExceptionWithOriginalException()
     {
-        const string parentSourceName = UcpDiagnostics.McpActivitySourceName;
+        const string parentSourceName = McpDiagnostics.SdkActivitySourceName;
         var stopped = new ConcurrentQueue<Activity>();
         using var listener = CreateActivityListener(parentSourceName, stopped);
         using var parentSource = new ActivitySource(parentSourceName);
@@ -271,7 +300,7 @@ public class UcpObservabilityContractTests
     [Fact]
     public async Task UcpMcpCallToolFilter_CreatesInternalChildOfMcpAndLogsBeforeUcpSpanStops()
     {
-        const string parentSourceName = UcpDiagnostics.McpActivitySourceName;
+        const string parentSourceName = McpDiagnostics.SdkActivitySourceName;
         var stopped = new ConcurrentQueue<Activity>();
         using var listener = CreateActivityListener(parentSourceName, stopped);
         using var parentSource = new ActivitySource(parentSourceName);
@@ -593,79 +622,6 @@ public class UcpObservabilityContractTests
     }
 
     [Fact]
-    public async Task UcpMcpActivityStatusFilter_ReplacesOnlyUcpToolErrorPayload()
-    {
-        var stopped = new ConcurrentQueue<Activity>();
-        using var listener = CreateActivityListener(UcpDiagnostics.McpActivitySourceName, stopped);
-        using var source = new ActivitySource(UcpDiagnostics.McpActivitySourceName);
-        using var activity = source.StartActivity(
-            $"tools/call {ModuleConstants.McpTools.SearchProducts}",
-            ActivityKind.Server);
-        Assert.NotNull(activity);
-
-        var context = CreateMessageContext(ModuleConstants.McpTools.SearchProducts);
-        McpMessageHandler sdkHandler = (_, _) =>
-        {
-            Activity.Current.SetStatus(ActivityStatusCode.Error, RawXApiJson);
-            return Task.CompletedTask;
-        };
-
-        await UcpMcpActivityStatusFilter.Create()(sdkHandler)(
-            context,
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ActivityStatusCode.Error, activity.Status);
-        Assert.Equal(UcpMcpActivityStatusFilter.ErrorStatusDescription, activity.StatusDescription);
-        Assert.DoesNotContain(RawCanary, activity.StatusDescription, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task UcpMcpActivityStatusFilter_DoesNotChangeForeignToolErrorPayload()
-    {
-        var stopped = new ConcurrentQueue<Activity>();
-        using var listener = CreateActivityListener(UcpDiagnostics.McpActivitySourceName, stopped);
-        using var source = new ActivitySource(UcpDiagnostics.McpActivitySourceName);
-        using var activity = source.StartActivity("tools/call foreign_tool", ActivityKind.Server);
-        Assert.NotNull(activity);
-
-        var context = CreateMessageContext("foreign_tool");
-        McpMessageHandler sdkHandler = (_, _) =>
-        {
-            Activity.Current.SetStatus(ActivityStatusCode.Error, RawCanary);
-            return Task.CompletedTask;
-        };
-
-        await UcpMcpActivityStatusFilter.Create()(sdkHandler)(
-            context,
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ActivityStatusCode.Error, activity.Status);
-        Assert.Equal(RawCanary, activity.StatusDescription);
-    }
-
-    [Fact]
-    public async Task UcpMcpActivityStatusFilter_DoesNotChangeSuccessfulUcpToolSpan()
-    {
-        var stopped = new ConcurrentQueue<Activity>();
-        using var listener = CreateActivityListener(UcpDiagnostics.McpActivitySourceName, stopped);
-        using var source = new ActivitySource(UcpDiagnostics.McpActivitySourceName);
-        using var activity = source.StartActivity(
-            $"tools/call {ModuleConstants.McpTools.SearchProducts}",
-            ActivityKind.Server);
-        Assert.NotNull(activity);
-
-        var context = CreateMessageContext(ModuleConstants.McpTools.SearchProducts);
-        McpMessageHandler sdkHandler = (_, _) => Task.CompletedTask;
-
-        await UcpMcpActivityStatusFilter.Create()(sdkHandler)(
-            context,
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(ActivityStatusCode.Unset, activity.Status);
-        Assert.Null(activity.StatusDescription);
-    }
-
-    [Fact]
     public async Task ExecuteDependency_CreatesCorrelatedPlatformDependencySpan()
     {
         const string parentSourceName = "VCST5544.Tests.DirectDependency";
@@ -715,76 +671,6 @@ public class UcpObservabilityContractTests
         Assert.Equal("error", dependency.GetTagItem("vc.dependency.outcome"));
         Assert.Equal(nameof(InvalidOperationException), dependency.StatusDescription);
         Assert.Equal(typeof(InvalidOperationException).FullName, dependency.GetTagItem("error.type"));
-    }
-
-    [Fact]
-    public void UcpApplicationInsightsActivityBridge_MapsXApiActivityWithoutBreakingW3CCorrelation()
-    {
-        const string parentSourceName = "VCST5544.Tests.ApplicationInsightsParent";
-        var stopped = new ConcurrentQueue<Activity>();
-        using var listener = CreateActivityListener(parentSourceName, stopped);
-        using var parentSource = new ActivitySource(parentSourceName);
-        using var parent = parentSource.StartActivity("UCP search_products", ActivityKind.Internal);
-        Assert.NotNull(parent);
-
-        using (var xApiActivity = UcpDiagnostics.StartXApi("XCatalog", "UcpSearchProducts", "query", 1))
-        {
-            Assert.NotNull(xApiActivity);
-            xApiActivity.SetTag("vc.xapi.error.codes", "NULL_REFERENCE");
-            xApiActivity.SetTag("vc.catalog.search.query", "микроволновка");
-            xApiActivity.SetStatus(ActivityStatusCode.Error, "GraphQL errors");
-        }
-
-        var activity = Assert.Single(stopped, item => item.DisplayName == "XAPI XCatalog UcpSearchProducts");
-        var dependency = UcpApplicationInsightsActivityBridge.CreateDependencyTelemetry(activity);
-
-        Assert.Equal("XAPI XCatalog UcpSearchProducts", dependency.Name);
-        Assert.Equal("XAPI", dependency.Type);
-        Assert.Equal("XCatalog", dependency.Target);
-        Assert.False(dependency.Success);
-        Assert.Equal("NULL_REFERENCE", dependency.ResultCode);
-        Assert.Equal(activity.TraceId.ToString(), dependency.Context.Operation.Id);
-        Assert.Equal(activity.ParentSpanId.ToString(), dependency.Context.Operation.ParentId);
-        Assert.Equal(activity.SpanId.ToString(), dependency.Id);
-        Assert.Equal("микроволновка", dependency.Properties["vc.catalog.search.query"]);
-        Assert.Equal("UcpSearchProducts", dependency.Properties["graphql.operation.name"]);
-    }
-
-    [Fact]
-    public void UcpApplicationInsightsActivityBridge_RequestsDataWithoutForcingRecordedFlag()
-    {
-        Assert.Equal(
-            ActivitySamplingResult.AllData,
-            UcpApplicationInsightsActivityBridge.GetSamplingResult(
-                UcpDiagnostics.ActivitySourceName,
-                $"UCP {ModuleConstants.Operations.SearchProducts}"));
-        Assert.Equal(
-            ActivitySamplingResult.AllData,
-            UcpApplicationInsightsActivityBridge.GetSamplingResult(
-                UcpDiagnostics.McpActivitySourceName,
-                $"tools/call {ModuleConstants.McpTools.SearchProducts}"));
-        Assert.Equal(
-            ActivitySamplingResult.None,
-            UcpApplicationInsightsActivityBridge.GetSamplingResult(
-                UcpDiagnostics.McpActivitySourceName,
-                "tools/list"));
-    }
-
-    [Fact]
-    public async Task UcpApplicationInsightsActivityBridge_IsNoOpWithoutOfficialModule()
-    {
-        await using var serviceProvider = new ServiceCollection().BuildServiceProvider();
-        using var listener = new UcpApplicationInsightsActivityBridge(
-            serviceProvider,
-            NullLogger<UcpApplicationInsightsActivityBridge>.Instance);
-
-        var exception = await Record.ExceptionAsync(async () =>
-        {
-            await listener.StartAsync(TestContext.Current.CancellationToken);
-            await listener.StopAsync(TestContext.Current.CancellationToken);
-        });
-
-        Assert.Null(exception);
     }
 
     private static ActivityListener CreateActivityListener(
@@ -865,7 +751,7 @@ public class UcpObservabilityContractTests
     [Fact]
     public async Task UcpMcpCallToolFilter_ReturnsSafeTraceableResultForUnexpectedExceptions()
     {
-        const string parentSourceName = UcpDiagnostics.McpActivitySourceName;
+        const string parentSourceName = McpDiagnostics.SdkActivitySourceName;
         var stopped = new ConcurrentQueue<Activity>();
         using var listener = CreateActivityListener(parentSourceName, stopped);
         using var parentSource = new ActivitySource(parentSourceName);

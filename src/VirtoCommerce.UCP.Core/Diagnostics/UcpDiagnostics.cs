@@ -10,7 +10,6 @@ namespace VirtoCommerce.UCP.Core.Diagnostics;
 public static class UcpDiagnostics
 {
     public const string ActivitySourceName = "VirtoCommerce.UCP";
-    public const string McpActivitySourceName = "Experimental.ModelContextProtocol";
     public const string MeterName = "VirtoCommerce.UCP";
 
     public static readonly string ModuleVersion =
