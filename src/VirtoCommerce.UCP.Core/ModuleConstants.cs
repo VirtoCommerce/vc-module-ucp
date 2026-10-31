@@ -241,27 +241,6 @@ public static class ModuleConstants
         }
     }
 
-    public static class Security
-    {
-        public static class Permissions
-        {
-            public const string Access = "ucp:access";
-            public const string Create = "ucp:create";
-            public const string Read = "ucp:read";
-            public const string Update = "ucp:update";
-            public const string Delete = "ucp:delete";
-
-            public static string[] AllPermissions { get; } =
-            [
-                Access,
-                Create,
-                Read,
-                Update,
-                Delete,
-            ];
-        }
-    }
-
     // UCP settings of a store, edited in the store's settings in the back office. They replace the configuration keys of
     // the same name, which stay a fallback for requests that no store is resolved for.
     public static class Settings

@@ -10,7 +10,6 @@ using VirtoCommerce.MCP.Core.Extensions;
 using VirtoCommerce.MCP.Core.Models;
 using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.Platform.Core.Modularity;
-using VirtoCommerce.Platform.Core.Security;
 using VirtoCommerce.Platform.Core.Settings;
 using VirtoCommerce.StoreModule.Core.Model;
 using VirtoCommerce.UCP.Core;
@@ -103,9 +102,6 @@ public class Module : IModule, IHasConfiguration
     public void PostInitialize(IApplicationBuilder appBuilder)
     {
         var serviceProvider = appBuilder.ApplicationServices;
-
-        var permissionsRegistrar = serviceProvider.GetRequiredService<IPermissionsRegistrar>();
-        permissionsRegistrar.RegisterPermissions(ModuleInfo.Id, "UCP", ModuleConstants.Security.Permissions.AllPermissions);
 
         // The UCP settings of a store, in the store's settings in the back office.
         var settingsRegistrar = serviceProvider.GetRequiredService<ISettingsRegistrar>();

@@ -79,7 +79,7 @@ Menu names in the assistants change from release to release; if a step does not 
 
 ### Set up the store (administrator, once)
 
-1. **Install** `VirtoCommerce.MCP` and `VirtoCommerce.UCP` in the Virto Start platform application, with the other modules listed in [Dependencies](#dependencies). The MCP module serves the endpoint and its back office; UCP brings the shopping tools. Grant the people who look after the assistants `mcp:audit:read`, `mcp:tools:manage` and `mcp:agents:manage`. Buyers need no permission to shop anonymously.
+1. **Install** `VirtoCommerce.MCP` and `VirtoCommerce.UCP` in the Virto Start platform application, with the other modules listed in [Dependencies](#dependencies). The MCP module serves the endpoint and its back office; UCP brings the shopping tools. Grant the people who look after the assistants `mcp:audit:read` and `mcp:manage`. Buyers need no permission.
 1. **Check the store.** UCP takes everything from the store whose URL is the host of the request. In the back office, open the store: its **Secure URL** (or **URL**) is `https://store.example.com`, and its default currency and language are the ones assistants should use.
 1. **Route the paths** `/ucp` and `/.well-known/ucp` from the storefront host to the platform, in the environment's `infra/environments.yml` of the Virto Cloud deployment repository, and deploy the environment:
 
@@ -313,7 +313,7 @@ Shopping assistants use the MCP module's back-office screens, under **Configurat
 * **Agent tools**: switch a shopping tool off without a deployment, for example `checkout_and_handoff`, or the whole `ucp` scope.
 * **Connected agents**: the assistants buyers signed in to. **Disconnect** ends a buyer's sign-in at once; the buyer signs in again to continue.
 
-The screens need the MCP module's permissions `mcp:audit:read`, `mcp:tools:manage` and `mcp:agents:manage`; see [Work with agents in the back office](https://github.com/VirtoCommerce/vc-module-mcp#work-with-agents-in-the-back-office).
+The screens need the MCP module's permissions `mcp:audit:read` and `mcp:manage`; see [Work with agents in the back office](https://github.com/VirtoCommerce/vc-module-mcp#work-with-agents-in-the-back-office).
 
 ## Configuration
 
@@ -405,17 +405,14 @@ The scope is on by default. The value is read at startup, so a change applies af
 
 ### Permissions
 
-The module registers the following permissions in the **UCP** group:
+The module registers no permissions of its own. What a buyer may do is decided elsewhere:
 
-| Permission | Description |
+| What | Decided by |
 | --- | --- |
-| `ucp:access` | Access UCP module resources |
-| `ucp:create` | Create UCP data |
-| `ucp:read` | View UCP data |
-| `ucp:update` | Update UCP data |
-| `ucp:delete` | Delete UCP data |
-
-Public UCP protocol endpoints (`/.well-known/ucp`, `/ucp/v1/*`, `/ucp/mcp`) are anonymous protocol surfaces; these permissions are reserved for the module's administrative capabilities.
+| Anonymous shopping | The store setting **Allow anonymous users**; when it is off, `/ucp/mcp` asks for a sign-in from the first request |
+| Signed-in buyers | The platform's OAuth sign-in (`link_buyer_identity`); the buyer's carts, orders and prices come from the Experience API, which checks that they belong to the buyer |
+| The back office of the assistants | The MCP module's `mcp:audit:read` and `mcp:manage` |
+| UCP's store settings | The Store module's permissions to edit a store |
 
 ### Multiple instances and the public origin
 
