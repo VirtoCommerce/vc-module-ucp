@@ -24,7 +24,6 @@ using VirtoCommerce.UCP.Web.Services;
 using VirtoCommerce.UCP.Web.Swagger;
 using VirtoCommerce.Xapi.Core.Extensions;
 using VirtoCommerce.Xapi.Core.Infrastructure;
-using McpScopes = VirtoCommerce.MCP.Core.McpScopes;
 
 namespace VirtoCommerce.UCP.Web;
 

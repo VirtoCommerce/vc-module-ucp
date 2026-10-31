@@ -14,7 +14,6 @@ using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Mcp;
 using VirtoCommerce.UCP.Web.Mcp.Models;
 using Xunit;
-using McpScopes = VirtoCommerce.MCP.Core.McpScopes;
 using McpSensitiveArguments = VirtoCommerce.MCP.Core.McpSensitiveArguments;
 
 namespace VirtoCommerce.UCP.Tests;

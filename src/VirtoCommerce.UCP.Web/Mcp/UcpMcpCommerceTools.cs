@@ -11,7 +11,6 @@ using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Mcp.Models;
-using McpScopes = VirtoCommerce.MCP.Core.McpScopes;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
 
@@ -19,6 +18,8 @@ namespace VirtoCommerce.UCP.Web.Mcp;
 [McpScope(ModuleConstants.McpScopeName)]
 public static class UcpMcpCommerceTools
 {
+    private const string FlatArgumentsJustification = "Each parameter is an argument of the MCP tool's input schema; an agent fills flat arguments more reliably than a nested object.";
+
     [McpServerTool(Name = ModuleConstants.McpTools.GetStoreCapabilities, ReadOnly = true, Destructive = false)]
     [Description("Discover UCP capabilities for this Virto Commerce storefront.")]
     public static Task<object> GetStoreCapabilities(
@@ -249,6 +250,7 @@ public static class UcpMcpCommerceTools
         });
     }
 
+    [SuppressMessage("Major Code Smell", "S107:Methods should not have too many parameters", Justification = FlatArgumentsJustification)]
     [McpServerTool(Name = ModuleConstants.McpTools.CreateCheckout, ReadOnly = false, Destructive = false)]
     [Description(
         "Create checkout in this Virto Commerce storefront. For the user's account or organization, do not call this tool " +
@@ -296,6 +298,7 @@ public static class UcpMcpCommerceTools
         });
     }
 
+    [SuppressMessage("Major Code Smell", "S107:Methods should not have too many parameters", Justification = FlatArgumentsJustification)]
     [McpServerTool(Name = ModuleConstants.McpTools.UpdateCheckout, ReadOnly = false, Destructive = false)]
     [Description("Update checkout address or buyer data in this Virto Commerce storefront. For the user's account or organization, do not call this tool until link_buyer_identity succeeds.")]
     public static Task<object> UpdateCheckout(
@@ -362,6 +365,7 @@ public static class UcpMcpCommerceTools
         return Execute(() => checkoutService.GetPaymentHandlers(checkout_id, cancellationToken));
     }
 
+    [SuppressMessage("Major Code Smell", "S107:Methods should not have too many parameters", Justification = FlatArgumentsJustification)]
     [McpServerTool(Name = ModuleConstants.McpTools.CheckoutAndHandoff, ReadOnly = false, Destructive = false)]
     [Description(
         "Create checkout and immediately create a hosted checkout handoff URL. For the user's account or organization, " +
@@ -418,6 +422,7 @@ public static class UcpMcpCommerceTools
         });
     }
 
+    [SuppressMessage("Major Code Smell", "S107:Methods should not have too many parameters", Justification = FlatArgumentsJustification)]
     [McpServerTool(Name = ModuleConstants.McpTools.HandoffCheckout, ReadOnly = false, Destructive = false)]
     [Description(
         "Create a hosted checkout handoff URL. For the user's account or organization, do not call this tool until " +

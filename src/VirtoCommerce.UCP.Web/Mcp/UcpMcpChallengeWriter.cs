@@ -2,7 +2,6 @@ using System;
 using VirtoCommerce.MCP.Core.Models;
 using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.UCP.Core;
-using McpScopes = VirtoCommerce.MCP.Core.McpScopes;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
 
@@ -14,7 +13,7 @@ public class UcpMcpChallengeWriter : McpChallengeWriter
 
     protected override object GetChallengeBody(McpChallenge challenge)
     {
-        if (!IsUcpScope(challenge?.Scope))
+        if (challenge == null || !IsUcpScope(challenge.Scope))
         {
             return base.GetChallengeBody(challenge);
         }
