@@ -65,6 +65,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
     {
         request ??= new UcpCheckoutRequest();
         NormalizeCheckoutContext(request);
+        var addressesIgnored = DiscardStoreManagedAddresses(request);
         ValidateSuppliedShippingAddress(request.ShippingAddress);
         var cart = await PrepareCartForCheckout(request, cancellationToken);
         var checkout = CreateCheckout(request, cart, StatusIncomplete);
@@ -73,10 +74,12 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         {
             Type = "info",
             Code = "handoff_required",
-            Content = "Checkout is ready for hosted handoff. Provided shipping and billing addresses are already applied to the cart.",
+            Content = _options.StoreManagedAddresses
+                ? ModuleConstants.CheckoutReadyStoreManagedMessage
+                : ModuleConstants.CheckoutReadyMessage,
             Severity = "info",
         });
-        AddAddressStateMessages(checkout, request);
+        AddAddressMessages(checkout, request, addressesIgnored);
 
         return new UcpCheckoutResponse
         {
@@ -93,6 +96,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         request ??= new UcpCheckoutRequest();
         request.CartId = FirstNotEmpty(request.CartId, checkoutId);
         NormalizeCheckoutContext(request);
+        var addressesIgnored = DiscardStoreManagedAddresses(request);
         ValidateSuppliedShippingAddress(request.ShippingAddress);
 
         var cart = await PrepareCartForCheckout(request, cancellationToken);
@@ -105,7 +109,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             Content = "Checkout data was updated. Create a new handoff URL to use the latest cart snapshot.",
             Severity = "info",
         });
-        AddAddressStateMessages(checkout, request);
+        AddAddressMessages(checkout, request, addressesIgnored);
 
         return new UcpCheckoutResponse
         {
@@ -134,12 +138,15 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         request ??= new UcpCheckoutRequest();
         request.CartId = FirstNotEmpty(request.CartId, checkoutId);
         NormalizeCheckoutContext(request);
+        var addressesIgnored = DiscardStoreManagedAddresses(request);
         ValidateSuppliedShippingAddress(request.ShippingAddress);
 
         var cart = await PrepareCartForCheckout(request, cancellationToken);
         ValidateEffectiveShippingAddress(request.ShippingAddress, cart);
-        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(Math.Max(1, _options.HandoffTokenTtlMinutes));
+        var issuedAt = DateTimeOffset.UtcNow;
+        var expiresAt = issuedAt.AddMinutes(Math.Max(1, _options.HandoffTokenTtlMinutes));
         var checkout = CreateCheckout(request, cart, StatusRequiresEscalation);
+        checkout.IssuedAt = issuedAt;
         checkout.ExpiresAt = expiresAt;
         var sessionToken = await StoreHandoffPayload(checkout, request.Context, expiresAt, cancellationToken);
         checkout.ContinueUrl = await BuildContinueUrl(sessionToken, checkout.Cart.StoreId);
@@ -150,7 +157,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             Content = "The buyer must continue in the storefront to review and complete checkout. This status does not indicate an approval requirement. The storefront applies the merchant's approval rules and payment terms.",
             Severity = "requires_buyer_review",
         });
-        AddAddressStateMessages(checkout, request);
+        AddAddressMessages(checkout, request, addressesIgnored);
 
         return new UcpCheckoutHandoffResponse
         {
@@ -228,6 +235,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             BillingAddress = payload.BillingAddress,
             ShippingMethodId = payload.ShippingMethodId,
             PaymentHandler = payload.PaymentHandler,
+            IssuedAt = payload.IssuedAt,
             ExpiresAt = payload.ExpiresAt,
         };
 
@@ -337,6 +345,24 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         request.Context.OrganizationId = FirstNotEmpty(request.OrganizationId, request.Context.OrganizationId);
     }
 
+    /// <summary>
+    /// Drops the supplied addresses when the store assigns cart addresses itself, so they cannot reach
+    /// validation, the cart, the checkout snapshot or the handoff session. Returns whether any were supplied.
+    /// </summary>
+    protected virtual bool DiscardStoreManagedAddresses(UcpCheckoutRequest request)
+    {
+        if (!_options.StoreManagedAddresses)
+        {
+            return false;
+        }
+
+        var supplied = request.ShippingAddress != null || request.BillingAddress != null;
+        request.ShippingAddress = null;
+        request.BillingAddress = null;
+
+        return supplied;
+    }
+
     protected virtual void ValidateSuppliedShippingAddress(UcpCheckoutAddress address)
     {
         if (address != null)
@@ -347,7 +373,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
 
     protected virtual void ValidateEffectiveShippingAddress(UcpCheckoutAddress requestedAddress, UcpCart cart)
     {
-        if (requestedAddress != null)
+        if (requestedAddress != null || _options.StoreManagedAddresses)
         {
             return;
         }
@@ -393,6 +419,27 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             ShippingMethodId = request.ShippingMethodId,
             PaymentHandler = FirstNotEmpty(request.PaymentHandler, ModuleConstants.PaymentHandlers.HostedCheckout),
         };
+    }
+
+    private void AddAddressMessages(UcpCheckout checkout, UcpCheckoutRequest request, bool addressesIgnored)
+    {
+        if (!_options.StoreManagedAddresses)
+        {
+            AddAddressStateMessages(checkout, request);
+
+            return;
+        }
+
+        if (addressesIgnored)
+        {
+            checkout.Messages.Add(new UcpMessage
+            {
+                Type = "info",
+                Code = ModuleConstants.MessageCodes.AddressesStoreManaged,
+                Content = ModuleConstants.StoreManagedAddressesMessage,
+                Severity = "info",
+            });
+        }
     }
 
     protected virtual void AddAddressStateMessages(UcpCheckout checkout, UcpCheckoutRequest request)
@@ -544,7 +591,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             BuyerId = buyerContext.PublicBuyerId,
             OrganizationId = buyerContext.OrganizationId,
             RequiresAuthentication = buyerContext.IsAuthenticated,
-            IssuedAt = DateTimeOffset.UtcNow,
+            IssuedAt = checkout.IssuedAt ?? DateTimeOffset.UtcNow,
             Buyer = checkout.Buyer,
             ShippingAddress = checkout.ShippingAddress,
             BillingAddress = checkout.BillingAddress,

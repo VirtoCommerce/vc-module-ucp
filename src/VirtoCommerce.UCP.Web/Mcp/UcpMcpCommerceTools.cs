@@ -19,6 +19,14 @@ namespace VirtoCommerce.UCP.Web.Mcp;
 public static class UcpMcpCommerceTools
 {
     private const string FlatArgumentsJustification = "Each parameter is an argument of the MCP tool's input schema; an agent fills flat arguments more reliably than a nested object.";
+    private const string ShippingAddressRequirement =
+        "For physical goods, do not call until shipping_address.first_name, shipping_address.last_name, and " +
+        "shipping_address.postal_code are provided, unless the store assigns cart addresses itself " +
+        "(store_managed_addresses in get_store_capabilities); ask the user for missing values.";
+
+    private const string TrackOrderNextStepNote =
+        "Its next step for track_order carries placed_after (the handoff issued_at); " +
+        "keep those arguments to track the order the buyer places.";
 
     [McpServerTool(Name = ModuleConstants.McpTools.GetStoreCapabilities, ReadOnly = true, Destructive = false)]
     [Description("Discover UCP capabilities for this Virto Commerce storefront.")]
@@ -119,7 +127,8 @@ public static class UcpMcpCommerceTools
 
     [McpServerTool(Name = ModuleConstants.McpTools.CreateCart, ReadOnly = false, Destructive = false)]
     [Description(
-        "Create a cart in this Virto Commerce storefront. Without a Platform bearer token this creates an anonymous cart. " +
+        "Create a cart in this Virto Commerce storefront, or add to the buyer's storefront cart: a signed-in buyer's lines are added to the cart they already have, " +
+        "so tell the user when it already holds items. Without a Platform bearer token this creates an anonymous cart. " +
         "If the user asks for 'my cart', to act on their behalf, or to use their account or organization, do not call this tool " +
         "until link_buyer_identity succeeds. Buyer and organization then come only from the validated Platform token; never invent them.")]
     public static Task<object> CreateCart(
@@ -156,10 +165,12 @@ public static class UcpMcpCommerceTools
 
     [McpServerTool(Name = ModuleConstants.McpTools.ListCarts, ReadOnly = true, Destructive = false)]
     [Description(
-        "List buyer-scoped carts in this Virto Commerce storefront. Anonymous continuation requires buyer_id. " +
-        "For the user's account, organization, or saved carts, do not call this tool until link_buyer_identity succeeds; " +
+        "List buyer-scoped carts in this Virto Commerce storefront. By default the result is the buyer's storefront cart(s); " +
+        "lists such as wishlists or saved-for-later carts are returned only when an explicit cart_type is passed. " +
+        "Anonymous continuation requires buyer_id. " +
+        "For the user's account or organization carts, do not call this tool until link_buyer_identity succeeds; " +
         "buyer and organization then come from the Platform token. Global cart listing is not allowed.")]
-    [SuppressMessage("Maintainability", "S107", Justification = "Parameters define the public MCP tool schema.")]
+    [SuppressMessage("Major Code Smell", "S107:Methods should not have too many parameters", Justification = FlatArgumentsJustification)]
     public static Task<object> ListCarts(
         IUcpProfileService profileService,
         IUcpCartService cartService,
@@ -168,7 +179,7 @@ public static class UcpMcpCommerceTools
         string language = null,
         [Description("Required for anonymous continuation; authenticated mode derives buyer identity from the Platform token.")] string buyer_id = null,
         string cart_name = null,
-        string cart_type = null,
+        [Description("Omit to list the storefront cart. Pass a list type such as Wishlist or SavedForLater to list those carts instead.")] string cart_type = null,
         string cursor = null,
         int limit = 10,
         string sort = null,
@@ -215,13 +226,17 @@ public static class UcpMcpCommerceTools
         });
     }
 
-    [McpServerTool(Name = ModuleConstants.McpTools.UpdateCart, ReadOnly = false, Destructive = false)]
-    [Description("Update cart state in this Virto Commerce storefront. For the user's account, organization, or cart, do not call this tool until link_buyer_identity succeeds; authenticated buyer identity comes from the Platform token.")]
+    [SuppressMessage("Major Code Smell", "S107:Methods should not have too many parameters", Justification = FlatArgumentsJustification)]
+    [McpServerTool(Name = ModuleConstants.McpTools.UpdateCart, ReadOnly = false, Destructive = true)]
+    [Description(
+        "Update cart state in this Virto Commerce storefront. This replaces the cart's line items with the complete desired line_items state: " +
+        "lines not listed are removed, so read the cart first and send every line that should remain. " +
+        "For the user's account, organization, or cart, do not call this tool until link_buyer_identity succeeds; authenticated buyer identity comes from the Platform token.")]
     public static Task<object> UpdateCart(
         IUcpProfileService profileService,
         IUcpCartService cartService,
         string cart_id,
-        IList<UcpCartLineItemRequest> line_items,
+        [Description("The complete desired line items of the cart, not a delta. Existing lines that are not listed are removed.")] IList<UcpCartLineItemRequest> line_items,
         string store_id = null,
         string currency = null,
         string language = null,
@@ -254,8 +269,7 @@ public static class UcpMcpCommerceTools
     [McpServerTool(Name = ModuleConstants.McpTools.CreateCheckout, ReadOnly = false, Destructive = false)]
     [Description(
         "Create checkout in this Virto Commerce storefront. For the user's account or organization, do not call this tool " +
-        "until link_buyer_identity succeeds. For physical goods, do not call until shipping_address.first_name, " +
-        "shipping_address.last_name, and shipping_address.postal_code are provided; ask the user for missing values.")]
+        "until link_buyer_identity succeeds. " + ShippingAddressRequirement)]
     public static Task<object> CreateCheckout(
         IUcpProfileService profileService,
         IUcpCheckoutService checkoutService,
@@ -348,7 +362,7 @@ public static class UcpMcpCommerceTools
                 NextStep = new UcpMcpNextToolStep
                 {
                     Tool = ModuleConstants.McpTools.HandoffCheckout,
-                    Reason = "Address was updated; create a fresh hosted checkout URL with the latest address snapshot.",
+                    Reason = "Checkout was updated; create a fresh hosted checkout URL with the latest checkout snapshot.",
                     Arguments = CreateHandoffNextStepArguments(checkout_id, request),
                 },
             };
@@ -369,9 +383,8 @@ public static class UcpMcpCommerceTools
     [McpServerTool(Name = ModuleConstants.McpTools.CheckoutAndHandoff, ReadOnly = false, Destructive = false)]
     [Description(
         "Create checkout and immediately create a hosted checkout handoff URL. For the user's account or organization, " +
-        "do not call this tool until link_buyer_identity succeeds. For physical goods, do not call until shipping_address.first_name, " +
-        "shipping_address.last_name, and shipping_address.postal_code are provided; ask the user for missing values. " +
-        "This does not execute a payment.")]
+        "do not call this tool until link_buyer_identity succeeds. " + ShippingAddressRequirement + " " +
+        "This does not execute a payment. " + TrackOrderNextStepNote)]
     public static Task<object> CheckoutAndHandoff(
         IUcpProfileService profileService,
         IUcpCheckoutService checkoutService,
@@ -426,9 +439,8 @@ public static class UcpMcpCommerceTools
     [McpServerTool(Name = ModuleConstants.McpTools.HandoffCheckout, ReadOnly = false, Destructive = false)]
     [Description(
         "Create a hosted checkout handoff URL. For the user's account or organization, do not call this tool until " +
-        "link_buyer_identity succeeds. For physical goods, do not call until shipping_address.first_name, " +
-        "shipping_address.last_name, and shipping_address.postal_code are provided; ask the user for missing values. " +
-        "This does not execute a payment.")]
+        "link_buyer_identity succeeds. " + ShippingAddressRequirement + " " +
+        "This does not execute a payment. " + TrackOrderNextStepNote)]
     public static Task<object> HandoffCheckout(
         IUcpProfileService profileService,
         IUcpCheckoutService checkoutService,
@@ -486,7 +498,7 @@ public static class UcpMcpCommerceTools
                 NextStepAfterPayment = new UcpMcpNextToolStep
                 {
                     Tool = ModuleConstants.McpTools.TrackOrder,
-                    Arguments = CreateTrackOrderArguments(request.CartId, effectiveBuyerId, effectiveLanguage),
+                    Arguments = CreateTrackOrderArguments(request.CartId, effectiveBuyerId, effectiveLanguage, handoff?.Checkout?.IssuedAt),
                 },
             };
         });
@@ -523,14 +535,26 @@ public static class UcpMcpCommerceTools
         return Execute(() => geographyService.ListRegions(country_id, cancellationToken));
     }
 
+    [SuppressMessage("Major Code Smell", "S107:Methods should not have too many parameters", Justification = FlatArgumentsJustification)]
     [McpServerTool(Name = ModuleConstants.McpTools.TrackOrder, ReadOnly = true, Destructive = false)]
-    [Description("Track order by order id, order number, or cart id in this Virto Commerce storefront. For the user's account, organization, or orders, do not call this tool until link_buyer_identity succeeds.")]
+    [Description(
+        "Track order by order id, order number, or cart id in this Virto Commerce storefront. " +
+        "After a hosted checkout, call it with the cart_id and placed_after from the handoff's next step " +
+        "(placed_after is the handoff issued_at): orders lists the orders placed from that checkout, child orders included " +
+        "(each carries parent_order_id), oldest first (the main order before its child orders), and order is the newest top-level order. " +
+        "Without placed_after, cart_id returns only the newest top-level order of the cart together with its child orders: " +
+        "a storefront cart keeps its id across checkouts, so earlier orders of the cart need placed_after. " +
+        "To list the cart's order history, pass an earlier placed_after (for example the date the user asks about, or 2000-01-01T00:00:00Z for all orders). " +
+        "Not found with the handoff placed_after means the buyer has not placed the order yet. " +
+        "For the user's account, organization, or orders, do not call this tool until link_buyer_identity succeeds.")]
     public static Task<object> TrackOrder(
         IUcpProfileService profileService,
         IUcpOrderService orderService,
         string order_id = null,
         string order_number = null,
-        string cart_id = null,
+        [Description("Cart id saved from create_cart or the hosted checkout.")] string cart_id = null,
+        [Description("ISO 8601 timestamp; with cart_id, returns the orders of the cart created at or after it. " +
+            "Use the handoff issued_at to track one checkout, or an earlier date to list the cart's order history.")] DateTimeOffset? placed_after = null,
         string store_id = null,
         string currency = null,
         string language = null,
@@ -544,6 +568,7 @@ public static class UcpMcpCommerceTools
                 OrderId = order_id,
                 OrderNumber = order_number,
                 CartId = cart_id,
+                PlacedAfter = placed_after,
                 Context = CreateCartContext(store_id, currency, language, buyer_id, null, null),
             };
             ApplyCartContextDefaults(request.Context, await profileService.GetProfile(cancellationToken));
@@ -674,15 +699,16 @@ public static class UcpMcpCommerceTools
             NextStepAfterPayment = new UcpMcpNextToolStep
             {
                 Tool = ModuleConstants.McpTools.TrackOrder,
-                Arguments = CreateTrackOrderArguments(request.CartId, buyerId, language),
+                Arguments = CreateTrackOrderArguments(request.CartId, buyerId, language, handoff?.Checkout?.IssuedAt),
             },
         };
     }
 
-    private static Dictionary<string, object> CreateTrackOrderArguments(string cartId, string buyerId, string language)
+    private static Dictionary<string, object> CreateTrackOrderArguments(string cartId, string buyerId, string language, DateTimeOffset? placedAfter)
     {
         var arguments = new Dictionary<string, object>();
         AddNextStepString(arguments, "cart_id", cartId);
+        AddNextStepString(arguments, "placed_after", placedAfter?.UtcDateTime.ToString("O"));
         AddNextStepString(arguments, "buyer_id", buyerId);
         AddNextStepString(arguments, "language", language);
 

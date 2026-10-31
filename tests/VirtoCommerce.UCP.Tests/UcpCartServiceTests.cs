@@ -142,6 +142,153 @@ public partial class UcpCartServiceTests
     }
 
     [Fact]
+    public async Task CreateCart_WithoutCartType_SendsNullCartTypeInCommand()
+    {
+        var executor = new StubXApiExecutor(CartWithOneItemJson);
+        var service = CreateService(executor);
+
+        await service.CreateCart(new UcpCartRequest
+        {
+            LineItems =
+            {
+                new UcpCartLineItemRequest { ProductId = "product-1", Quantity = 1 },
+            },
+        }, TestContext.Current.CancellationToken);
+
+        var command = executor.Requests[0].Variables["command"].AsDictionary();
+
+        Assert.True(command.ContainsKey("cartType"));
+        Assert.Null(command["cartType"]);
+    }
+
+    [Fact]
+    public async Task CreateCart_WithExplicitCartType_PassesCartTypeToCommand()
+    {
+        var executor = new StubXApiExecutor(CartWithOneItemJson);
+        var service = CreateService(executor);
+
+        await service.CreateCart(new UcpCartRequest
+        {
+            CartType = "Wishlist",
+            LineItems =
+            {
+                new UcpCartLineItemRequest { ProductId = "product-1", Quantity = 1 },
+            },
+        }, TestContext.Current.CancellationToken);
+
+        var command = executor.Requests[0].Variables["command"].AsDictionary();
+
+        Assert.Equal("Wishlist", command["cartType"]);
+    }
+
+    [Fact]
+    public async Task CreateCart_WithStorefrontOrigin_BuildsContinueUrlFromCartRoute()
+    {
+        var executor = new StubXApiExecutor(CartWithOneItemJson);
+        var service = CreateService(executor, options: new UcpOptions
+        {
+            DefaultStoreId = "store-acme",
+            DefaultCurrency = "USD",
+            DefaultCultureName = "en-US",
+            StorefrontOrigin = "https://shop.example.test/",
+        });
+
+        var response = await service.CreateCart(new UcpCartRequest
+        {
+            LineItems =
+            {
+                new UcpCartLineItemRequest { ProductId = "product-1", Quantity = 1 },
+            },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("https://shop.example.test/cart/cart-1", response.Cart.ContinueUrl);
+    }
+
+    [Fact]
+    public async Task ListCarts_WithoutCartType_ReturnsOnlyUntypedCartsAndSkipsForeignLists()
+    {
+        var executor = new StubXApiExecutor(BuildCartListJson(
+            BuildCartListItem("cart-1", "null", "buyer-1", "null"),
+            BuildCartListItem("wishlist-1", "\"Wishlist\"", "buyer-2", "\"org-2\""),
+            BuildCartListItem("saved-1", "\"SavedForLater\"", "buyer-2", "null")));
+        var service = CreateService(executor);
+
+        var response = await service.ListCarts(new UcpCartListRequest
+        {
+            Context = new UcpCartContext
+            {
+                StoreId = "store-acme",
+                Currency = "USD",
+                Language = "en-US",
+                BuyerId = "buyer-1",
+            },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("cart-1", Assert.Single(response.Carts).Id);
+        Assert.Equal(1, response.Pagination.TotalCount);
+        Assert.True(executor.Requests[0].Variables.ContainsKey("cartType"));
+        Assert.Null(executor.Requests[0].Variables["cartType"]);
+    }
+
+    [Fact]
+    public async Task ListCarts_WithoutCartType_WhenMorePagesExist_ReportsServerTotalCount()
+    {
+        var executor = new StubXApiExecutor(BuildPagedCartListJson(
+            25,
+            true,
+            BuildCartListItem("cart-1", "null", "buyer-1", "null"),
+            BuildCartListItem("wishlist-1", "\"Wishlist\"", "buyer-1", "null")));
+        var service = CreateService(executor);
+
+        var response = await service.ListCarts(CreateListRequest(null), TestContext.Current.CancellationToken);
+
+        Assert.Equal("cart-1", Assert.Single(response.Carts).Id);
+        Assert.Equal(25, response.Pagination.TotalCount);
+    }
+
+    [Fact]
+    public async Task ListCarts_WithoutCartType_OnLastPageOfCursoredListing_ReportsServerTotalCount()
+    {
+        var executor = new StubXApiExecutor(BuildPagedCartListJson(
+            25,
+            false,
+            BuildCartListItem("cart-1", "null", "buyer-1", "null"),
+            BuildCartListItem("wishlist-1", "\"Wishlist\"", "buyer-1", "null")));
+        var service = CreateService(executor);
+
+        var response = await service.ListCarts(CreateListRequest("cursor-1"), TestContext.Current.CancellationToken);
+
+        Assert.Equal("cart-1", Assert.Single(response.Carts).Id);
+        Assert.Equal(25, response.Pagination.TotalCount);
+    }
+
+    [Fact]
+    public async Task ListCarts_WithRequestedCartType_ReturnsListsOfThatType()
+    {
+        var executor = new StubXApiExecutor(BuildCartListJson(
+            BuildCartListItem("wishlist-1", "\"Wishlist\"", "buyer-1", "null")));
+        var service = CreateService(executor);
+
+        var response = await service.ListCarts(new UcpCartListRequest
+        {
+            Context = new UcpCartContext
+            {
+                StoreId = "store-acme",
+                Currency = "USD",
+                Language = "en-US",
+                BuyerId = "buyer-1",
+                CartType = "Wishlist",
+            },
+        }, TestContext.Current.CancellationToken);
+
+        var cart = Assert.Single(response.Carts);
+        Assert.Equal("wishlist-1", cart.Id);
+        Assert.Equal("Wishlist", cart.CartType);
+        Assert.Equal(1, response.Pagination.TotalCount);
+        Assert.Equal("Wishlist", executor.Requests[0].Variables["cartType"]);
+    }
+
+    [Fact]
     public async Task ListCarts_RequiresBuyerContext()
     {
         var service = CreateService(
@@ -600,6 +747,71 @@ public partial class UcpCartServiceTests
     }
 
     [Fact]
+    public async Task ApplyCheckoutData_StoreManagedAddresses_SkipsAddressMutationsAndAddsMessage()
+    {
+        var executor = new StubXApiExecutor(CartQueryJson);
+        var service = CreateService(executor, options: StoreManagedOptions());
+
+        var response = await service.ApplyCheckoutData("cart-1", new UcpCheckoutRequest
+        {
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+            ShippingAddress = new UcpCheckoutAddress { Line1 = "1 Main St", City = "Seattle", CountryCode = "US" },
+            BillingAddress = new UcpCheckoutAddress { Line1 = "1 Main St", City = "Seattle", CountryCode = "US" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["UcpGetCart"], executor.OperationNames);
+        var message = Assert.Single(response.Messages, x => x.Code == ModuleConstants.MessageCodes.AddressesStoreManaged);
+        Assert.Equal("info", message.Type);
+        Assert.Equal(ModuleConstants.StoreManagedAddressesMessage, message.Content);
+    }
+
+    [Fact]
+    public async Task ApplyCheckoutData_StoreManagedAddresses_WithoutAddresses_AddsNoMessage()
+    {
+        var executor = new StubXApiExecutor(CartQueryJson);
+        var service = CreateService(executor, options: StoreManagedOptions());
+
+        var response = await service.ApplyCheckoutData("cart-1", new UcpCheckoutRequest
+        {
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["UcpGetCart"], executor.OperationNames);
+        Assert.DoesNotContain(response.Messages, x => x.Code == ModuleConstants.MessageCodes.AddressesStoreManaged);
+    }
+
+    [Fact]
+    public async Task ApplyCheckoutData_DefaultOptions_WithAddresses_AddsNoStoreManagedMessage()
+    {
+        var executor = new StubXApiExecutor(
+            CartQueryJson,
+            CartWithShippingAddressJson,
+            CartWithShipmentAddressJson);
+        var service = CreateService(executor);
+
+        var response = await service.ApplyCheckoutData("cart-1", new UcpCheckoutRequest
+        {
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+            ShippingAddress = new UcpCheckoutAddress { FirstName = "Ada", LastName = "Buyer", Line1 = "1 Main St", PostalCode = "98101", CountryCode = "US" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["UcpGetCart", "UcpAddOrUpdateShippingAddress", "UcpAddOrUpdateShipmentAddress"], executor.OperationNames);
+        Assert.DoesNotContain(response.Messages, x => x.Code == ModuleConstants.MessageCodes.AddressesStoreManaged);
+    }
+
+    private static UcpOptions StoreManagedOptions()
+    {
+        return new UcpOptions
+        {
+            DefaultStoreId = "store-acme",
+            DefaultCurrency = "USD",
+            DefaultCultureName = "en-US",
+            StorefrontOrigin = "https://localhost:5001",
+            StoreManagedAddresses = true,
+        };
+    }
+
+    [Fact]
     public async Task ApplyCheckoutData_ReusesExistingAddressIds()
     {
         var executor = new StubXApiExecutor(
@@ -865,6 +1077,41 @@ public partial class UcpCartServiceTests
             buyerContextAccessor ?? new TestBuyerContextAccessor("anonymous"));
     }
 
+    private static string BuildCartListItem(string id, string typeJson, string customerId, string organizationIdJson)
+    {
+        return $$"""
+            {"id":"{{id}}","name":"default","status":"New","storeId":"store-acme","type":{{typeJson}},"isAnonymous":true,"customerId":"{{customerId}}","organizationId":{{organizationIdJson}},"currency":{"code":"USD"},
+              "coupons":[],"items":[],"validationErrors":[],"warnings":[]}
+            """;
+    }
+
+    private static UcpCartListRequest CreateListRequest(string cursor)
+    {
+        return new UcpCartListRequest
+        {
+            Context = new UcpCartContext
+            {
+                StoreId = "store-acme",
+                Currency = "USD",
+                Language = "en-US",
+                BuyerId = "buyer-1",
+            },
+            Pagination = new UcpPaginationRequest { Cursor = cursor },
+        };
+    }
+
+    private static string BuildPagedCartListJson(int totalCount, bool hasNextPage, params string[] itemJsons)
+    {
+        return "{\"data\":{\"carts\":{\"totalCount\":" + totalCount +
+            ",\"pageInfo\":{\"hasNextPage\":" + (hasNextPage ? "true" : "false") + ",\"endCursor\":null},\"items\":[" + string.Join(",", itemJsons) + "]}}}";
+    }
+
+    private static string BuildCartListJson(params string[] itemJsons)
+    {
+        return "{\"data\":{\"carts\":{\"totalCount\":" + itemJsons.Length +
+            ",\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null},\"items\":[" + string.Join(",", itemJsons) + "]}}}";
+    }
+
     private sealed class StubXApiExecutor : IXApiInProcessExecutor
     {
         private readonly Queue<string> _jsonResponses;
@@ -1010,7 +1257,7 @@ public partial class UcpCartServiceTests
         .Replace("\"quantity\":1", "\"quantity\":3", System.StringComparison.Ordinal);
     private const string CartsQueryJson = """
         {"data":{"carts":{"totalCount":1,"pageInfo":{"hasNextPage":false,"endCursor":null},"items":[{
-          "id":"cart-1","name":"default","status":"New","storeId":"store-acme","type":"cart","isAnonymous":true,"customerId":"buyer-1","organizationId":null,"currency":{"code":"USD"},
+          "id":"cart-1","name":"default","status":"New","storeId":"store-acme","type":null,"isAnonymous":true,"customerId":"buyer-1","organizationId":null,"currency":{"code":"USD"},
           "total":{"amount":120.0,"formattedAmount":"$120.00","currency":{"code":"USD"}},
           "subTotal":{"amount":120.0,"formattedAmount":"$120.00","currency":{"code":"USD"}},
           "taxTotal":{"amount":0.0,"formattedAmount":"$0.00","currency":{"code":"USD"}},

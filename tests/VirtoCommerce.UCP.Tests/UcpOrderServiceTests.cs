@@ -52,7 +52,7 @@ public class UcpOrderServiceTests
         Assert.Equal("Paid", response.Order.Payments[0].Status);
         Assert.Contains(response.Messages, x => x.Code == "shipment_tracking_available");
 
-        var criteria = orderSearchService.Criteria.Single();
+        var criteria = orderSearchService.Criteria.Single(x => x.HasParentOperation == false);
         Assert.Equal("buyer-1", criteria.CustomerId);
         Assert.Equal(50, criteria.Take);
         Assert.Equal("CreatedDate:desc", criteria.Sort);
@@ -106,8 +106,204 @@ public class UcpOrderServiceTests
         }, TestContext.Current.CancellationToken);
 
         Assert.Equal("order-50", response.Order.Id);
-        Assert.Equal([0, 50], searchService.Criteria.Select(x => x.Skip));
+        Assert.Equal([0, 50], searchService.Criteria.Where(x => x.HasParentOperation == false).Select(x => x.Skip));
         Assert.All(searchService.Criteria, x => Assert.Equal("buyer-1", x.CustomerId));
+    }
+
+    [Fact]
+    public async Task TrackOrder_ByCartId_WithoutPlacedAfter_ReturnsOnlyTheNewestOrder()
+    {
+        var orders = Enumerable.Range(0, 56).Select(x => CreateOrder($"order-{x}", $"cart-{x}", "buyer-1")).ToArray();
+        orders[3].ShoppingCartId = "cart-split";
+        orders[49].ShoppingCartId = "cart-split";
+        orders[52].ShoppingCartId = "CART-SPLIT";
+        var searchService = new StubCustomerOrderSearchService(orders);
+        var service = CreateService(orderSearchService: searchService);
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            CartId = "cart-split",
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["order-3"], response.Orders.Select(x => x.Id));
+        Assert.Equal("order-3", response.Order.Id);
+        Assert.Equal([0], searchService.Criteria.Where(x => x.HasParentOperation == false).Select(x => x.Skip));
+    }
+
+    [Fact]
+    public async Task TrackOrder_ByCartId_WithPlacedAfter_ReturnsOrdersPlacedSinceThenOldestFirst()
+    {
+        var placedAfter = new DateTimeOffset(2026, 6, 16, 10, 0, 0, TimeSpan.Zero);
+        var newest = CreateOrder("order-newest", "cart-1", "buyer-1");
+        newest.CreatedDate = placedAfter.UtcDateTime.AddMinutes(30);
+        var other = CreateOrder("order-other", "cart-2", "buyer-1");
+        other.CreatedDate = placedAfter.UtcDateTime.AddMinutes(20);
+        var later = CreateOrder("order-later", "cart-1", "buyer-1");
+        later.CreatedDate = placedAfter.UtcDateTime.AddMinutes(10);
+        var before = CreateOrder("order-before", "cart-1", "buyer-1");
+        before.CreatedDate = placedAfter.UtcDateTime.AddMinutes(-10);
+        var searchService = new StubCustomerOrderSearchService(newest, other, later, before);
+        var service = CreateService(orderSearchService: searchService);
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            CartId = "cart-1",
+            PlacedAfter = placedAfter,
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["order-later", "order-newest"], response.Orders.Select(x => x.Id));
+        Assert.Equal("order-newest", response.Order.Id);
+        Assert.All(searchService.Criteria, x => Assert.Equal(placedAfter.UtcDateTime, x.StartDate));
+    }
+
+    [Fact]
+    public async Task TrackOrder_ByCartId_WithPlacedAfter_WhenNoOrderPlacedYet_ReturnsNotFound()
+    {
+        var placedAfter = new DateTimeOffset(2026, 6, 16, 10, 0, 0, TimeSpan.Zero);
+        var older = CreateOrder("order-older", "cart-1", "buyer-1");
+        older.CreatedDate = placedAfter.UtcDateTime.AddDays(-3);
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(older));
+
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            CartId = "cart-1",
+            PlacedAfter = placedAfter,
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.OrderNotFound, exception.Code);
+        Assert.Equal(404, exception.StatusCode);
+        Assert.Equal($"No order was placed from cart 'cart-1' at or after {placedAfter.UtcDateTime:O}.", exception.Message);
+    }
+
+    [Fact]
+    public async Task TrackOrder_ByCartId_WithPlacedAfter_ReturnsChildOrdersWithParentOrderId()
+    {
+        var placedAfter = new DateTimeOffset(2026, 6, 16, 8, 0, 0, TimeSpan.Zero);
+        var main = CreateOrder("order-main", "cart-1", "buyer-1");
+        var child1 = CreateOrder("order-child-1", "cart-1", "buyer-1");
+        child1.ParentOperationId = main.Id;
+        child1.CreatedDate = main.CreatedDate.AddMinutes(10);
+        var child2 = CreateOrder("order-child-2", "cart-1", "buyer-1");
+        child2.ParentOperationId = main.Id;
+        child2.CreatedDate = main.CreatedDate.AddMinutes(20);
+        var searchService = new StubCustomerOrderSearchService(child2, child1, main);
+        var service = CreateService(orderSearchService: searchService);
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            CartId = "cart-1",
+            PlacedAfter = placedAfter,
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["order-main", "order-child-1", "order-child-2"], response.Orders.Select(x => x.Id));
+        Assert.Equal("order-main", response.Order.Id);
+        Assert.Equal([null, "order-main", "order-main"], response.Orders.Select(x => x.ParentOrderId));
+        Assert.All(searchService.Criteria, x => Assert.Null(x.HasParentOperation));
+    }
+
+    [Fact]
+    public async Task TrackOrder_ByCartId_WithoutPlacedAfter_ReturnsNewestOrderWithItsChildOrders()
+    {
+        var mainA = CreateOrder("order-a", "cart-1", "buyer-1");
+        mainA.CreatedDate = mainA.CreatedDate.AddHours(-2);
+        var childA = CreateOrder("order-a1", "cart-1", "buyer-1");
+        childA.ParentOperationId = mainA.Id;
+        childA.CreatedDate = mainA.CreatedDate.AddMinutes(5);
+        var mainB = CreateOrder("order-b", "cart-1", "buyer-1");
+        var childB = CreateOrder("order-b1", "cart-1", "buyer-1");
+        childB.ParentOperationId = mainB.Id;
+        childB.CreatedDate = mainB.CreatedDate.AddMinutes(5);
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(childB, mainB, childA, mainA));
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            CartId = "cart-1",
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["order-b", "order-b1"], response.Orders.Select(x => x.Id));
+        Assert.Equal("order-b", response.Order.Id);
+    }
+
+    [Fact]
+    public async Task TrackOrder_ByCartId_WithPlacedAfter_WhenMainAndChildShareCreatedDate_ReturnsMainFirst()
+    {
+        var main = CreateOrder("order-main", "cart-1", "buyer-1");
+        var child = CreateOrder("order-child", "cart-1", "buyer-1");
+        child.ParentOperationId = main.Id;
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(child, main));
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            CartId = "cart-1",
+            PlacedAfter = new DateTimeOffset(2026, 6, 16, 8, 0, 0, TimeSpan.Zero),
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["order-main", "order-child"], response.Orders.Select(x => x.Id));
+        Assert.Equal("order-main", response.Order.Id);
+    }
+
+    [Fact]
+    public async Task TrackOrder_ByCartId_WhenPagesShiftDuringScan_ReturnsEachOrderOnce()
+    {
+        // A new order created mid-scan pushes the last row of page 1 onto page 2,
+        // so the stub serves the same order at index 49 and index 50.
+        var orders = Enumerable.Range(0, 50).Select(x => CreateOrder($"order-{x}", $"cart-{x}", "buyer-1")).ToList();
+        orders[3].ShoppingCartId = "cart-split";
+        orders[49].ShoppingCartId = "cart-split";
+        orders.Add(CreateOrder("order-49", "cart-split", "buyer-1"));
+        var searchService = new StubCustomerOrderSearchService(orders.ToArray());
+        var service = CreateService(orderSearchService: searchService);
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            CartId = "cart-split",
+            PlacedAfter = new DateTimeOffset(2026, 6, 16, 8, 0, 0, TimeSpan.Zero),
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal([0, 50], searchService.Criteria.Select(x => x.Skip));
+        Assert.Equal(["order-3", "order-49"], response.Orders.Select(x => x.Id));
+    }
+
+    [Fact]
+    public async Task TrackOrder_ByCartId_WithSingleOrder_ReturnsItInOrders()
+    {
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(
+            CreateOrder("order-1", "cart-1", "buyer-1"),
+            CreateOrder("order-2", "cart-2", "buyer-1")));
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            CartId = "cart-1",
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("order-1", Assert.Single(response.Orders).Id);
+        Assert.Equal("order-1", response.Order.Id);
+    }
+
+    [Fact]
+    public async Task TrackOrder_ByOrderNumber_ReturnsOnlyThatOrderInOrders()
+    {
+        var order = CreateOrder("order-1", "cart-1", "buyer-1");
+        order.Number = "CO-777";
+        var other = CreateOrder("order-2", "cart-1", "buyer-1");
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(order, other));
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            OrderNumber = "CO-777",
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("order-1", Assert.Single(response.Orders).Id);
+        Assert.Equal("order-1", response.Order.Id);
     }
 
     [Fact]
@@ -391,6 +587,9 @@ public class UcpOrderServiceTests
                 CustomerId = criteria.CustomerId,
                 OrganizationId = criteria.OrganizationId,
                 Number = criteria.Number,
+                StartDate = criteria.StartDate,
+                HasParentOperation = criteria.HasParentOperation,
+                ParentOperationId = criteria.ParentOperationId,
                 Take = criteria.Take,
                 Skip = criteria.Skip,
                 Sort = criteria.Sort,
@@ -401,6 +600,9 @@ public class UcpOrderServiceTests
                 .Where(order => string.IsNullOrWhiteSpace(criteria.CustomerId) || order.CustomerId == criteria.CustomerId)
                 .Where(order => string.IsNullOrWhiteSpace(criteria.OrganizationId) || order.OrganizationId == criteria.OrganizationId)
                 .Where(order => string.IsNullOrWhiteSpace(criteria.Number) || order.Number == criteria.Number)
+                .Where(order => criteria.StartDate == null || order.CreatedDate >= criteria.StartDate)
+                .Where(order => criteria.ParentOperationId == null || order.ParentOperationId == criteria.ParentOperationId)
+                .Where(order => criteria.HasParentOperation == null || (order.ParentOperationId != null) == criteria.HasParentOperation)
                 .ToList();
 
             return Task.FromResult(new CustomerOrderSearchResult

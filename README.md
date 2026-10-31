@@ -333,20 +333,35 @@ Configuration is read from the `UCP` section:
 | `UCP:PublicOrigin` | String | — | Overrides the public origin used by discovery and MCP OAuth. Otherwise resolved through XApi from the store's `SecureUrl` / `Url`, then the request origin. |
 | `UCP:HandoffUrlTemplate` | String | — | Explicit override for the hosted checkout handoff URL. `{token}` is replaced with the `ucp_session` token. |
 | `UCP:HandoffTokenTtlMinutes` | Integer | `15` | Absolute expiration of temporary checkout handoff sessions in the handoff session store. |
-| `UCP:AnonymousCatalog` | Boolean | `true` | Published as `auth.anonymous_catalog` in the `get_store_capabilities` result; it does not block anonymous requests. |
+| `UCP:AnonymousCatalog` | Boolean | `true` | Lets anonymous buyers use the catalog. It applies only when the default store also allows anonymous users (`Stores.AllowAnonymousUsers`), which the catalog itself enforces; `get_store_capabilities` reports the result as `auth.anonymous_catalog`. When it is off, the MCP endpoint asks for a sign-in from the first request (see [Buyer identity](#buyer-identity)). |
+| `UCP:StoreManagedAddresses` | Boolean | `false` | For a storefront that assigns cart addresses itself (for example, one shipment per supplier from the buyer's selected delivery location). Checkout tools then ignore `shipping_address` / `billing_address`, run no address, shipment or payment mutation, return an `addresses_store_managed` message, and report `store_managed_addresses: true` in the profile; the MCP server instructions tell agents not to send addresses. |
 | `UCP:Observability:InputCaptureMode` | Enum | `ErrorsOnly` | Controls the bounded allowlisted operation input in logs and span attributes: `None`, `ErrorsOnly`, or `Always`. Trace correlation, safe context attributes, and counters remain enabled in every mode. |
 
 If `DefaultStoreId` is not configured, UCP reads open stores from the Store module. If one store is found, `get_store_capabilities` returns it as `default_store_id`, `store`, and the only `stores[]` item. If multiple stores are found, it returns them in `stores[]` and the client must choose a store explicitly.
 
 Checkout links are built from the URL of the cart's store (`SecureUrl`, then `Url`). `UCP:StorefrontOrigin` is a fallback for environments without Store URLs, and `UCP:HandoffUrlTemplate` is an explicit override.
 
-### Application Settings
+### Switching UCP on and off
 
-The module registers the following platform settings:
+UCP has no setting of its own: it is switched with the MCP module's configuration of the `ucp` scope.
 
-| Setting | Type | Default | Description |
-| --- | --- | --- | --- |
-| `UCP.Enabled` | Boolean | `false` | Enables UCP module functionality. Registered in the platform settings under **UCP > General**; not yet enforced by the current preview endpoints. |
+```json
+"MCP": {
+  "Scopes": {
+    "ucp": { "Enabled": false }
+  }
+}
+```
+
+With `MCP:Scopes:ucp:Enabled` set to `false`, the MCP module serves no `/ucp/mcp`, and UCP answers `404` without running the request on these URL prefixes (segment-aware, case-insensitive; `/ucpx` is not matched):
+
+- `/ucp` (the REST API `/ucp/v1/*` and the MCP endpoint `/ucp/mcp`, for every HTTP method)
+- `/.well-known/ucp`
+- `/.well-known/oauth-protected-resource/ucp`
+- `/graphql/ucp`
+- `/ui/graphiql/ucp`
+
+The scope is on by default. The value is read at startup, so a change applies after a restart of every instance; as an environment variable, `MCP__Scopes__ucp__Enabled=false`. To stop a single shopping tool without a restart, switch it off on the MCP module's **Agent tools** screen instead.
 
 ### Permissions
 
@@ -492,6 +507,8 @@ Commerce tools do not expose an authentication mode. A request without a Platfor
 ### Buyer identity
 
 The MCP module signs buyers in: it publishes the protected-resource metadata at `/.well-known/oauth-protected-resource/ucp/mcp`, answers a call that needs a buyer with the HTTP 401 challenge, and checks the token and its revocation on every request ([Authentication](https://github.com/VirtoCommerce/vc-module-mcp#authentication)). The platform issues the tokens; UCP issues none and does not register OAuth clients. UCP decides who the buyer is and what a sign-in changes:
+
+When `UCP:AnonymousCatalog` is `false`, or the default store does not allow anonymous users, the MCP endpoint asks for a sign-in from the first request: an anonymous request, `initialize` and `tools/list` included, gets the HTTP 401 challenge, so the client starts OAuth when it connects. `logout_buyer` is never challenged. UCP answers these requests itself, ahead of the MCP module's endpoint, with the MCP module's challenge.
 
 * An assistant calls `link_buyer_identity` when the buyer asks to use their account. Without a token, the call gets the challenge and the client signs the buyer in; with a valid token, it returns the buyer and organization without another sign-in. The commerce tools are then called unchanged.
 * To keep an anonymous cart, the assistant calls `update_cart` with the saved anonymous `buyer_id`, the `cart_id` and the complete line state. UCP checks the anonymous owner and calls XCart `mergeCart`.
@@ -648,7 +665,7 @@ The current checkout flow is hosted-only:
 - If the request contains `shipping_address` or `billing_address`, the module applies them to XCart before creating the snapshot.
 - `update_checkout` updates address hints before payment and applies addresses to XCart.
 - `checkout_and_handoff` creates the checkout snapshot and immediately returns the hosted checkout `continue_url`; MCP clients should prefer it when the buyer is ready to pay or continue to storefront checkout.
-- `handoff_checkout` returns a `continue_url` with an opaque `ucp_session`.
+- `handoff_checkout` returns a `continue_url` with an opaque `ucp_session`, plus the checkout's `issued_at` and `expires_at`. `issued_at` is the handoff time and anchors order tracking (see Order Tracking); the next step for `track_order` already carries it as `placed_after`.
 - `storefront_restore` (`POST /ucp/v1/internal/handoff/restore` with `{ "ucp_session": "..." }`) validates the session, reads it from the handoff session store, checks expiration, and returns the cart and checkout context, with `anonymous_buyer_id` for an anonymous session, to the storefront. A session a signed-in buyer created can be restored only by that buyer (`403 buyer_context_mismatch`).
 - Shipping method and payment details are completed in storefront checkout.
 
@@ -708,7 +725,7 @@ Example handoff request:
 
 ```http
 GET /ucp/v1/orders/{orderId}?buyer_id={buyerId}&culture_name=en-US
-GET /ucp/v1/orders?cart_id={cartId}&buyer_id={buyerId}&culture_name=en-US
+GET /ucp/v1/orders?cart_id={cartId}&placed_after={issued_at}&buyer_id={buyerId}&culture_name=en-US
 GET /ucp/v1/orders?order_number={orderNumber}&buyer_id={buyerId}
 ```
 
@@ -716,7 +733,11 @@ GET /ucp/v1/orders?order_number={orderNumber}&buyer_id={buyerId}
 
 After hosted handoff, the client usually does not know `order_id` yet. The primary path is lookup by the original `cart_id`, matched against `CustomerOrder.ShoppingCartId` through Orders module services. Lookup stays within the resolved buyer and organization context. If the buyer signed in during guest checkout, link that identity before tracking the order.
 
-If the order has not been created yet or is not found within that buyer context, the endpoint returns the structured error `order_not_found`.
+The storefront's default cart survives checkout: after an order is placed the cart is emptied but keeps its id, so one `cart_id` accumulates orders over time. To track the order of one hosted checkout, pass `placed_after` set to the handoff `issued_at` (the `track_order` next step carries it). `orders` then lists all orders of that cart created at or after `placed_after`, oldest first (the main order before its child orders), child orders included, and `order` is the newest top-level order. One checkout can yield several orders, for example when the storefront splits it into per-supplier child orders of a main order; each child carries `parent_order_id`, the id of its parent order. Without `placed_after`, lookup by `cart_id` returns only the newest top-level order of the cart together with its child orders; to list the cart's earlier orders, pass an earlier `placed_after` (for the whole history, a date before the cart existed). Lookup by order id or number returns that single order in `orders` as well and ignores `placed_after`.
+
+`placed_after` is an ISO 8601 timestamp. On REST, URL-encode it: `issued_at` carries a `+00:00` offset, and an unencoded `+` decodes to a space and fails binding with 400. The MCP next step passes it in UTC `Z` form.
+
+If the order has not been created yet (with `placed_after`: the buyer has not placed the order since the handoff) or is not found within that buyer context, the endpoint returns the structured error `order_not_found`.
 
 ### Error model
 
@@ -756,6 +777,9 @@ Every result of a commerce tool also contains a model-visible `Trace ID: ...` te
 Earlier versions mapped `/ucp/mcp` themselves. This version moves the endpoint to the MCP module; the URL, the tools and their results are unchanged for agents. Breaking changes for a deployment:
 
 - Install the `VirtoCommerce.MCP` module; UCP depends on it.
+- The `UCP.Enabled` platform setting is removed; it was registered but not read. UCP is switched off with `MCP:Scopes:ucp:Enabled` (see [Switching UCP on and off](#switching-ucp-on-and-off)).
+- `UCP:AnonymousCatalog` now also follows the default store's `AllowAnonymousUsers`; when either is off, the MCP endpoint asks for a sign-in from the first request.
+- Cart tools work with the buyer's storefront cart when no `cart_type` is given, a cart's `continue_url` is `{storefront}/cart/{id}`, and `track_order` takes `placed_after` (the handoff's `issued_at`) and returns `orders`.
 - The minimum platform version is `3.1085.0` (was `3.1076.0`).
 - `UCP:Observability:EnableApplicationInsightsCompatibilityBridge` is removed, with the optional dependency on the `VirtoCommerce.ApplicationInsights` module. To send traces to Application Insights, set `OpenTelemetry:AzureMonitor:ConnectionString` in the OpenTelemetry module (see [Observability](#observability)).
 - Code that referenced `UcpDiagnostics.McpActivitySourceName` uses `McpDiagnostics.SdkActivitySourceName` from `VirtoCommerce.MCP.Core`.
@@ -839,7 +863,7 @@ After installing `VirtoCommerce.UCP` on a platform:
 10. `POST /ucp/v1/internal/handoff/restore` restores the temporary handoff session.
 11. `GET /ucp/v1/geography/countries/resolve?query=KZ` returns the platform country id for checkout address normalization.
 12. `GET /ucp/v1/geography/countries/{countryId}/regions` returns regions when they exist in the platform dictionary.
-13. After storefront checkout, `GET /ucp/v1/orders?cart_id={cartId}&buyer_id={buyerId}` returns the order tracking snapshot.
+13. After storefront checkout, `GET /ucp/v1/orders?cart_id={cartId}&placed_after={issuedAt}&buyer_id={buyerId}` returns the order tracking snapshot.
 14. `POST /ucp/mcp` with `initialize` reports the server `Virto Commerce UCP`, and `tools/list` returns the 18 UCP tools without a token.
 15. An anonymous `tools/call` of `link_buyer_identity` returns HTTP 401 with a `WWW-Authenticate` header that points to `/.well-known/oauth-protected-resource/ucp/mcp`.
 16. The calls appear in the back office under **Configuration → AI agents (MCP) → Agent audit log**, in the `ucp` scope.

@@ -11,5 +11,6 @@ public class UcpOptions
     public string HandoffUrlTemplate { get; set; }
     public int HandoffTokenTtlMinutes { get; set; } = 15;
     public bool AnonymousCatalog { get; set; } = true;
+    public bool StoreManagedAddresses { get; set; }
     public UcpObservabilityOptions Observability { get; set; } = new();
 }

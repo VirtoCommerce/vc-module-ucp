@@ -1,5 +1,6 @@
 using GraphQL.MicrosoftDI;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,7 +10,6 @@ using VirtoCommerce.MCP.Core.Models;
 using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.Platform.Core.Modularity;
 using VirtoCommerce.Platform.Core.Security;
-using VirtoCommerce.Platform.Core.Settings;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Options;
@@ -34,6 +34,10 @@ public class Module : IModule, IHasConfiguration
 
     public void Initialize(IServiceCollection serviceCollection)
     {
+        var ucpOptions = Configuration
+            .GetSection("UCP")
+            .Get<UcpOptions>() ?? new UcpOptions();
+
         serviceCollection.AddHttpContextAccessor();
         serviceCollection.Configure<UcpOptions>(Configuration.GetSection("UCP"));
         serviceCollection.Configure<MvcOptions>(options =>
@@ -50,7 +54,7 @@ public class Module : IModule, IHasConfiguration
             Name = ModuleConstants.McpScopeName,
             Title = "Virto Commerce UCP",
             Version = ModuleConstants.UcpVersion,
-            Instructions = ModuleConstants.McpInstructions,
+            Instructions = BuildMcpInstructions(ucpOptions),
             RequireAuthenticatedUser = false,
         });
         serviceCollection.AddMcpToolsFromAssembly(typeof(UcpMcpCommerceTools).Assembly, UcpMcpSerialization.Options);
@@ -59,6 +63,9 @@ public class Module : IModule, IHasConfiguration
 
         // UCP's errors and telemetry for the calls of the ucp scope, inside the MCP module's checks and audit.
         serviceCollection.AddMcpCallToolFilter<UcpMcpCallToolFilter>(ModuleConstants.McpScopeName);
+
+        // The gate of the ucp scope switch and the sign-in rule of a closed catalog run ahead of the MCP module's endpoints.
+        serviceCollection.AddTransient<IStartupFilter, UcpStartupFilter>();
 
         serviceCollection.AddTransient<IUcpPublicOriginResolver, UcpPublicOriginResolver>();
         serviceCollection.AddTransient<IUcpProfileService, UcpProfileService>();
@@ -80,12 +87,16 @@ public class Module : IModule, IHasConfiguration
         serviceCollection.AddSingleton<ScopedSchemaFactory<XapiAssemblyMarker>>();
     }
 
+    internal static string BuildMcpInstructions(UcpOptions options)
+    {
+        return options.StoreManagedAddresses
+            ? ModuleConstants.McpInstructions + "\n" + ModuleConstants.StoreManagedAddressesInstruction
+            : ModuleConstants.McpInstructions;
+    }
+
     public void PostInitialize(IApplicationBuilder appBuilder)
     {
         var serviceProvider = appBuilder.ApplicationServices;
-
-        var settingsRegistrar = serviceProvider.GetRequiredService<ISettingsRegistrar>();
-        settingsRegistrar.RegisterSettings(ModuleConstants.Settings.AllSettings, ModuleInfo.Id);
 
         var permissionsRegistrar = serviceProvider.GetRequiredService<IPermissionsRegistrar>();
         permissionsRegistrar.RegisterPermissions(ModuleInfo.Id, "UCP", ModuleConstants.Security.Permissions.AllPermissions);
