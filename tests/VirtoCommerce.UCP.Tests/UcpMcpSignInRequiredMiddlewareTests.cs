@@ -139,7 +139,7 @@ public class UcpMcpSignInRequiredMiddlewareTests
         return (nextCalled, context);
     }
 
-    private static async Task<string> ReadBody(HttpContext context)
+    private static async Task<string> ReadBody(DefaultHttpContext context)
     {
         context.Response.Body.Position = 0;
         using var reader = new StreamReader(context.Response.Body);

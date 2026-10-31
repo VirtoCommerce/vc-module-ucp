@@ -14,7 +14,9 @@ public static class ModuleConstants
     public const string McpInstructions = """
         This MCP endpoint exposes Virto Commerce UCP tools for the storefront/platform where this MCP server is installed.
         Use typed MCP tools for commerce operations.
-        Available tools: link_buyer_identity, logout_buyer, get_store_capabilities, search_products, get_product, create_cart, list_carts, get_cart, update_cart, create_checkout, update_checkout, checkout_and_handoff, get_payment_handlers, handoff_checkout, list_countries, resolve_country, list_regions, and track_order.
+        Available tools: link_buyer_identity, logout_buyer, get_store_capabilities, search_products, get_product, create_cart, list_carts,
+        get_cart, update_cart, create_checkout, update_checkout, checkout_and_handoff, get_payment_handlers, handoff_checkout, list_countries,
+        resolve_country, list_regions, and track_order.
         Do not pass storefront URLs to MCP tools. This MCP server already represents the target Virto Commerce UCP installation.
         Do not infer another target storefront from the MCP transport URL or user-provided links.
         Commerce tools execute local UCP services directly in this platform process.
@@ -68,7 +70,11 @@ public static class ModuleConstants
         A read-only XAPI failure from search_products or get_product may be transient; retry the same read-only tool at most once. Do not automatically retry mutating cart or checkout tools.
         For hosted checkout, return checkout.continue_url to the buyer and keep cart_id and the handoff issued_at (placed_after) for later track_order.
         After hosted checkout, use the saved cart_id and buyer_id, plus placed_after (the handoff issued_at), with track_order when the user asks about the order; do not require an order number when those saved identifiers are available.
-        One hosted checkout can produce a main order plus child orders (each child carries parent_order_id). Lookup by cart_id with placed_after returns all orders placed since the handoff in orders, oldest first (the main order before its child orders), child orders included; order is the newest top-level order; not found means the buyer has not placed the order yet. Without placed_after, lookup by cart_id returns only the newest top-level order of the cart and its child orders; a storefront cart keeps its id across checkouts, so for the cart's earlier orders pass an earlier placed_after (the date the user asks about, or 2000-01-01T00:00:00Z for the whole history). Read orders, not only order, before answering about a checkout's orders.
+        One hosted checkout can produce a main order plus child orders (each child carries parent_order_id).
+        Lookup by cart_id with placed_after returns all orders placed since the handoff in orders, oldest first (the main order before its child orders), child orders included; order is the newest top-level order; not found means the buyer has not placed the order yet.
+        Without placed_after, lookup by cart_id returns only the newest top-level order of the cart and its child orders;
+        a storefront cart keeps its id across checkouts, so for the cart's earlier orders pass an earlier placed_after (the date the user asks about, or 2000-01-01T00:00:00Z for the whole history).
+        Read orders, not only order, before answering about a checkout's orders.
         """;
 
     public static class Capabilities
@@ -262,6 +268,8 @@ public static class ModuleConstants
     {
         public static class Store
         {
+            public const int DefaultCheckoutLinkLifetimeMinutes = 15;
+
             public static SettingDescriptor StoreManagedAddresses { get; } = new()
             {
                 Name = "UCP.StoreManagedAddresses",
@@ -275,7 +283,7 @@ public static class ModuleConstants
                 Name = "UCP.CheckoutLinkLifetimeMinutes",
                 GroupName = "UCP|Store",
                 ValueType = SettingValueType.PositiveInteger,
-                DefaultValue = 15,
+                DefaultValue = DefaultCheckoutLinkLifetimeMinutes,
             };
 
             public static SettingDescriptor CheckoutUrlTemplate { get; } = new()

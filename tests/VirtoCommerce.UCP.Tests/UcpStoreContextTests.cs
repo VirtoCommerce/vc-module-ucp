@@ -165,7 +165,7 @@ public class UcpStoreContextTests
         return context;
     }
 
-    private static UcpStoreContextResolver CreateResolver(
+    private static InMemoryStoreContextResolver CreateResolver(
         string defaultStore = null,
         string ucpDefaultStoreId = null,
         Dictionary<string, string> domains = null,

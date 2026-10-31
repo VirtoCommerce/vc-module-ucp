@@ -28,6 +28,9 @@ public class UcpStoreContextResolver(
     IOptions<StoresOptions> storesOptions,
     IOptions<UcpOptions> ucpOptions)
 {
+    // Two results are enough to tell whether a store is the only open one.
+    private const int OnlyStoreProbeSize = 2;
+
     private readonly StoresOptions _storesOptions = storesOptions.Value;
     private readonly UcpOptions _ucpOptions = ucpOptions.Value;
 
@@ -85,7 +88,7 @@ public class UcpStoreContextResolver(
     {
         var criteria = AbstractTypeFactory<StoreSearchCriteria>.TryCreateInstance();
         criteria.StoreStates = [StoreState.Open];
-        criteria.Take = 2;
+        criteria.Take = OnlyStoreProbeSize;
         var result = await SearchStoresAsync(criteria);
 
         return result.Results.Count == 1 ? result.Results[0] : null;

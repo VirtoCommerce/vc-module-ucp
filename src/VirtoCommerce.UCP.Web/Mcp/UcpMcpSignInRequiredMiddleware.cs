@@ -73,13 +73,9 @@ internal sealed class UcpMcpSignInRequiredMiddleware
             using var document = await JsonDocument.ParseAsync(request.Body, cancellationToken: request.HttpContext.RequestAborted);
             var root = document.RootElement;
 
-            return root.ValueKind == JsonValueKind.Object &&
-                root.TryGetProperty("method", out var method) && method.ValueKind == JsonValueKind.String &&
-                method.GetString() == "tools/call" &&
-                root.TryGetProperty("params", out var parameters) && parameters.ValueKind == JsonValueKind.Object &&
-                parameters.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String
-                    ? name.GetString()
-                    : null;
+            return ReadString(root, "method") == "tools/call" && root.TryGetProperty("params", out var parameters)
+                ? ReadString(parameters, "name")
+                : null;
         }
         catch (JsonException)
         {
@@ -89,6 +85,15 @@ internal sealed class UcpMcpSignInRequiredMiddleware
         {
             request.Body.Position = 0;
         }
+    }
+
+    private static string ReadString(JsonElement element, string propertyName)
+    {
+        return element.ValueKind == JsonValueKind.Object &&
+            element.TryGetProperty(propertyName, out var value) &&
+            value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
     }
 
     private static bool HasBearerHeader(HttpRequest request)

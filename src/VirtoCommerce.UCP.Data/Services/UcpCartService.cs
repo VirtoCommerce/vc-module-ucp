@@ -116,17 +116,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "buyer_id is required for anonymous cart listing; authenticated mode uses the Platform token.");
         }
 
-        var variables = new Dictionary<string, object>
-        {
-            ["storeId"] = cartRequest.StoreId,
-            ["userId"] = cartRequest.UserId,
-            ["currencyCode"] = cartRequest.Currency,
-            ["cultureName"] = cartRequest.CultureName,
-            ["cartType"] = cartRequest.CartType,
-            ["first"] = Math.Clamp(request.Pagination?.Limit ?? DefaultListLimit, 1, MaxListLimit),
-            ["after"] = request.Pagination?.Cursor,
-            ["sort"] = request.Sort,
-        };
+        var variables = BuildListCartsVariables(cartRequest, request);
 
         var result = await _xApiExecutor.ExecuteCart(new XApiExecutionRequest
         {
@@ -146,6 +136,26 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             carts = carts.Where(x => IsListedCart(x.CartType, cartRequest.CartType)).ToList();
         }
 
+        return CreateCartListResponse(cartsElement, carts, request, filterUntyped);
+    }
+
+    private static Dictionary<string, object> BuildListCartsVariables(CartExecutionRequest cartRequest, UcpCartListRequest request)
+    {
+        return new Dictionary<string, object>
+        {
+            ["storeId"] = cartRequest.StoreId,
+            ["userId"] = cartRequest.UserId,
+            ["currencyCode"] = cartRequest.Currency,
+            ["cultureName"] = cartRequest.CultureName,
+            ["cartType"] = cartRequest.CartType,
+            ["first"] = Math.Clamp(request.Pagination?.Limit ?? DefaultListLimit, 1, MaxListLimit),
+            ["after"] = request.Pagination?.Cursor,
+            ["sort"] = request.Sort,
+        };
+    }
+
+    private UcpCartListResponse CreateCartListResponse(JsonElement cartsElement, IList<UcpCart> carts, UcpCartListRequest request, bool filterUntyped)
+    {
         var hasNextPage = cartsElement.TryGetProperty("pageInfo", out var pageInfo) && ReadBoolean(pageInfo, "hasNextPage");
         var isSinglePage = !hasNextPage && string.IsNullOrEmpty(request.Pagination?.Cursor);
 
@@ -160,6 +170,23 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
                 TotalCount = filterUntyped && isSinglePage ? carts.Count : ReadInt(cartsElement, "totalCount"),
             },
         };
+    }
+
+    private UcpCartResponse CreateStoreManagedAddressesResponse(JsonElement cartElement, UcpCheckoutRequest request)
+    {
+        var response = CreateMutationResponse(cartElement);
+        if (request.ShippingAddress != null || request.BillingAddress != null)
+        {
+            response.Messages.Add(new UcpMessage
+            {
+                Type = "info",
+                Code = ModuleConstants.MessageCodes.AddressesStoreManaged,
+                Content = ModuleConstants.StoreManagedAddressesMessage,
+                Severity = "info",
+            });
+        }
+
+        return response;
     }
 
     public virtual async Task<UcpCartResponse> GetCart(string cartId, UcpCartRequest request, CancellationToken cancellationToken = default)
@@ -313,19 +340,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
 
         if (Options.StoreManagedAddresses)
         {
-            var response = CreateMutationResponse(cartElement);
-            if (request.ShippingAddress != null || request.BillingAddress != null)
-            {
-                response.Messages.Add(new UcpMessage
-                {
-                    Type = "info",
-                    Code = ModuleConstants.MessageCodes.AddressesStoreManaged,
-                    Content = ModuleConstants.StoreManagedAddressesMessage,
-                    Severity = "info",
-                });
-            }
-
-            return response;
+            return CreateStoreManagedAddressesResponse(cartElement, request);
         }
 
         var shippingAddress = await PrepareAddress(request.ShippingAddress, request.Buyer, cancellationToken);
