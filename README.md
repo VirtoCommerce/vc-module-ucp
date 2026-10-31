@@ -9,7 +9,7 @@ The UCP module lets AI assistants such as Claude and ChatGPT shop a Virto Commer
 
 `VirtoCommerce.UCP` is a protocol adapter. It does not replace the Catalog, Cart, Orders, Experience API (XAPI), Store or Marketing modules: a request becomes in-process XAPI and platform service calls, without an extra HTTP hop. Public UCP endpoints have no `/api` prefix.
 
-**Who reads what.** Buyers: [Quick start](#quick-start-connect-your-store-to-an-ai-assistant). Merchants and business users: [How buyers shop through an AI assistant](#how-buyers-shop-through-an-ai-assistant). Administrators: [Prerequisites](#prerequisites), [Set up the store](#set-up-the-store-administrator-once), [Enable signed-in buyers in Virto Cloud](#enable-signed-in-buyers-in-virto-cloud) and [Manage shopping assistants in the back office](#manage-shopping-assistants-in-the-back-office). System integrators and developers: [Configuration](#configuration) and the sections after it.
+**Who reads what.** Buyers: [Quick start](#quick-start-connect-your-store-to-an-ai-assistant-anonymous-buyers). Merchants and business users: [How buyers shop through an AI assistant](#how-buyers-shop-through-an-ai-assistant). Administrators: [Prerequisites](#prerequisites), [Quick start, part 2: enable signed-in buyers](#quick-start-part-2-enable-signed-in-buyers) and [Manage shopping assistants in the back office](#manage-shopping-assistants-in-the-back-office). System integrators and developers: [Configuration](#configuration) and the sections after it.
 
 ## Key Features
 
@@ -29,18 +29,50 @@ The UCP module lets AI assistants such as Claude and ChatGPT shop a Virto Commer
 
 ## Prerequisites
 
-| Component | Requirement | Needed for |
-| --- | --- | --- |
-| Virto Commerce Platform | `3.1091.0` or later | Everything |
-| MCP module | `VirtoCommerce.MCP`: it serves `/ucp/mcp`, signs buyers in and audits the calls | Everything |
-| Commerce modules | Experience API (`Xapi`, `XCatalog`, `XCart`, `XOrder`), `Store`, `Orders` and `Marketing`, at the versions in [Dependencies](#dependencies) | Everything |
-| Store | An open store with an assigned catalog, prices, inventory and a built search index; its **Secure URL** (or **URL**) is the storefront host | Everything |
-| Public HTTPS host | The storefront host, reachable from the internet over HTTPS; claude.ai and ChatGPT connect from their own cloud | Hosted assistants |
-| Storefront | `vc-frontend` with its checkout page; for signed-in buyers, a release with the `/oauth/authorize` sign-in page and the authenticated checkout restore ([vc-frontend#2467](https://github.com/VirtoCommerce/vc-frontend/pull/2467)) | Checkout links, signed-in buyers |
-| Redis | When the platform runs more than one replica (`ConnectionStrings:RedisConnectionString`), so every replica knows the checkout links | Checkout links |
-| OpenTelemetry module | Optional: exports the traces, metrics and logs | Observability |
+Install `VirtoCommerce.UCP` in the platform application; the platform installs what it depends on with it (the MCP module, the Experience API and the commerce modules). Then an administrator configures, once per store:
 
-## Quick start: connect your store to an AI assistant
+1. **The store.** An open store with an assigned catalog, prices, inventory and a built search index. Set its **Secure URL** (or **URL**) to the storefront host, `https://store.example.com`: UCP serves the store whose URL is the host of the request, with its default currency and language.
+1. **The routes.** Route `/ucp` and `/.well-known/ucp` from the storefront host to the platform, in the environment's `infra/environments.yml` of the Virto Cloud deployment repository, and deploy the environment:
+
+    ```yaml
+    routes:
+      - host: store.example.com
+        root: B2B-store
+        paths:
+          - path: /ucp
+            route: platform
+          - path: /.well-known/ucp
+            route: platform
+    ```
+
+1. **The people.** Grant the people who look after the assistants `mcp:audit:read` and `mcp:manage`. Buyers need no permission.
+1. **The check.** `https://store.example.com/.well-known/ucp` returns the UCP manifest, which names the MCP endpoint `https://store.example.com/ucp/mcp`.
+
+Everything else works with its default, and each further store works the same way at its own host:
+
+| What | Default | Change it with |
+| --- | --- | --- |
+| The UCP endpoints | On | `MCP:Scopes:ucp:Enabled` |
+| Anonymous shopping | As the store allows anonymous users | The store setting **Allow anonymous users** |
+| Currency and language | The store's defaults | The store |
+| The checkout page of a checkout link | `{store URL}/checkout` | The store setting `UCP.CheckoutUrlTemplate` |
+| How long a checkout link stays valid | 15 minutes | The store setting `UCP.CheckoutLinkLifetimeMinutes` |
+| Cart addresses | Set by the assistant | The store setting `UCP.StoreManagedAddresses` |
+
+<details>
+<summary>More about the setup</summary>
+
+* The storefront (`vc-frontend`) opens the checkout links on its checkout page.
+* `root` is the Store ID, not the store's display name.
+* `/ucp` covers the MCP endpoint `/ucp/mcp` and the REST API `/ucp/v1/*`; `/.well-known/ucp` is outside that prefix and needs its own route.
+* Outside Virto Cloud, route the same paths from the storefront host to the platform, and keep the original host visible to the platform (forwarded headers).
+* claude.ai and ChatGPT connect from their own cloud, so the storefront host must be reachable from the internet over HTTPS; a host behind a VPN works only if it allows their published IP ranges.
+* A remote URL does not go in `claude_desktop_config.json`, which is for MCP servers that run on the computer.
+* To check the store's values, ask the assistant: *Use the Virto Commerce connector. First call get_store_capabilities, then search for "printer".* The result shows `default_store_id` with the store's currency, language and storefront URL, and **Configuration → AI agents (MCP) → Agent audit log** shows both calls in the `ucp` scope.
+
+</details>
+
+## Quick start: connect your store to an AI assistant (anonymous buyers)
 
 The assistant's address is your storefront host followed by `/ucp/mcp`:
 
@@ -48,7 +80,7 @@ The assistant's address is your storefront host followed by `/ucp/mcp`:
 https://store.example.com/ucp/mcp
 ```
 
-Buyers shop anonymously with this URL alone: no account, client id or sign-in. Replace `store.example.com` with your storefront host. An administrator sets the store up once first: [Set up the store](#set-up-the-store-administrator-once).
+Buyers shop anonymously with this URL alone: no account, client id or sign-in. Replace `store.example.com` with your storefront host. An administrator configures the store once first: [Prerequisites](#prerequisites). To let buyers sign in too, continue with [part 2](#quick-start-part-2-enable-signed-in-buyers).
 
 Then pick your assistant:
 
@@ -86,43 +118,9 @@ Add the server to `.vscode/mcp.json`:
 
 * *Find a laser printer under $300 at Virto Commerce.*
 * *Add two of them to my cart and check out, shipping to 350 Fifth Avenue, New York.* The assistant gives a link to the store's own checkout, where the buyer chooses delivery and pays.
-* *Sign me in and show my orders.* This needs [signed-in buyers](#enable-signed-in-buyers-in-virto-cloud).
+* *Sign me in and show my orders.* This needs [signed-in buyers](#quick-start-part-2-enable-signed-in-buyers).
 
 Menu names in the assistants change from release to release; if a step does not match, check the assistant's own documentation.
-
-### Set up the store (administrator, once)
-
-1. **Install** `VirtoCommerce.MCP` and `VirtoCommerce.UCP` in the Virto Start platform application, with the other modules listed in [Prerequisites](#prerequisites). The MCP module serves the endpoint and its back office; UCP brings the shopping tools. Grant the people who look after the assistants `mcp:audit:read` and `mcp:manage`. Buyers need no permission.
-1. **Check the store.** UCP takes everything from the store whose URL is the host of the request. In the back office, open the store: its **Secure URL** (or **URL**) is `https://store.example.com`, and its default currency and language are the ones assistants should use.
-1. **Route the paths** `/ucp` and `/.well-known/ucp` from the storefront host to the platform, in the environment's `infra/environments.yml` of the Virto Cloud deployment repository, and deploy the environment:
-
-    ```yaml
-    routes:
-      - host: store.example.com
-        root: B2B-store
-        paths:
-          - path: /ucp
-            route: platform
-          - path: /.well-known/ucp
-            route: platform
-    ```
-
-1. **Check the endpoint.** `https://store.example.com/.well-known/ucp` returns the UCP manifest, which names the MCP endpoint `https://store.example.com/ucp/mcp`.
-1. **Hand out** the address to buyers, or publish it with your store.
-
-No UCP configuration is needed, and each further store works the same way at its own host. To let buyers sign in, continue with [Enable signed-in buyers in Virto Cloud](#enable-signed-in-buyers-in-virto-cloud).
-
-<details>
-<summary>More about the setup</summary>
-
-* `root` is the Store ID, not the store's display name.
-* `/ucp` covers the MCP endpoint `/ucp/mcp` and the REST API `/ucp/v1/*`; `/.well-known/ucp` is outside that prefix and needs its own route.
-* Outside Virto Cloud, route the same paths from the storefront host to the platform, and keep the original host visible to the platform (forwarded headers).
-* claude.ai and ChatGPT connect from their own cloud, so the storefront host must be reachable from the internet over HTTPS; a host behind a VPN works only if it allows their published IP ranges.
-* A remote URL does not go in `claude_desktop_config.json`, which is for MCP servers that run on the computer.
-* To check the store's values, ask the assistant: *Use the Virto Commerce connector. First call get_store_capabilities, then search for "printer".* The result shows `default_store_id` with the store's currency, language and storefront URL, and **Configuration → AI agents (MCP) → Agent audit log** shows both calls in the `ucp` scope.
-
-</details>
 
 ### Troubleshooting
 
@@ -135,68 +133,15 @@ No UCP configuration is needed, and each further store works the same way at its
 | The checkout link opens the wrong host | Set the store's Secure URL; for a checkout page that is not at `/checkout`, set the store setting `UCP.CheckoutUrlTemplate`. |
 | A Team or Enterprise user cannot add the connector | An organization owner adds the custom connector first. |
 
-## How buyers shop through an AI assistant
+## Quick start, part 2: enable signed-in buyers
 
-This section is for merchants and business users. It describes what a buyer experiences when an AI assistant, such as Claude or ChatGPT, shops your store through UCP. Setup steps for IT are in [Enable signed-in buyers in Virto Cloud](#enable-signed-in-buyers-in-virto-cloud).
-
-```mermaid
-sequenceDiagram
-    actor Buyer
-    participant Assistant as AI assistant
-    participant Store as Your Virto Commerce store
-    Buyer->>Assistant: "Find a printer and add it to my cart"
-    Assistant->>Store: Search and add to cart (anonymous)
-    Buyer->>Assistant: "Use my company account"
-    Assistant->>Buyer: Opens the store sign-in page in the browser
-    Buyer->>Store: Signs in with the usual store account
-    Assistant->>Store: Same tools, now as the buyer and their organization
-    Assistant->>Buyer: Checkout link
-    Buyer->>Store: Opens the link, reviews, pays in the storefront
-```
-
-**Anonymous by default.** A buyer can search products and build a cart without signing in. The assistant does not ask for an account until the buyer needs one.
-
-**Signing in.** When the buyer asks the assistant to use their account, order for their company, or see their orders, the assistant asks them to sign in. Your store's own sign-in page opens in the browser. The buyer signs in with their usual store account, and the assistant continues from where it stopped. The assistant never sees the buyer's password.
-
-**What signing in unlocks.** After signing in, the assistant works with the buyer's own data:
-
-- the buyer's prices, including organization contract pricing;
-- the products available to the buyer's organization;
-- the buyer's saved carts and orders.
-
-**The anonymous cart carries over.** Items the buyer added before signing in are merged into their account cart.
-
-**Checkout stays in your storefront.** The assistant prepares the cart and gives the buyer a checkout link. The buyer opens it, reviews the order, chooses delivery and payment, and places the order in your normal storefront. Approval rules, purchase orders and invoice terms apply there exactly as they do today. When the assistant says the checkout "requires review", it means "continue in the store", not "this order needs approval".
-
-**The checkout link is short-lived and personal.**
-
-- It works once and expires after 15 minutes by default.
-- Only the buyer it was created for can use it; another signed-in buyer is refused.
-- If the link expires, ask the assistant for a new one. The cart itself is kept.
-
-**Signing out and switching accounts.**
-
-- Asking the assistant to log out ends its session with your store.
-- Signing out of the storefront in the browser does not sign the assistant out.
-- To shop as a different account, the buyer must disconnect and reconnect the store connector in the assistant.
-
-**What the assistant cannot do.** It cannot take payment, place orders, or see another buyer's carts, orders or prices.
-
-### Known limitations
-
-- Logging out does not cancel checkout links issued before logout, and an issued link cannot be revoked early. It stops working after it is used or expires.
-- For a signed-in buyer, creating a cart adds items to the buyer's existing default cart instead of starting a new, empty cart.
-- A shipping address given to the assistant can update the matching address saved on the buyer's account.
-
-## Enable signed-in buyers in Virto Cloud
-
-The [quick start](#quick-start-connect-your-store-to-an-ai-assistant) above sets up anonymous shopping. The steps below let buyers sign in, so the assistant can shop with their prices, organization, carts and orders. The examples use `B2B-store` as the Store ID and `https://store.example.com` as the public Storefront host.
+The [quick start](#quick-start-connect-your-store-to-an-ai-assistant-anonymous-buyers) above sets up anonymous shopping. The steps below, for Virto Cloud, let buyers sign in, so the assistant can shop with their prices, organization, carts and orders. The examples use `B2B-store` as the Store ID and `https://store.example.com` as the public Storefront host.
 
 UCP does not sign buyers in itself. Virto Commerce Platform (OpenIddict) handles sign-in, consent and tokens; the Storefront hosts the sign-in page. The Storefront host therefore acts as both the MCP endpoint and the OAuth authorization server.
 
 ### 1. Check the prerequisites
 
-The [Prerequisites](#prerequisites) above, with the storefront release that has the `/oauth/authorize` sign-in page, and Redis when the platform runs more than one replica (step 3).
+The [Prerequisites](#prerequisites) above, and a storefront (`vc-frontend`) release with the `/oauth/authorize` sign-in page and the authenticated checkout restore ([vc-frontend#2467](https://github.com/VirtoCommerce/vc-frontend/pull/2467)).
 
 ### 2. Update the Platform configuration
 
@@ -283,7 +228,7 @@ Check that the printed permissions contain `rsrc:https://store.example.com/ucp/m
 
 ### 6. Connect the AI assistant
 
-**Claude.** Add the custom connector as in the [quick start](#quick-start-connect-your-store-to-an-ai-assistant), with the remote MCP server URL `https://store.example.com/ucp/mcp`. Under **Advanced settings**, enter the OAuth client ID from step 5.
+**Claude.** Add the custom connector as in the [quick start](#quick-start-connect-your-store-to-an-ai-assistant-anonymous-buyers), with the remote MCP server URL `https://store.example.com/ucp/mcp`. Under **Advanced settings**, enter the OAuth client ID from step 5.
 
 **ChatGPT.** Full MCP connectors require a ChatGPT Business or Enterprise/Edu workspace with developer mode enabled. Create one app under **Settings > Apps > Create** with the URL `https://store.example.com/ucp/mcp` and OAuth authentication. See the [OpenAI developer mode guide](https://help.openai.com/en/articles/12584461-developer-mode-apps-and-full-mcp-connectors-in-chatgpt-beta).
 
@@ -311,6 +256,59 @@ The checkout link carries its one-time token in the `ucp_session` query paramete
 | Checkout links are reported as expired or already used on the first try | The Platform has more than one replica and no Redis. See step 3. |
 | `403 buyer_context_mismatch` | The link was opened by a different buyer, or a client sent a legacy `X-Buyer-*` header. |
 | The assistant keeps using the previous account | Signing out of the Storefront does not change the assistant's token. Disconnect and reconnect the connector. |
+
+## How buyers shop through an AI assistant
+
+This section is for merchants and business users. It describes what a buyer experiences when an AI assistant, such as Claude or ChatGPT, shops your store through UCP. Setup steps for IT are in [Prerequisites](#prerequisites) and [Quick start, part 2](#quick-start-part-2-enable-signed-in-buyers).
+
+```mermaid
+sequenceDiagram
+    actor Buyer
+    participant Assistant as AI assistant
+    participant Store as Your Virto Commerce store
+    Buyer->>Assistant: "Find a printer and add it to my cart"
+    Assistant->>Store: Search and add to cart (anonymous)
+    Buyer->>Assistant: "Use my company account"
+    Assistant->>Buyer: Opens the store sign-in page in the browser
+    Buyer->>Store: Signs in with the usual store account
+    Assistant->>Store: Same tools, now as the buyer and their organization
+    Assistant->>Buyer: Checkout link
+    Buyer->>Store: Opens the link, reviews, pays in the storefront
+```
+
+**Anonymous by default.** A buyer can search products and build a cart without signing in. The assistant does not ask for an account until the buyer needs one.
+
+**Signing in.** When the buyer asks the assistant to use their account, order for their company, or see their orders, the assistant asks them to sign in. Your store's own sign-in page opens in the browser. The buyer signs in with their usual store account, and the assistant continues from where it stopped. The assistant never sees the buyer's password.
+
+**What signing in unlocks.** After signing in, the assistant works with the buyer's own data:
+
+- the buyer's prices, including organization contract pricing;
+- the products available to the buyer's organization;
+- the buyer's saved carts and orders.
+
+**The anonymous cart carries over.** Items the buyer added before signing in are merged into their account cart.
+
+**Checkout stays in your storefront.** The assistant prepares the cart and gives the buyer a checkout link. The buyer opens it, reviews the order, chooses delivery and payment, and places the order in your normal storefront. Approval rules, purchase orders and invoice terms apply there exactly as they do today. When the assistant says the checkout "requires review", it means "continue in the store", not "this order needs approval".
+
+**The checkout link is short-lived and personal.**
+
+- It works once and expires after 15 minutes by default.
+- Only the buyer it was created for can use it; another signed-in buyer is refused.
+- If the link expires, ask the assistant for a new one. The cart itself is kept.
+
+**Signing out and switching accounts.**
+
+- Asking the assistant to log out ends its session with your store.
+- Signing out of the storefront in the browser does not sign the assistant out.
+- To shop as a different account, the buyer must disconnect and reconnect the store connector in the assistant.
+
+**What the assistant cannot do.** It cannot take payment, place orders, or see another buyer's carts, orders or prices.
+
+### Known limitations
+
+- Logging out does not cancel checkout links issued before logout, and an issued link cannot be revoked early. It stops working after it is used or expires.
+- For a signed-in buyer, creating a cart adds items to the buyer's existing default cart instead of starting a new, empty cart.
+- A shipping address given to the assistant can update the matching address saved on the buyer's account.
 
 ## Manage shopping assistants in the back office
 
