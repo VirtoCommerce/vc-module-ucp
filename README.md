@@ -163,7 +163,7 @@ UCP does not sign buyers in itself. Virto Commerce Platform (OpenIddict) handles
 
 | Component | Requirement |
 | --- | --- |
-| Platform | `3.1085.0` or later; OAuth resource indicators and the storefront sign-in came in `3.1072.0` ([vc-platform#3108](https://github.com/VirtoCommerce/vc-platform/pull/3108)). |
+| Platform | `3.1091.0` or later; OAuth resource indicators and the storefront sign-in came in `3.1072.0` ([vc-platform#3108](https://github.com/VirtoCommerce/vc-platform/pull/3108)). |
 | MCP module | `VirtoCommerce.MCP`, which serves `/ucp/mcp` and checks the buyer's token; see [Dependencies](#dependencies). |
 | UCP module | A release that includes the authenticated buyer flow ([vc-module-ucp#7](https://github.com/VirtoCommerce/vc-module-ucp/pull/7)). |
 | Storefront | A `vc-frontend` release that includes the `/oauth/authorize` sign-in page and authenticated handoff restore ([vc-frontend#2467](https://github.com/VirtoCommerce/vc-frontend/pull/2467)). |
@@ -780,7 +780,7 @@ Earlier versions mapped `/ucp/mcp` themselves. This version moves the endpoint t
 - The `UCP.Enabled` platform setting is removed; it was registered but not read. UCP is switched off with `MCP:Scopes:ucp:Enabled` (see [Switching UCP on and off](#switching-ucp-on-and-off)).
 - `UCP:AnonymousCatalog` now also follows the default store's `AllowAnonymousUsers`; when either is off, the MCP endpoint asks for a sign-in from the first request.
 - Cart tools work with the buyer's storefront cart when no `cart_type` is given, a cart's `continue_url` is `{storefront}/cart/{id}`, and `track_order` takes `placed_after` (the handoff's `issued_at`) and returns `orders`.
-- The minimum platform version is `3.1085.0` (was `3.1076.0`).
+- The minimum platform version is `3.1091.0` (was `3.1076.0`), with the latest Xapi, XCart, XOrder, Store, Orders and Marketing modules.
 - `UCP:Observability:EnableApplicationInsightsCompatibilityBridge` is removed, with the optional dependency on the `VirtoCommerce.ApplicationInsights` module. To send traces to Application Insights, set `OpenTelemetry:AzureMonitor:ConnectionString` in the OpenTelemetry module (see [Observability](#observability)).
 - Code that referenced `UcpDiagnostics.McpActivitySourceName` uses `McpDiagnostics.SdkActivitySourceName` from `VirtoCommerce.MCP.Core`.
 - These public types are removed, so code that used or derived from them changes: `UcpMcpStartup` (and the module's `startupType`), `UcpMcpSessionService`, `UcpMcpBuyerAuthenticationMiddleware`, `UcpOAuthMetadataController`, `UcpProtectedResourceMetadata`, `UcpMcpActivityStatusFilter` and `UcpApplicationInsightsActivityBridge`. Their work is done by the MCP module; to change it, replace the MCP module's services ([Replace the MCP infrastructure](https://github.com/VirtoCommerce/vc-module-mcp#replace-the-mcp-infrastructure)).
@@ -825,20 +825,20 @@ The module manifest declares these runtime dependencies:
 | Module | Version |
 | --- | --- |
 | `VirtoCommerce.MCP` | `3.1000.0-alpha.15-vcst-6155-core-mcp-module` |
-| `VirtoCommerce.Xapi` | `3.1026.0` |
+| `VirtoCommerce.Xapi` | `3.1029.0` |
 | `VirtoCommerce.XCatalog` | `3.1023.0` |
-| `VirtoCommerce.XCart` | `3.1038.0` |
-| `VirtoCommerce.XOrder` | `3.1014.0` |
-| `VirtoCommerce.Store` | `3.1009.0` |
-| `VirtoCommerce.Orders` | `3.1018.0` |
-| `VirtoCommerce.Marketing` | `3.1009.0` |
+| `VirtoCommerce.XCart` | `3.1044.0` |
+| `VirtoCommerce.XOrder` | `3.1017.0` |
+| `VirtoCommerce.Store` | `3.1013.0` |
+| `VirtoCommerce.Orders` | `3.1019.0` |
+| `VirtoCommerce.Marketing` | `3.1010.0` |
 | `VirtoCommerce.OpenTelemetry` | `3.1002.0`, optional |
 
 UCP builds against the `VirtoCommerce.MCP.Core` package of the same version as the MCP module.
 
 Target framework: `.NET 10`.
 
-Minimum Virto Commerce Platform version: `3.1085.0`.
+Minimum Virto Commerce Platform version: `3.1091.0`.
 
 ### Build and test
 
