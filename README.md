@@ -9,7 +9,7 @@ The UCP module lets AI assistants such as Claude and ChatGPT shop a Virto Commer
 
 `VirtoCommerce.UCP` is a protocol adapter. It does not replace the Catalog, Cart, Orders, Experience API (XAPI), Store or Marketing modules: a request becomes in-process XAPI and platform service calls, without an extra HTTP hop. Public UCP endpoints have no `/api` prefix.
 
-**Who reads what.** Merchants and business users: [How buyers shop through an AI assistant](#how-buyers-shop-through-an-ai-assistant). Administrators: [Quick start](#quick-start-connect-your-store-to-claude), [Enable signed-in buyers in Virto Cloud](#enable-signed-in-buyers-in-virto-cloud) and [Manage shopping assistants in the back office](#manage-shopping-assistants-in-the-back-office). System integrators and developers: [Configuration](#configuration) and the sections after it.
+**Who reads what.** Buyers: [Quick start](#quick-start-connect-your-store-to-an-ai-assistant). Merchants and business users: [How buyers shop through an AI assistant](#how-buyers-shop-through-an-ai-assistant). Administrators: [Set up the store](#set-up-the-store-administrator-once), [Enable signed-in buyers in Virto Cloud](#enable-signed-in-buyers-in-virto-cloud) and [Manage shopping assistants in the back office](#manage-shopping-assistants-in-the-back-office). System integrators and developers: [Configuration](#configuration) and the sections after it.
 
 ## Key Features
 
@@ -27,68 +27,95 @@ The UCP module lets AI assistants such as Claude and ChatGPT shop a Virto Commer
 > [!NOTE]
 > UCP is an OAuth protected resource only. The platform (OpenIddict) owns sign-in, consent, the authorization code flow with PKCE, tokens, users, organizations and the registered OAuth clients.
 
-## Quick start: connect your store to Claude
+## Quick start: connect your store to an AI assistant
 
-Five steps connect a Virto Start store in Virto Cloud to Claude, so a buyer can shop it anonymously. To let buyers sign in, continue with [Enable signed-in buyers in Virto Cloud](#enable-signed-in-buyers-in-virto-cloud). The examples use the Store ID `B2B-store` and the public storefront host `store.example.com`; replace both with yours, and use the Store ID, not the store's display name.
-
-### 1. Install the modules (administrator, once)
-
-Install `VirtoCommerce.MCP` and `VirtoCommerce.UCP` in the Virto Start **platform application**, with the other modules listed in [Dependencies](#dependencies). The MCP module serves the assistant's endpoint and its back office; UCP brings the shopping tools.
-
-Grant the people who look after the assistants the MCP module's permissions `mcp:audit:read`, `mcp:tools:manage` and `mcp:agents:manage` (see [Manage shopping assistants in the back office](#manage-shopping-assistants-in-the-back-office)). Buyers need no permission to shop anonymously.
-
-### 2. Check the store and route the paths (administrator, once)
-
-UCP takes everything else from the store the assistant connects to: the store whose URL is the host of the request. In the back office, open the store and check:
-
-- **Secure URL** (or **URL**) is `https://store.example.com`, the storefront host;
-- the default currency and language are the ones assistants should use.
-
-In the Virto Cloud deployment repository, route `/ucp` and `/.well-known/ucp` from the storefront host to the platform, in the environment's `infra/environments.yml`:
-
-```yaml
-routes:
-  - host: store.example.com
-    root: B2B-store
-    paths:
-      - path: /ucp
-        route: platform
-      - path: /.well-known/ucp
-        route: platform
-```
-
-`/ucp` covers the MCP endpoint `/ucp/mcp` and the REST API `/ucp/v1/*`; `/.well-known/ucp` is outside that prefix and needs its own route. Deploy the environment to apply the routes. No UCP configuration is needed; each further store works the same way at its own host.
-
-Outside Virto Cloud, route the same paths from the storefront host to the platform, and keep the original host visible to the platform (forwarded headers).
-
-### 3. Check the endpoint
-
-Open `https://store.example.com/.well-known/ucp` in a browser. The UCP manifest it returns must name the MCP endpoint `https://store.example.com/ucp/mcp`, under `ucp.services["com.virtocommerce.ucp"]`. The store's own values, its id, currency, language and storefront URL, are checked in step 5.
-
-The assistant's address is `https://store.example.com/ucp/mcp`. Claude connects to it from Anthropic's cloud, so the storefront host must be reachable from the internet over HTTPS; a host behind a VPN works only if it allows Anthropic's published IP ranges.
-
-### 4. Add the connector to Claude (each buyer)
-
-In Claude Desktop or claude.ai, add a custom connector (**Settings → Connectors → Add custom connector**) named `Virto Commerce` with the URL `https://store.example.com/ucp/mcp`, then enable it in a conversation. Anonymous shopping needs no OAuth client and no sign-in. In a Team or Enterprise organization, an owner adds the connector for everyone first. Claude's menu names change between versions; see Anthropic's [guide to custom connectors](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp).
-
-A remote URL does not go in `claude_desktop_config.json`, which is for MCP servers that run on the computer. ChatGPT and other MCP clients connect to the same URL; see [Connect the AI assistant](#6-connect-the-ai-assistant).
-
-### 5. Try it
-
-In a new conversation with the connector enabled, send:
+The assistant's address is your storefront host followed by `/ucp/mcp`:
 
 ```text
-Use the Virto Commerce connector. First call get_store_capabilities, then search
-for "printer". Use the default store, currency and language the server publishes.
+https://store.example.com/ucp/mcp
 ```
 
-Claude calls `get_store_capabilities`, then `search_products`, without asking for values the server already publishes. The result of `get_store_capabilities` shows the expected `default_store_id` with the store's currency, language and storefront URL. In the back office, **Configuration → AI agents (MCP) → Agent audit log** shows both calls in the `ucp` scope.
+Buyers shop anonymously with this URL alone: no account, client id or sign-in. Replace `store.example.com` with your storefront host. An administrator sets the store up once first: [Set up the store](#set-up-the-store-administrator-once).
+
+Then pick your assistant:
+
+**Claude Desktop and claude.ai**
+
+1. **Settings → Connectors → Add custom connector.**
+1. Name: `Virto Commerce`. URL: the address above. **Add**.
+1. Enable the connector in a conversation.
+
+In a Team or Enterprise organization, an owner adds the connector for everyone first. See Anthropic's [guide to custom connectors](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp).
+
+**ChatGPT**
+
+In developer mode (ChatGPT Business, Enterprise or Edu), **Settings → Apps → Create** an app with the address above. See OpenAI's [developer mode guide](https://help.openai.com/en/articles/12584461-developer-mode-apps-and-full-mcp-connectors-in-chatgpt-beta).
+
+**Claude Code**
+
+```bash
+claude mcp add --transport http virto-store https://store.example.com/ucp/mcp
+```
+
+**VS Code**
+
+Add the server to `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "virto-store": { "type": "http", "url": "https://store.example.com/ucp/mcp" }
+  }
+}
+```
+
+**Try it.** Ask for example:
+
+* *Find a laser printer under $300 at Virto Commerce.*
+* *Add two of them to my cart and check out, shipping to 350 Fifth Avenue, New York.* The assistant gives a link to the store's own checkout, where the buyer chooses delivery and pays.
+* *Sign me in and show my orders.* This needs [signed-in buyers](#enable-signed-in-buyers-in-virto-cloud).
+
+Menu names in the assistants change from release to release; if a step does not match, check the assistant's own documentation.
+
+### Set up the store (administrator, once)
+
+1. **Install** `VirtoCommerce.MCP` and `VirtoCommerce.UCP` in the Virto Start platform application, with the other modules listed in [Dependencies](#dependencies). The MCP module serves the endpoint and its back office; UCP brings the shopping tools. Grant the people who look after the assistants `mcp:audit:read`, `mcp:tools:manage` and `mcp:agents:manage`. Buyers need no permission to shop anonymously.
+1. **Check the store.** UCP takes everything from the store whose URL is the host of the request. In the back office, open the store: its **Secure URL** (or **URL**) is `https://store.example.com`, and its default currency and language are the ones assistants should use.
+1. **Route the paths** `/ucp` and `/.well-known/ucp` from the storefront host to the platform, in the environment's `infra/environments.yml` of the Virto Cloud deployment repository, and deploy the environment:
+
+    ```yaml
+    routes:
+      - host: store.example.com
+        root: B2B-store
+        paths:
+          - path: /ucp
+            route: platform
+          - path: /.well-known/ucp
+            route: platform
+    ```
+
+1. **Check the endpoint.** `https://store.example.com/.well-known/ucp` returns the UCP manifest, which names the MCP endpoint `https://store.example.com/ucp/mcp`.
+1. **Hand out** the address to buyers, or publish it with your store.
+
+No UCP configuration is needed, and each further store works the same way at its own host. To let buyers sign in, continue with [Enable signed-in buyers in Virto Cloud](#enable-signed-in-buyers-in-virto-cloud).
+
+<details>
+<summary>More about the setup</summary>
+
+* `root` is the Store ID, not the store's display name.
+* `/ucp` covers the MCP endpoint `/ucp/mcp` and the REST API `/ucp/v1/*`; `/.well-known/ucp` is outside that prefix and needs its own route.
+* Outside Virto Cloud, route the same paths from the storefront host to the platform, and keep the original host visible to the platform (forwarded headers).
+* claude.ai and ChatGPT connect from their own cloud, so the storefront host must be reachable from the internet over HTTPS; a host behind a VPN works only if it allows their published IP ranges.
+* A remote URL does not go in `claude_desktop_config.json`, which is for MCP servers that run on the computer.
+* To check the store's values, ask the assistant: *Use the Virto Commerce connector. First call get_store_capabilities, then search for "printer".* The result shows `default_store_id` with the store's currency, language and storefront URL, and **Configuration → AI agents (MCP) → Agent audit log** shows both calls in the `ucp` scope.
+
+</details>
 
 ### Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| Claude cannot connect | The environment routes `/ucp` to the platform, the storefront host is public, and the updated environment was deployed. |
+| The assistant cannot connect | The environment routes `/ucp` to the platform, the storefront host is public, and the updated environment was deployed. |
 | The connector lists no tools | `VirtoCommerce.MCP` is installed, and the `ucp` scope is not switched off (`MCP:Scopes:ucp:Enabled`, or the scope switch on **Agent tools**). |
 | `missing_store_id` | The store's Secure URL or URL has the host the assistant connects to; for requests to another host, set `VirtoCommerce__Stores__DefaultStore` to the Store ID. |
 | Search returns no products | The store is open, its catalog is assigned, prices and inventory exist, and the search index is built. |
@@ -150,7 +177,7 @@ sequenceDiagram
 
 ## Enable signed-in buyers in Virto Cloud
 
-The [quick start](#quick-start-connect-your-store-to-claude) above sets up anonymous shopping. The steps below let buyers sign in, so the assistant can shop with their prices, organization, carts and orders. The examples use `B2B-store` as the Store ID and `https://store.example.com` as the public Storefront host.
+The [quick start](#quick-start-connect-your-store-to-an-ai-assistant) above sets up anonymous shopping. The steps below let buyers sign in, so the assistant can shop with their prices, organization, carts and orders. The examples use `B2B-store` as the Store ID and `https://store.example.com` as the public Storefront host.
 
 UCP does not sign buyers in itself. Virto Commerce Platform (OpenIddict) handles sign-in, consent and tokens; the Storefront hosts the sign-in page. The Storefront host therefore acts as both the MCP endpoint and the OAuth authorization server.
 
@@ -228,7 +255,7 @@ Each AI assistant signs buyers in through a registered OAuth client:
 | Redirect URI | The callback URL of the AI assistant. For Claude custom connectors this is `https://claude.ai/api/mcp/auth_callback` (*to verify against the current Anthropic documentation*). |
 | Permissions | `rsrc:https://store.example.com/ucp/mcp` |
 
-The **Security > OAuth applications** screen has no field for `rsrc:` permissions. Create the client through the Platform API instead, for example from the browser console while signed in to the Platform Manager as an administrator:
+The **Security > OAuth applications** screen has no field for `rsrc:` permissions yet ([VCST-6641](https://virtocommerce.atlassian.net/browse/VCST-6641) adds it, and this step then moves to the screen). Until then, create the client through the Platform API, for example from the browser console while signed in to the Platform Manager as an administrator:
 
 ```javascript
 (async () => {
@@ -249,7 +276,7 @@ Check that the printed permissions contain `rsrc:https://store.example.com/ucp/m
 
 ### 6. Connect the AI assistant
 
-**Claude.** Add the custom connector as in the [quick start](#4-add-the-connector-to-claude-each-buyer), with the remote MCP server URL `https://store.example.com/ucp/mcp`. Under **Advanced settings**, enter the OAuth client ID from step 5.
+**Claude.** Add the custom connector as in the [quick start](#quick-start-connect-your-store-to-an-ai-assistant), with the remote MCP server URL `https://store.example.com/ucp/mcp`. Under **Advanced settings**, enter the OAuth client ID from step 5.
 
 **ChatGPT.** Full MCP connectors require a ChatGPT Business or Enterprise/Edu workspace with developer mode enabled. Create one app under **Settings > Apps > Create** with the URL `https://store.example.com/ucp/mcp` and OAuth authentication. See the [OpenAI developer mode guide](https://help.openai.com/en/articles/12584461-developer-mode-apps-and-full-mcp-connectors-in-chatgpt-beta).
 
