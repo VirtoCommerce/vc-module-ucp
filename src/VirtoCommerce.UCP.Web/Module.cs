@@ -4,12 +4,15 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Swashbuckle.AspNetCore.SwaggerGen;
 using VirtoCommerce.MCP.Core.Extensions;
 using VirtoCommerce.MCP.Core.Models;
 using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.Platform.Core.Modularity;
 using VirtoCommerce.Platform.Core.Security;
+using VirtoCommerce.Platform.Core.Settings;
+using VirtoCommerce.StoreModule.Core.Model;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Options;
@@ -67,6 +70,9 @@ public class Module : IModule, IHasConfiguration
         // The gate of the ucp scope switch and the sign-in rule of a closed catalog run ahead of the MCP module's endpoints.
         serviceCollection.AddTransient<IStartupFilter, UcpStartupFilter>();
 
+        // The store of each request, from its host, and the options it gives the UCP services.
+        serviceCollection.AddTransient<UcpStoreContextResolver>();
+        serviceCollection.AddTransient<IUcpRequestOptions, UcpRequestOptions>();
         serviceCollection.AddTransient<IUcpPublicOriginResolver, UcpPublicOriginResolver>();
         serviceCollection.AddTransient<IUcpProfileService, UcpProfileService>();
         serviceCollection.AddScoped<IUcpBuyerContextAccessor, UcpBuyerContextAccessor>();
@@ -101,8 +107,42 @@ public class Module : IModule, IHasConfiguration
         var permissionsRegistrar = serviceProvider.GetRequiredService<IPermissionsRegistrar>();
         permissionsRegistrar.RegisterPermissions(ModuleInfo.Id, "UCP", ModuleConstants.Security.Permissions.AllPermissions);
 
+        // The UCP settings of a store, in the store's settings in the back office.
+        var settingsRegistrar = serviceProvider.GetRequiredService<ISettingsRegistrar>();
+        settingsRegistrar.RegisterSettings(ModuleConstants.Settings.AllSettings, ModuleInfo.Id);
+        settingsRegistrar.RegisterSettingsForType(ModuleConstants.Settings.StoreLevelSettings, nameof(Store));
+
+        LogObsoleteConfiguration(serviceProvider.GetRequiredService<ILogger<Module>>());
+
         appBuilder.UseScopedSchema<XapiAssemblyMarker>("ucp");
     }
+
+    // UCP keys that the store, its settings or the MCP module's configuration now provide. They still work, so a deployment
+    // moves them at its own pace: as the fallback for a request that no store is resolved for, and UCP:PublicOrigin as
+    // before.
+    private void LogObsoleteConfiguration(ILogger logger)
+    {
+        foreach (var (key, replacement) in ObsoleteKeys)
+        {
+            if (!string.IsNullOrWhiteSpace(Configuration[$"UCP:{key}"]))
+            {
+                logger.LogWarning("UCP:{Key} is obsolete: {Replacement}.", key, replacement);
+            }
+        }
+    }
+
+    internal static readonly (string Key, string Replacement)[] ObsoleteKeys =
+    [
+        ("DefaultStoreId", "the store is resolved from the request's host; set VirtoCommerce:Stores:DefaultStore for requests to other hosts; it applies only to a request that no store is resolved for"),
+        ("DefaultCurrency", "the store's default currency is used; it applies only to a request that no store is resolved for"),
+        ("DefaultCultureName", "the store's default language is used; it applies only to a request that no store is resolved for"),
+        ("StorefrontOrigin", "the store's URL (SecureUrl, then Url) is used; it applies only to a request that no store is resolved for"),
+        ("UcpBaseUrl", "it is built from the store's URL; it applies only to a request that no store is resolved for"),
+        ("PublicOrigin", "set MCP:Scopes:ucp:PublicOrigin for a fixed origin, or nothing to use the store's URL; until then it still overrides the store's URL"),
+        ("HandoffUrlTemplate", "set the store setting UCP.CheckoutUrlTemplate; it applies to a store that leaves the setting unset"),
+        ("HandoffTokenTtlMinutes", "set the store setting UCP.CheckoutLinkLifetimeMinutes; it applies to a store that leaves the setting unset"),
+        ("StoreManagedAddresses", "set the store setting UCP.StoreManagedAddresses; it applies to a store that leaves the setting unset"),
+    ];
 
     public void Uninstall()
     {

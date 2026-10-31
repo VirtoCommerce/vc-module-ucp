@@ -37,21 +37,16 @@ Install `VirtoCommerce.MCP` and `VirtoCommerce.UCP` in the Virto Start **platfor
 
 Grant the people who look after the assistants the MCP module's permissions `mcp:audit:read`, `mcp:tools:manage` and `mcp:agents:manage` (see [Manage shopping assistants in the back office](#manage-shopping-assistants-in-the-back-office)). Buyers need no permission to shop anonymously.
 
-### 2. Configure the platform and the routes (administrator, once)
+### 2. Check the store and route the paths (administrator, once)
 
-In the Virto Cloud deployment repository, edit the environment in `infra/environments.yml`: add the UCP settings under `platform.config`, and route `/ucp` and `/.well-known/ucp` from the storefront host to the platform.
+UCP takes everything else from the store the assistant connects to: the store whose URL is the host of the request. In the back office, open the store and check:
+
+- **Secure URL** (or **URL**) is `https://store.example.com`, the storefront host;
+- the default currency and language are the ones assistants should use.
+
+In the Virto Cloud deployment repository, route `/ucp` and `/.well-known/ucp` from the storefront host to the platform, in the environment's `infra/environments.yml`:
 
 ```yaml
-platform:
-  config:
-    UCP__DefaultStoreId: B2B-store
-    UCP__DefaultCurrency: USD
-    UCP__DefaultCultureName: en-US
-    UCP__StorefrontOrigin: "https://store.example.com"
-    UCP__UcpBaseUrl: "https://store.example.com/ucp/v1"
-    UCP__HandoffUrlTemplate: "https://store.example.com/checkout?ucp_session={token}"
-    UCP__HandoffTokenTtlMinutes: 15
-
 routes:
   - host: store.example.com
     root: B2B-store
@@ -62,9 +57,9 @@ routes:
         route: platform
 ```
 
-`/ucp` covers the MCP endpoint `/ucp/mcp` and the REST API `/ucp/v1/*`; `/.well-known/ucp` is outside that prefix and needs its own route. Deploy the environment: the platform restarts with the configuration, and the routes apply.
+`/ucp` covers the MCP endpoint `/ucp/mcp` and the REST API `/ucp/v1/*`; `/.well-known/ucp` is outside that prefix and needs its own route. Deploy the environment to apply the routes. No UCP configuration is needed; each further store works the same way at its own host.
 
-Outside Virto Cloud, set the same values in the `UCP` section of `appsettings.json` (see [Configuration](#configuration)) and route the same paths from the storefront host to the platform.
+Outside Virto Cloud, route the same paths from the storefront host to the platform, and keep the original host visible to the platform (forwarded headers).
 
 ### 3. Check the endpoint
 
@@ -95,9 +90,9 @@ Claude calls `get_store_capabilities`, then `search_products`, without asking fo
 | --- | --- |
 | Claude cannot connect | The environment routes `/ucp` to the platform, the storefront host is public, and the updated environment was deployed. |
 | The connector lists no tools | `VirtoCommerce.MCP` is installed, and the `ucp` scope is not switched off (`MCP:Scopes:ucp:Enabled`, or the scope switch on **Agent tools**). |
-| `missing_store_id` | `UCP__DefaultStoreId` holds the exact Store ID, and the updated environment was deployed. |
+| `missing_store_id` | The store's Secure URL or URL has the host the assistant connects to; for requests to another host, set `VirtoCommerce__Stores__DefaultStore` to the Store ID. |
 | Search returns no products | The store is open, its catalog is assigned, prices and inventory exist, and the search index is built. |
-| The checkout link opens the wrong host | Set the store's `SecureUrl` or `Url`, or `UCP__StorefrontOrigin` and `UCP__HandoffUrlTemplate`. |
+| The checkout link opens the wrong host | Set the store's Secure URL; for a checkout page that is not at `/checkout`, set the store setting `UCP.CheckoutUrlTemplate`. |
 | A Team or Enterprise user cannot add the connector | An organization owner adds the custom connector first. |
 
 ## How buyers shop through an AI assistant
@@ -171,22 +166,19 @@ UCP does not sign buyers in itself. Virto Commerce Platform (OpenIddict) handles
 
 ### 2. Update the Platform configuration
 
-Add these values under `platform.config` in `infra/environments.yml`, next to the UCP values from the quick start:
+Add these values under `platform.config` in `infra/environments.yml`:
 
 ```yaml
 platform:
   config:
-    UCP__DefaultStoreId: B2B-store
-    UCP__PublicOrigin: "https://store.example.com"
     Authorization__Resources__0: "https://store.example.com/ucp/mcp"
     Authorization__OAuthLoginPath: /oauth/authorize
 ```
 
-- `UCP__PublicOrigin` is the host that UCP advertises for discovery, MCP and OAuth.
 - `Authorization__Resources__0` allows Platform to issue tokens for the UCP MCP endpoint. If `Authorization:Resources` already lists other addresses, add this one with the next index instead of replacing them.
 - `Authorization__OAuthLoginPath` sends buyers to the Storefront sign-in page instead of the Platform back-office sign-in page.
 
-All of these values, the OAuth client permission in step 5, and the existing `UCP__StorefrontOrigin`, `UCP__UcpBaseUrl` and `UCP__HandoffUrlTemplate` values must use the **same host**. Mixing the Platform host and the Storefront host produces tokens that UCP rejects.
+The resource, the OAuth client permission in step 5 and the store's Secure URL must use the **same host**: UCP advertises the store's URL for discovery, MCP and OAuth. Mixing the platform host and the storefront host produces tokens that UCP rejects. For several stores, add one resource and one `rsrc:` permission per store host.
 
 ### 3. Provide Redis when the Platform has more than one replica
 
@@ -279,7 +271,7 @@ The checkout link carries its one-time token in the `ucp_session` query paramete
 | Symptom | Check |
 | --- | --- |
 | Token request fails with `invalid_target` | `Authorization__Resources__0` contains `https://store.example.com/ucp/mcp`, and the OAuth client has the permission `rsrc:https://store.example.com/ucp/mcp`. |
-| `link_buyer_identity` returns `401 invalid_token` after sign-in | The MCP URL, `UCP__PublicOrigin`, the resource and the OAuth client permission all use the Storefront host. |
+| `link_buyer_identity` returns `401 invalid_token` after sign-in | The MCP URL, the store's Secure URL, the resource and the OAuth client permission all use the Storefront host. |
 | Sign-in opens the Platform back-office page | `Authorization__OAuthLoginPath` is set to `/oauth/authorize`, and the Storefront includes the sign-in page. |
 | Sign-in page cannot complete, or the assistant never receives a token | `/connect` and `/.well-known/openid-configuration` are routed to `platform` on the Storefront host. |
 | Checkout links are reported as expired or already used on the first try | The Platform has more than one replica and no Redis. See step 3. |
@@ -301,45 +293,66 @@ The screens need the MCP module's permissions `mcp:audit:read`, `mcp:tools:manag
 > [!NOTE]
 > This section and the ones after it are for system integrators and developers.
 
-### appsettings.json
+### Where each value comes from
 
-Configuration is read from the `UCP` section:
+UCP needs almost no configuration of its own: it takes the store of each request from the request's host and reads the rest from that store. One platform serves several stores this way, each at its own storefront host.
+
+| Value | Source | Who sets it |
+| --- | --- | --- |
+| The store of a request | The request's host (the store's URL domain, or `VirtoCommerce:Stores:Domains`); for a storefront's call to the platform API host, its `Origin` or `Referer`; then `VirtoCommerce:Stores:DefaultStore`; then the only open store | Store administrator (the store's URL); IT for domain mappings |
+| Currency and language | The store's default currency and language | Store administrator |
+| Storefront, checkout and cart links, public origin | The store's `SecureUrl`, then `Url` | Store administrator |
+| Anonymous shopping | The store's **Allow anonymous users**; `UCP:AnonymousCatalog = false` turns it off for assistants only | Store administrator |
+| Addresses the storefront assigns itself | Store setting `UCP.StoreManagedAddresses` | Store administrator |
+| Lifetime of a checkout link | Store setting `UCP.CheckoutLinkLifetimeMinutes` (15) | Store administrator |
+| Checkout page of a storefront not at `/checkout` | Store setting `UCP.CheckoutUrlTemplate`, with `{token}` | Store administrator |
+| UCP on or off | `MCP:Scopes:ucp:Enabled` ([Switching UCP on and off](#switching-ucp-on-and-off)) | IT |
+| A fixed public origin | `MCP:Scopes:ucp:PublicOrigin`, only where the platform cannot see the public host | IT |
+| What operation input reaches telemetry | `UCP:Observability:InputCaptureMode` | IT |
+
+The store settings are in the back office, in each store's settings under **UCP**.
+
+### Configured by IT
+
+Only infrastructure, secrets and privacy choices stay in configuration:
+
+| Key | Why |
+| --- | --- |
+| `Authorization:Resources` | Allows tokens for each public MCP URL, one per store host: `https://store.example.com/ucp/mcp` |
+| `Authorization:OAuthLoginPath` | Sends buyers to the storefront sign-in page |
+| `ConnectionStrings:RedisConnectionString` | Shares checkout links between replicas |
+| `MCP:Scopes:ucp:Enabled`, `MCP:Scopes:ucp:Hosts`, `MCP:Scopes:ucp:PublicOrigin` | The buyer endpoint, in the MCP module's configuration |
+| `VirtoCommerce:Stores:DefaultStore`, `VirtoCommerce:Stores:Domains` | The store of a request to a host that is not a store's own, shared with the Experience API |
+| `UCP:Observability:InputCaptureMode`, `UCP:AnonymousCatalog` | Privacy and the assistants-only switch for anonymous shopping |
+| Forwarded headers, proxy routes, OpenTelemetry, Serilog levels | The host in front of the platform and the telemetry |
 
 ```json
 {
   "UCP": {
-    "DefaultStoreId": "store-acme",
-    "DefaultCurrency": "USD",
-    "DefaultCultureName": "en-US",
-    "UcpBaseUrl": "https://store.example.com/ucp/v1",
-    "StorefrontOrigin": "https://store.example.com",
-    "HandoffUrlTemplate": "https://store.example.com/checkout?ucp_session={token}",
-    "HandoffTokenTtlMinutes": 15,
     "AnonymousCatalog": true,
-    "Observability": {
-      "InputCaptureMode": "ErrorsOnly"
-    }
+    "Observability": { "InputCaptureMode": "ErrorsOnly" }
   }
 }
 ```
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `UCP:DefaultStoreId` | String | — | Virto Commerce Store ID used when the client does not pass `store_id`. Use the exact Store ID, not the display name. |
-| `UCP:DefaultCurrency` | String | — | Default currency code for catalog, cart, and checkout operations. |
-| `UCP:DefaultCultureName` | String | — | Default culture, for example `en-US`. |
-| `UCP:UcpBaseUrl` | String | — | Public base URL of the UCP REST API in the `get_store_capabilities` result. When `UCP:PublicOrigin` is set, `<PublicOrigin>/ucp/v1` is used instead. |
-| `UCP:StorefrontOrigin` | String | — | Storefront origin. For checkout links it is the fallback when the store has no URL; in the `get_store_capabilities` result it takes priority over the store URLs, unless `UCP:PublicOrigin` is set. |
-| `UCP:PublicOrigin` | String | — | Overrides the public origin used by discovery and MCP OAuth. Otherwise resolved through XApi from the store's `SecureUrl` / `Url`, then the request origin. |
-| `UCP:HandoffUrlTemplate` | String | — | Explicit override for the hosted checkout handoff URL. `{token}` is replaced with the `ucp_session` token. |
-| `UCP:HandoffTokenTtlMinutes` | Integer | `15` | Absolute expiration of temporary checkout handoff sessions in the handoff session store. |
-| `UCP:AnonymousCatalog` | Boolean | `true` | Lets anonymous buyers use the catalog. It applies only when the default store also allows anonymous users (`Stores.AllowAnonymousUsers`), which the catalog itself enforces; `get_store_capabilities` reports the result as `auth.anonymous_catalog`. When it is off, the MCP endpoint asks for a sign-in from the first request (see [Buyer identity](#buyer-identity)). |
-| `UCP:StoreManagedAddresses` | Boolean | `false` | For a storefront that assigns cart addresses itself (for example, one shipment per supplier from the buyer's selected delivery location). Checkout tools then ignore `shipping_address` / `billing_address`, run no address, shipment or payment mutation, return an `addresses_store_managed` message, and report `store_managed_addresses: true` in the profile; the MCP server instructions tell agents not to send addresses. |
-| `UCP:Observability:InputCaptureMode` | Enum | `ErrorsOnly` | Controls the bounded allowlisted operation input in logs and span attributes: `None`, `ErrorsOnly`, or `Always`. Trace correlation, safe context attributes, and counters remain enabled in every mode. |
+| `UCP:AnonymousCatalog` | Boolean | `true` | `false` makes assistants sign the buyer in from the first request, even where the store allows anonymous users. `get_store_capabilities` reports the result as `auth.anonymous_catalog` (see [Buyer identity](#buyer-identity)). |
+| `UCP:Observability:InputCaptureMode` | Enum | `ErrorsOnly` | The bounded, allowlisted operation input in logs and span attributes: `None`, `ErrorsOnly` or `Always`. Trace correlation, safe context attributes and counters stay on in every mode. |
 
-If `DefaultStoreId` is not configured, UCP reads open stores from the Store module. If one store is found, `get_store_capabilities` returns it as `default_store_id`, `store`, and the only `stores[]` item. If multiple stores are found, it returns them in `stores[]` and the client must choose a store explicitly.
+### Obsolete keys
 
-Checkout links are built from the URL of the cart's store (`SecureUrl`, then `Url`). `UCP:StorefrontOrigin` is a fallback for environments without Store URLs, and `UCP:HandoffUrlTemplate` is an explicit override.
+These keys still work, as the value for a request that no store is resolved for, and the platform logs a warning at startup for each one that is set:
+
+| Key | Instead |
+| --- | --- |
+| `UCP:DefaultStoreId` | The store of the request's host; `VirtoCommerce:Stores:DefaultStore` for requests to other hosts |
+| `UCP:DefaultCurrency`, `UCP:DefaultCultureName` | The store's default currency and language |
+| `UCP:StorefrontOrigin`, `UCP:UcpBaseUrl` | The store's URL |
+| `UCP:PublicOrigin` | `MCP:Scopes:ucp:PublicOrigin`, or nothing: the store's URL is used |
+| `UCP:HandoffUrlTemplate`, `UCP:HandoffTokenTtlMinutes`, `UCP:StoreManagedAddresses` | The store settings `UCP.CheckoutUrlTemplate`, `UCP.CheckoutLinkLifetimeMinutes` and `UCP.StoreManagedAddresses` |
+
+`UCP:DefaultStoreId` no longer overrides the request's host: a request to a store's host is for that store.
 
 ### Switching UCP on and off
 
@@ -385,7 +398,7 @@ Restore is serialized per session through the Platform `IDistributedLock` (`Virt
 
 To restore handoff sessions across replicas, configure the same `ConnectionStrings:RedisConnectionString` (and Redis database) on every replica. With the memory store, another process cannot restore the session, and a restart loses it.
 
-UCP resolves its public origin through XApi `IStoreDomainResolverService`, using `UCP:DefaultStoreId` when set, otherwise the request domain and the existing `VirtoCommerce:Stores` domain mappings and `DefaultStore`. It prefers the resolved store's `SecureUrl`, then `Url`, and falls back to the request origin when neither is available. Set `UCP:PublicOrigin` to explicitly override this resolution (for example `https://store.example.com`).
+UCP's public origin is the URL of the request's store (`SecureUrl`, then `Url`; see [Where each value comes from](#where-each-value-comes-from)), and the request's own origin when the store has none. Set `MCP:Scopes:ucp:PublicOrigin` only where the platform cannot see the public host, for example behind a proxy that does not forward it.
 
 Discovery, protected-resource metadata, bearer challenges and MCP audience validation use this same origin even when discovery is read through the backend host. Add `<resolved-origin>/ucp/mcp` to Platform `Authorization:Resources` and grant `rsrc:<resolved-origin>/ucp/mcp` to the registered OAuth client. The client must connect to the advertised public MCP endpoint and use the authorization server advertised there. Resource registration and OAuth client permissions remain enforced by Platform/OpenIddict.
 
@@ -540,7 +553,7 @@ The MCP module serves the endpoint: the transport, sign-in and token checks, too
 * the tools in the table below, which call the same UCP services as the REST API;
 * `UcpMcpCallToolFilter`: for the 16 commerce tools, the `store_id` checks, UCP and XAPI error envelopes, the `UCP {operation}` span, and the trace id in `_meta.trace_id` and in the text of the result;
 * `UcpMcpChallengeWriter`: UCP's `identity_required` body of the HTTP 401 and 403 responses;
-* `UcpMcpPublicOriginResolver`: the public origin of the scope, from `UCP:PublicOrigin` or the store (see [Multiple instances and the public origin](#multiple-instances-and-the-public-origin)); the MCP module's `MCP:PublicOrigin` and `MCP:Scopes:ucp:PublicOrigin` do not apply to this scope.
+* `UcpMcpPublicOriginResolver`: the public origin of the scope, from `MCP:Scopes:ucp:PublicOrigin` or the request's store (see [Multiple instances and the public origin](#multiple-instances-and-the-public-origin)); the MCP module's `MCP:PublicOrigin` and `MCP:Scopes:ucp:PublicOrigin` do not apply to this scope.
 
 To serve the scope also at `https://store.example.com/mcp`, set `MCP:Scopes:ucp:Hosts` and add that address to `Authorization:Resources` and to the OAuth client's `rsrc:` permissions: it is a separate OAuth resource. Discovery keeps naming `/ucp/mcp`.
 
@@ -777,6 +790,7 @@ Every result of a commerce tool also contains a model-visible `Trace ID: ...` te
 Earlier versions mapped `/ucp/mcp` themselves. This version moves the endpoint to the MCP module; the URL, the tools and their results are unchanged for agents. Breaking changes for a deployment:
 
 - Install the `VirtoCommerce.MCP` module; UCP depends on it.
+- The store of a request comes from its host, and the store provides the currency, the language and the links; several stores are served from one platform. `UCP:DefaultStoreId` no longer overrides the host, and the single-store `UCP:*` keys are obsolete fallbacks (see [Obsolete keys](#obsolete-keys)); move them to the store and its UCP settings.
 - The `UCP.Enabled` platform setting is removed; it was registered but not read. UCP is switched off with `MCP:Scopes:ucp:Enabled` (see [Switching UCP on and off](#switching-ucp-on-and-off)).
 - `UCP:AnonymousCatalog` now also follows the default store's `AllowAnonymousUsers`; when either is off, the MCP endpoint asks for a sign-in from the first request.
 - Cart tools work with the buyer's storefront cart when no `cart_type` is given, a cart's `continue_url` is `{storefront}/cart/{id}`, and `track_order` takes `placed_after` (the handoff's `issued_at`) and returns `orders`.

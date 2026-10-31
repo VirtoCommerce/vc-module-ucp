@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using VirtoCommerce.Platform.Core.Settings;
 
 namespace VirtoCommerce.UCP.Core;
 
@@ -253,5 +254,51 @@ public static class ModuleConstants
                 Delete,
             ];
         }
+    }
+
+    // UCP settings of a store, edited in the store's settings in the back office. They replace the configuration keys of
+    // the same name, which stay a fallback for requests that no store is resolved for.
+    public static class Settings
+    {
+        public static class Store
+        {
+            public static SettingDescriptor StoreManagedAddresses { get; } = new()
+            {
+                Name = "UCP.StoreManagedAddresses",
+                GroupName = "UCP|Store",
+                ValueType = SettingValueType.Boolean,
+                DefaultValue = false,
+            };
+
+            public static SettingDescriptor CheckoutLinkLifetimeMinutes { get; } = new()
+            {
+                Name = "UCP.CheckoutLinkLifetimeMinutes",
+                GroupName = "UCP|Store",
+                ValueType = SettingValueType.PositiveInteger,
+                DefaultValue = 15,
+            };
+
+            public static SettingDescriptor CheckoutUrlTemplate { get; } = new()
+            {
+                Name = "UCP.CheckoutUrlTemplate",
+                GroupName = "UCP|Store",
+                ValueType = SettingValueType.ShortText,
+                DefaultValue = string.Empty,
+            };
+
+            public static IEnumerable<SettingDescriptor> AllSettings
+            {
+                get
+                {
+                    yield return StoreManagedAddresses;
+                    yield return CheckoutLinkLifetimeMinutes;
+                    yield return CheckoutUrlTemplate;
+                }
+            }
+        }
+
+        public static IEnumerable<SettingDescriptor> AllSettings => Store.AllSettings;
+
+        public static IEnumerable<SettingDescriptor> StoreLevelSettings => Store.AllSettings;
     }
 }

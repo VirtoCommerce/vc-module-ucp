@@ -43,6 +43,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
     private readonly IDistributedLock _distributedLock;
     private readonly IStoreService _storeService;
     private readonly UcpOptions _options;
+    private readonly IUcpRequestOptions _requestOptions;
 
     public UcpCheckoutService(
         IUcpCartService cartService,
@@ -51,15 +52,20 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         IHttpContextAccessor httpContextAccessor,
         IOptions<UcpOptions> options,
         IStoreService storeService = null,
-        IUcpBuyerContextAccessor buyerContextAccessor = null)
+        IUcpBuyerContextAccessor buyerContextAccessor = null,
+        IUcpRequestOptions requestOptions = null)
         : base(httpContextAccessor, buyerContextAccessor)
     {
         _cartService = cartService;
         _handoffSessionStore = handoffSessionStore;
         _distributedLock = distributedLock;
         _options = options.Value;
+        _requestOptions = requestOptions;
         _storeService = storeService;
     }
+
+    // The options of the request's store, with the configuration as the fallback.
+    protected UcpOptions Options => _requestOptions?.Current ?? _options;
 
     public virtual async Task<UcpCheckoutResponse> CreateCheckout(UcpCheckoutRequest request, CancellationToken cancellationToken = default)
     {
@@ -74,7 +80,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         {
             Type = "info",
             Code = "handoff_required",
-            Content = _options.StoreManagedAddresses
+            Content = Options.StoreManagedAddresses
                 ? ModuleConstants.CheckoutReadyStoreManagedMessage
                 : ModuleConstants.CheckoutReadyMessage,
             Severity = "info",
@@ -144,7 +150,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
         var cart = await PrepareCartForCheckout(request, cancellationToken);
         ValidateEffectiveShippingAddress(request.ShippingAddress, cart);
         var issuedAt = DateTimeOffset.UtcNow;
-        var expiresAt = issuedAt.AddMinutes(Math.Max(1, _options.HandoffTokenTtlMinutes));
+        var expiresAt = issuedAt.AddMinutes(Math.Max(1, Options.HandoffTokenTtlMinutes));
         var checkout = CreateCheckout(request, cart, StatusRequiresEscalation);
         checkout.IssuedAt = issuedAt;
         checkout.ExpiresAt = expiresAt;
@@ -351,7 +357,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
     /// </summary>
     protected virtual bool DiscardStoreManagedAddresses(UcpCheckoutRequest request)
     {
-        if (!_options.StoreManagedAddresses)
+        if (!Options.StoreManagedAddresses)
         {
             return false;
         }
@@ -373,7 +379,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
 
     protected virtual void ValidateEffectiveShippingAddress(UcpCheckoutAddress requestedAddress, UcpCart cart)
     {
-        if (requestedAddress != null || _options.StoreManagedAddresses)
+        if (requestedAddress != null || Options.StoreManagedAddresses)
         {
             return;
         }
@@ -423,7 +429,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
 
     private void AddAddressMessages(UcpCheckout checkout, UcpCheckoutRequest request, bool addressesIgnored)
     {
-        if (!_options.StoreManagedAddresses)
+        if (!Options.StoreManagedAddresses)
         {
             AddAddressStateMessages(checkout, request);
 
@@ -587,7 +593,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             CartId = checkout.CartId,
             StoreId = checkout.Cart.StoreId,
             Currency = checkout.Cart.Currency,
-            CultureName = FirstNotEmpty(context?.Language, _options.DefaultCultureName, "en-US"),
+            CultureName = FirstNotEmpty(context?.Language, Options.DefaultCultureName, "en-US"),
             BuyerId = buyerContext.PublicBuyerId,
             OrganizationId = buyerContext.OrganizationId,
             RequiresAuthentication = buyerContext.IsAuthenticated,
@@ -637,7 +643,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
     protected virtual async Task<string> BuildContinueUrl(string token, string storeId)
     {
         var storefrontOrigin = await GetStorefrontOrigin(storeId);
-        var template = FirstNotEmpty(_options.HandoffUrlTemplate, $"{storefrontOrigin?.TrimEnd('/')}/checkout?ucp_session={{token}}");
+        var template = FirstNotEmpty(Options.HandoffUrlTemplate, $"{storefrontOrigin?.TrimEnd('/')}/checkout?ucp_session={{token}}");
         return template.Replace("{token}", Uri.EscapeDataString(token), StringComparison.Ordinal);
     }
 
@@ -657,7 +663,7 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             }
         }
 
-        return _options.StorefrontOrigin?.TrimEnd('/');
+        return Options.StorefrontOrigin?.TrimEnd('/');
     }
 
     protected virtual UcpCheckoutBuyer MergeBuyer(UcpCheckoutBuyer buyer, UcpCart cart)

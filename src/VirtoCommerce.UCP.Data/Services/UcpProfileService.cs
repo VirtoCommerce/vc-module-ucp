@@ -133,6 +133,7 @@ public class UcpProfileService : IUcpProfileService
     ];
 
     private readonly UcpOptions _options;
+    private readonly IUcpRequestOptions _requestOptions;
     private readonly IUcpPublicOriginResolver _publicOriginResolver;
     private readonly IStoreService _storeService;
     private readonly IStoreSearchService _storeSearchService;
@@ -141,13 +142,18 @@ public class UcpProfileService : IUcpProfileService
         IOptions<UcpOptions> options,
         IUcpPublicOriginResolver publicOriginResolver,
         IStoreService storeService = null,
-        IStoreSearchService storeSearchService = null)
+        IStoreSearchService storeSearchService = null,
+        IUcpRequestOptions requestOptions = null)
     {
         _options = options.Value;
+        _requestOptions = requestOptions;
         _publicOriginResolver = publicOriginResolver;
         _storeService = storeService;
         _storeSearchService = storeSearchService;
     }
+
+    // The options of the request's store, with the configuration as the fallback.
+    protected UcpOptions Options => _requestOptions?.Current ?? _options;
 
     public virtual async Task<UcpProfile> GetProfile(CancellationToken cancellationToken = default)
     {
@@ -155,7 +161,7 @@ public class UcpProfileService : IUcpProfileService
         var storeProfiles = await GetStoreProfiles();
         var storeProfile = storeProfiles.FirstOrDefault(x => x.IsDefault);
         var defaultStore = await GetDefaultStore(storeProfile);
-        var origin = !string.IsNullOrWhiteSpace(_options.PublicOrigin)
+        var origin = !string.IsNullOrWhiteSpace(Options.PublicOrigin)
             ? publicOrigin
             : GetConfiguredStorefrontOrigin(storeProfile) ?? publicOrigin;
 
@@ -175,7 +181,7 @@ public class UcpProfileService : IUcpProfileService
             Auth = new UcpProfileAuth
             {
                 Agent = "mcp_transport",
-                AnonymousCatalog = _options.AnonymousCatalog && StoreAllowsAnonymousUsers(defaultStore),
+                AnonymousCatalog = Options.AnonymousCatalog && StoreAllowsAnonymousUsers(defaultStore),
                 BuyerDelegation = "platform_oauth_bearer",
                 BuyerIdentitySource = "platform_claims_principal",
                 AuthorizationServer = publicOrigin == null ? null : publicOrigin + "/",
@@ -188,7 +194,7 @@ public class UcpProfileService : IUcpProfileService
                 TraceId = ModuleConstants.Headers.TraceId,
                 IdempotencyKey = ModuleConstants.Headers.IdempotencyKey,
             },
-            StoreManagedAddresses = _options.StoreManagedAddresses,
+            StoreManagedAddresses = Options.StoreManagedAddresses,
             Errors = new UcpErrorProfile
             {
                 Schema = "ucp_error",
@@ -322,7 +328,7 @@ public class UcpProfileService : IUcpProfileService
             ? ModuleConstants.AnonymousCatalogGuidance
             : ModuleConstants.SignInRequiredCatalogGuidance);
 
-        if (_options.StoreManagedAddresses)
+        if (Options.StoreManagedAddresses)
         {
             profile.AgentGuidance.Add(ModuleConstants.StoreManagedAddressesInstruction);
         }
@@ -365,7 +371,7 @@ public class UcpProfileService : IUcpProfileService
 
     protected virtual bool HasConfiguredDefaultStore(Store configuredStore)
     {
-        return configuredStore != null || !string.IsNullOrWhiteSpace(_options.DefaultStoreId);
+        return configuredStore != null || !string.IsNullOrWhiteSpace(Options.DefaultStoreId);
     }
 
     protected virtual IList<UcpStoreProfile> CreateConfiguredStoreProfiles(Store configuredStore)
@@ -390,7 +396,7 @@ public class UcpProfileService : IUcpProfileService
 
     protected virtual Task<Store> GetConfiguredDefaultStore()
     {
-        return GetStoreById(_options.DefaultStoreId);
+        return GetStoreById(Options.DefaultStoreId);
     }
 
     protected virtual async Task<Store> GetStoreById(string storeId)
@@ -429,7 +435,7 @@ public class UcpProfileService : IUcpProfileService
 
     protected virtual UcpStoreProfile CreateStoreProfile(Store store, bool isDefault, string source)
     {
-        if (store == null && string.IsNullOrWhiteSpace(_options.DefaultStoreId))
+        if (store == null && string.IsNullOrWhiteSpace(Options.DefaultStoreId))
         {
             return null;
         }
@@ -449,24 +455,24 @@ public class UcpProfileService : IUcpProfileService
 
     protected virtual string ResolveStoreId(Store store)
     {
-        return store?.Id ?? _options.DefaultStoreId;
+        return store?.Id ?? Options.DefaultStoreId;
     }
 
     protected virtual string ResolveStoreCurrency(Store store)
     {
-        return store?.DefaultCurrency ?? _options.DefaultCurrency;
+        return store?.DefaultCurrency ?? Options.DefaultCurrency;
     }
 
     protected virtual string ResolveStoreLanguage(Store store)
     {
-        return store?.DefaultLanguage ?? _options.DefaultCultureName;
+        return store?.DefaultLanguage ?? Options.DefaultCultureName;
     }
 
     protected virtual string GetConfiguredStorefrontOrigin(UcpStoreProfile store)
     {
-        if (!string.IsNullOrWhiteSpace(_options.StorefrontOrigin))
+        if (!string.IsNullOrWhiteSpace(Options.StorefrontOrigin))
         {
-            return _options.StorefrontOrigin.TrimEnd('/');
+            return Options.StorefrontOrigin.TrimEnd('/');
         }
 
         var storeUrl = FirstNotEmpty(store?.SecureUrl, store?.Url);
@@ -480,9 +486,9 @@ public class UcpProfileService : IUcpProfileService
 
     protected virtual string BuildUcpBaseUrl(string origin)
     {
-        if (string.IsNullOrWhiteSpace(_options.PublicOrigin) && !string.IsNullOrWhiteSpace(_options.UcpBaseUrl))
+        if (string.IsNullOrWhiteSpace(Options.PublicOrigin) && !string.IsNullOrWhiteSpace(Options.UcpBaseUrl))
         {
-            return _options.UcpBaseUrl.TrimEnd('/');
+            return Options.UcpBaseUrl.TrimEnd('/');
         }
 
         return origin + "/ucp/v1";
@@ -490,7 +496,7 @@ public class UcpProfileService : IUcpProfileService
 
     protected virtual string BuildMcpUrl(string origin)
     {
-        if (string.IsNullOrWhiteSpace(origin) && Uri.TryCreate(_options.UcpBaseUrl, UriKind.Absolute, out var ucpBaseUri))
+        if (string.IsNullOrWhiteSpace(origin) && Uri.TryCreate(Options.UcpBaseUrl, UriKind.Absolute, out var ucpBaseUri))
         {
             origin = ucpBaseUri.GetLeftPart(UriPartial.Authority);
         }
@@ -511,12 +517,12 @@ public class UcpProfileService : IUcpProfileService
     // then UCP:StorefrontOrigin; the profile's origin only when none of them is set.
     protected virtual string GetHandoffTemplate(UcpStoreProfile store, string origin)
     {
-        if (!string.IsNullOrWhiteSpace(_options.HandoffUrlTemplate))
+        if (!string.IsNullOrWhiteSpace(Options.HandoffUrlTemplate))
         {
-            return _options.HandoffUrlTemplate;
+            return Options.HandoffUrlTemplate;
         }
 
-        origin = FirstNotEmpty(store?.SecureUrl, store?.Url, _options.StorefrontOrigin, origin)?.TrimEnd('/');
+        origin = FirstNotEmpty(store?.SecureUrl, store?.Url, Options.StorefrontOrigin, origin)?.TrimEnd('/');
 
         return string.IsNullOrWhiteSpace(origin)
             ? "/checkout?ucp_session={token}"

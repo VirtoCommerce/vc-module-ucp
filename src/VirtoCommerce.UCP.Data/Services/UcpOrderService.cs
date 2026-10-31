@@ -25,19 +25,25 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
     private readonly ICustomerOrderService _customerOrderService;
     private readonly ICustomerOrderSearchService _customerOrderSearchService;
     private readonly UcpOptions _options;
+    private readonly IUcpRequestOptions _requestOptions;
 
     public UcpOrderService(
         ICustomerOrderService customerOrderService,
         ICustomerOrderSearchService customerOrderSearchService,
         IHttpContextAccessor httpContextAccessor,
         IOptions<UcpOptions> options,
-        IUcpBuyerContextAccessor buyerContextAccessor = null)
+        IUcpBuyerContextAccessor buyerContextAccessor = null,
+        IUcpRequestOptions requestOptions = null)
         : base(httpContextAccessor, buyerContextAccessor)
     {
         _customerOrderService = customerOrderService;
         _customerOrderSearchService = customerOrderSearchService;
         _options = options.Value;
+        _requestOptions = requestOptions;
     }
+
+    // The options of the request's store, with the configuration as the fallback.
+    protected UcpOptions Options => _requestOptions?.Current ?? _options;
 
     public virtual async Task<UcpOrderResponse> TrackOrder(UcpOrderTrackingRequest request, CancellationToken cancellationToken = default)
     {
@@ -107,7 +113,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             OrderNumber = request.OrderNumber,
             CartId = request.CartId,
             PlacedAfter = request.PlacedAfter,
-            CultureName = FirstNotEmpty(request.Context?.Language, _options.DefaultCultureName),
+            CultureName = FirstNotEmpty(request.Context?.Language, Options.DefaultCultureName),
             UserId = buyerContext.UserId,
             OrganizationId = buyerContext.OrganizationId,
         };
