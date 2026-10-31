@@ -1,0 +1,18 @@
+{
+  "settings": {
+    "UCP": {
+      "StoreManagedAddresses": {
+        "title": "Kaupan hallinnoimat osoitteet",
+        "description": "Verkkokauppa määrittää ostoskorin osoitteet itse. Tekoälyavustajan kassan mukana lähettämät osoitteet ohitetaan, ja ostaja valitsee osoitteen verkkokaupan kassasivulla."
+      },
+      "CheckoutLinkLifetimeMinutes": {
+        "title": "Kassalinkin voimassaoloaika (minuuttia)",
+        "description": "Kuinka kauan tekoälyavustajan ostajalle antama kassalinkki pysyy voimassa. Oletus: 15."
+      },
+      "CheckoutUrlTemplate": {
+        "title": "Kassan URL-malli",
+        "description": "Verkkokaupan sivu, joka avaa kassalinkin, ja {token} on linkin tunniste; käytä, jos kassasivu ei ole osoitteessa /checkout. Jätä tyhjäksi, jolloin käytetään {store URL}/checkout?ucp_session={token}."
+      }
+    }
+  }
+}

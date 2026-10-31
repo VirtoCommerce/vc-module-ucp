@@ -1,0 +1,18 @@
+{
+  "settings": {
+    "UCP": {
+      "StoreManagedAddresses": {
+        "title": "Adresy zarządzane przez sklep",
+        "description": "Sklep sam przypisuje adresy koszyka. Adresy przesyłane przez asystenta AI wraz z zamówieniem są ignorowane, a kupujący wybiera adres na stronie kasy sklepu."
+      },
+      "CheckoutLinkLifetimeMinutes": {
+        "title": "Czas ważności linku do kasy (minuty)",
+        "description": "Jak długo link do kasy, który asystent AI przekazuje kupującemu, pozostaje ważny. Domyślnie: 15."
+      },
+      "CheckoutUrlTemplate": {
+        "title": "Szablon URL kasy",
+        "description": "Strona sklepu otwierająca link do kasy, z {token} jako tokenem linku, dla strony kasy, która nie znajduje się pod adresem /checkout. Pozostaw puste, aby użyć {store URL}/checkout?ucp_session={token}."
+      }
+    }
+  }
+}

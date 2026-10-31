@@ -9,7 +9,7 @@ The UCP module lets AI assistants such as Claude and ChatGPT shop a Virto Commer
 
 `VirtoCommerce.UCP` is a protocol adapter. It does not replace the Catalog, Cart, Orders, Experience API (XAPI), Store or Marketing modules: a request becomes in-process XAPI and platform service calls, without an extra HTTP hop. Public UCP endpoints have no `/api` prefix.
 
-**Who reads what.** Buyers: [Quick start](#quick-start-connect-your-store-to-an-ai-assistant). Merchants and business users: [How buyers shop through an AI assistant](#how-buyers-shop-through-an-ai-assistant). Administrators: [Set up the store](#set-up-the-store-administrator-once), [Enable signed-in buyers in Virto Cloud](#enable-signed-in-buyers-in-virto-cloud) and [Manage shopping assistants in the back office](#manage-shopping-assistants-in-the-back-office). System integrators and developers: [Configuration](#configuration) and the sections after it.
+**Who reads what.** Buyers: [Quick start](#quick-start-connect-your-store-to-an-ai-assistant). Merchants and business users: [How buyers shop through an AI assistant](#how-buyers-shop-through-an-ai-assistant). Administrators: [Prerequisites](#prerequisites), [Set up the store](#set-up-the-store-administrator-once), [Enable signed-in buyers in Virto Cloud](#enable-signed-in-buyers-in-virto-cloud) and [Manage shopping assistants in the back office](#manage-shopping-assistants-in-the-back-office). System integrators and developers: [Configuration](#configuration) and the sections after it.
 
 ## Key Features
 
@@ -26,6 +26,19 @@ The UCP module lets AI assistants such as Claude and ChatGPT shop a Virto Commer
 
 > [!NOTE]
 > UCP is an OAuth protected resource only. The platform (OpenIddict) owns sign-in, consent, the authorization code flow with PKCE, tokens, users, organizations and the registered OAuth clients.
+
+## Prerequisites
+
+| Component | Requirement | Needed for |
+| --- | --- | --- |
+| Virto Commerce Platform | `3.1091.0` or later | Everything |
+| MCP module | `VirtoCommerce.MCP`: it serves `/ucp/mcp`, signs buyers in and audits the calls | Everything |
+| Commerce modules | Experience API (`Xapi`, `XCatalog`, `XCart`, `XOrder`), `Store`, `Orders` and `Marketing`, at the versions in [Dependencies](#dependencies) | Everything |
+| Store | An open store with an assigned catalog, prices, inventory and a built search index; its **Secure URL** (or **URL**) is the storefront host | Everything |
+| Public HTTPS host | The storefront host, reachable from the internet over HTTPS; claude.ai and ChatGPT connect from their own cloud | Hosted assistants |
+| Storefront | `vc-frontend` with its checkout page; for signed-in buyers, a release with the `/oauth/authorize` sign-in page and the authenticated checkout restore ([vc-frontend#2467](https://github.com/VirtoCommerce/vc-frontend/pull/2467)) | Checkout links, signed-in buyers |
+| Redis | When the platform runs more than one replica (`ConnectionStrings:RedisConnectionString`), so every replica knows the checkout links | Checkout links |
+| OpenTelemetry module | Optional: exports the traces, metrics and logs | Observability |
 
 ## Quick start: connect your store to an AI assistant
 
@@ -79,7 +92,7 @@ Menu names in the assistants change from release to release; if a step does not 
 
 ### Set up the store (administrator, once)
 
-1. **Install** `VirtoCommerce.MCP` and `VirtoCommerce.UCP` in the Virto Start platform application, with the other modules listed in [Dependencies](#dependencies). The MCP module serves the endpoint and its back office; UCP brings the shopping tools. Grant the people who look after the assistants `mcp:audit:read` and `mcp:manage`. Buyers need no permission.
+1. **Install** `VirtoCommerce.MCP` and `VirtoCommerce.UCP` in the Virto Start platform application, with the other modules listed in [Prerequisites](#prerequisites). The MCP module serves the endpoint and its back office; UCP brings the shopping tools. Grant the people who look after the assistants `mcp:audit:read` and `mcp:manage`. Buyers need no permission.
 1. **Check the store.** UCP takes everything from the store whose URL is the host of the request. In the back office, open the store: its **Secure URL** (or **URL**) is `https://store.example.com`, and its default currency and language are the ones assistants should use.
 1. **Route the paths** `/ucp` and `/.well-known/ucp` from the storefront host to the platform, in the environment's `infra/environments.yml` of the Virto Cloud deployment repository, and deploy the environment:
 
@@ -183,13 +196,7 @@ UCP does not sign buyers in itself. Virto Commerce Platform (OpenIddict) handles
 
 ### 1. Check the prerequisites
 
-| Component | Requirement |
-| --- | --- |
-| Platform | `3.1091.0` or later; OAuth resource indicators and the storefront sign-in came in `3.1072.0` ([vc-platform#3108](https://github.com/VirtoCommerce/vc-platform/pull/3108)). |
-| MCP module | `VirtoCommerce.MCP`, which serves `/ucp/mcp` and checks the buyer's token; see [Dependencies](#dependencies). |
-| UCP module | A release that includes the authenticated buyer flow ([vc-module-ucp#7](https://github.com/VirtoCommerce/vc-module-ucp/pull/7)). |
-| Storefront | A `vc-frontend` release that includes the `/oauth/authorize` sign-in page and authenticated handoff restore ([vc-frontend#2467](https://github.com/VirtoCommerce/vc-frontend/pull/2467)). |
-| Redis | Required when the Platform runs more than one replica. See step 3. |
+The [Prerequisites](#prerequisites) above, with the storefront release that has the `/oauth/authorize` sign-in page, and Redis when the platform runs more than one replica (step 3).
 
 ### 2. Update the Platform configuration
 

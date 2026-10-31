@@ -1,0 +1,18 @@
+{
+  "settings": {
+    "UCP": {
+      "StoreManagedAddresses": {
+        "title": "Direcciones gestionadas por la tienda",
+        "description": "El escaparate asigna por sí mismo las direcciones del carrito. Las direcciones que un asistente de IA envía con un pago se ignoran, y el comprador elige la dirección en la página de pago del escaparate."
+      },
+      "CheckoutLinkLifetimeMinutes": {
+        "title": "Vigencia del enlace de pago (minutos)",
+        "description": "Cuánto tiempo sigue siendo válido un enlace de pago que un asistente de IA entrega al comprador. Valor predeterminado: 15."
+      },
+      "CheckoutUrlTemplate": {
+        "title": "Plantilla de la URL de pago",
+        "description": "La página del escaparate que abre un enlace de pago, con {token} para el token del enlace, para una página de pago que no está en /checkout. Déjelo vacío para usar {store URL}/checkout?ucp_session={token}."
+      }
+    }
+  }
+}

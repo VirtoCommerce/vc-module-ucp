@@ -1,0 +1,18 @@
+{
+  "settings": {
+    "UCP": {
+      "StoreManagedAddresses": {
+        "title": "Butikkstyrte adresser",
+        "description": "Nettbutikken tildeler handlekurvens adresser selv. Adresser som en AI-assistent sender med en kasse, ignoreres, og kjøperen velger adressen på nettbutikkens kassaside."
+      },
+      "CheckoutLinkLifetimeMinutes": {
+        "title": "Levetid for kasselenke (minutter)",
+        "description": "Hvor lenge en kasselenke som en AI-assistent gir kjøperen, forblir gyldig. Standard: 15."
+      },
+      "CheckoutUrlTemplate": {
+        "title": "URL-mal for kassen",
+        "description": "Nettbutikkens side som åpner en kasselenke, med {token} for lenkens token, for en kasseside som ikke ligger på /checkout. La stå tom for å bruke {store URL}/checkout?ucp_session={token}."
+      }
+    }
+  }
+}

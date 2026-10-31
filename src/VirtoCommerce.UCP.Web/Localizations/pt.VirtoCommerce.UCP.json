@@ -1,0 +1,18 @@
+{
+  "settings": {
+    "UCP": {
+      "StoreManagedAddresses": {
+        "title": "Endereços gerenciados pela loja",
+        "description": "A vitrine atribui por conta própria os endereços do carrinho. Os endereços que um assistente de IA envia com um checkout são ignorados, e o comprador escolhe o endereço na página de checkout da vitrine."
+      },
+      "CheckoutLinkLifetimeMinutes": {
+        "title": "Validade do link de checkout (minutos)",
+        "description": "Por quanto tempo um link de checkout que um assistente de IA entrega ao comprador permanece válido. Padrão: 15."
+      },
+      "CheckoutUrlTemplate": {
+        "title": "Modelo da URL de checkout",
+        "description": "A página da vitrine que abre um link de checkout, com {token} para o token do link, para uma página de checkout que não fica em /checkout. Deixe vazio para usar {store URL}/checkout?ucp_session={token}."
+      }
+    }
+  }
+}

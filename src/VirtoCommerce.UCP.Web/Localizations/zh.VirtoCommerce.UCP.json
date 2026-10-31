@@ -1,0 +1,18 @@
+{
+  "settings": {
+    "UCP": {
+      "StoreManagedAddresses": {
+        "title": "商店管理的地址",
+        "description": "购物车的地址由店面自行分配。AI 助手随结账一起发送的地址会被忽略，买家在店面的结账页面选择地址。"
+      },
+      "CheckoutLinkLifetimeMinutes": {
+        "title": "结账链接有效期（分钟）",
+        "description": "AI 助手提供给买家的结账链接保持有效的时长。默认：15。"
+      },
+      "CheckoutUrlTemplate": {
+        "title": "结账 URL 模板",
+        "description": "打开结账链接的店面页面，其中 {token} 代表链接的令牌，用于不在 /checkout 的结账页面。留空则使用 {store URL}/checkout?ucp_session={token}。"
+      }
+    }
+  }
+}
