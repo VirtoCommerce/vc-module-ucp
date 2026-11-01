@@ -331,7 +331,7 @@ UCP needs almost no configuration of its own: it takes the store of each request
 
 | Value | Source | Who sets it |
 | --- | --- | --- |
-| The store of a request | The request's host (the store's URL domain, or `VirtoCommerce:Stores:Domains`); for a storefront's call to the platform API host, its `Origin` or `Referer`; then `VirtoCommerce:Stores:DefaultStore`; then the only open store | Store administrator (the store's URL); IT for domain mappings |
+| The store of a request | The request's host: the store whose `SecureUrl` or `Url` has exactly that host, or `VirtoCommerce:Stores:Domains`; for a storefront's call to the platform API host, its `Origin` or `Referer`; then `VirtoCommerce:Stores:DefaultStore`; then the only open store. An operation that names another store with `store_id` runs with that store's values | Store administrator (the store's URL); IT for domain mappings |
 | Currency and language | The store's default currency and language | Store administrator |
 | Storefront, checkout and cart links, public origin | The store's `SecureUrl`, then `Url` | Store administrator |
 | Anonymous shopping | The store's **Allow anonymous users**; `UCP:AnonymousCatalog = false` turns it off for assistants only | Store administrator |

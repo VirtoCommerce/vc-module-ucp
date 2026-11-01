@@ -40,9 +40,14 @@ internal sealed class UcpMcpSignInRequiredMiddleware
             return;
         }
 
+        if ((await profileService.GetProfile(context.RequestAborted)).Auth?.AnonymousCatalog != false)
+        {
+            await _next(context);
+            return;
+        }
+
         var toolName = await ReadToolNameAsync(context.Request);
-        if (string.Equals(toolName, ModuleConstants.McpTools.LogoutBuyer, StringComparison.Ordinal) ||
-            (await profileService.GetProfile(context.RequestAborted)).Auth?.AnonymousCatalog != false)
+        if (string.Equals(toolName, ModuleConstants.McpTools.LogoutBuyer, StringComparison.Ordinal))
         {
             await _next(context);
             return;

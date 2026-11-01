@@ -119,6 +119,47 @@ public class UcpCheckoutServiceTests
     }
 
     [Fact]
+    public async Task HandoffCheckout_TakesTheLinkLifetimeOfTheRequestsStore_OverTheConfiguration()
+    {
+        var cart = CreateCart();
+        cart.Addresses.Add(CreateShippingAddress());
+        var configured = new UcpOptions
+        {
+            DefaultStoreId = "store-acme",
+            DefaultCurrency = "USD",
+            DefaultCultureName = "en-US",
+            StorefrontOrigin = "https://storefront.example",
+            HandoffTokenTtlMinutes = 7,
+        };
+        var storeOptions = new UcpOptions
+        {
+            DefaultStoreId = "store-acme",
+            DefaultCurrency = "USD",
+            DefaultCultureName = "en-US",
+            StorefrontOrigin = "https://fashion.example",
+            HandoffTokenTtlMinutes = 45,
+        };
+        var service = new UcpCheckoutService(
+            new StubCartService(cart),
+            new StubHandoffSessionStore(),
+            new TestDistributedLock(),
+            new HttpContextAccessor { HttpContext = new DefaultHttpContext() },
+            Options.Create(configured),
+            buyerContextAccessor: new TestBuyerContextAccessor(),
+            requestOptions: new FixedRequestOptions(storeOptions));
+
+        var handoff = await service.HandoffCheckout("cart-1", new UcpCheckoutRequest(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(TimeSpan.FromMinutes(45), handoff.Checkout.ExpiresAt - handoff.Checkout.IssuedAt);
+        Assert.StartsWith("https://fashion.example/checkout?ucp_session=", handoff.Checkout.ContinueUrl);
+    }
+
+    private sealed class FixedRequestOptions(UcpOptions current) : IUcpRequestOptions
+    {
+        public UcpOptions Current => current;
+    }
+
+    [Fact]
     public async Task RestoreHandoff_BusyLockReturnsRetryableConflictAndKeepsSession()
     {
         var cache = new StubHandoffSessionStore();

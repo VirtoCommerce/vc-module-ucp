@@ -53,6 +53,7 @@ public static class ModuleConstants
         For shopping flows, use MCP tools directly: search products, create or update cart, resolve country/regions, then use checkout_and_handoff when the buyer is ready for hosted checkout.
         Delivery addresses belong in structured shipping_address fields, not notes.
         Before create_checkout or checkout_and_handoff, require the saved cart_id, store_id, and buyer_id when available. Before update_checkout, get_payment_handlers, or handoff_checkout, require the saved checkout_id.
+        When get_store_capabilities reports store_managed_addresses true, the store assigns cart addresses itself: follow its agent_guidance, do not ask for an address, and skip the address rules below.
         Before create_checkout, update_checkout, checkout_and_handoff, or handoff_checkout for physical goods, require shipping_address.first_name, shipping_address.last_name, and shipping_address.postal_code.
         Never send a partial shipping_address.
         Ask for every missing value and do not call a checkout or handoff tool yet; never invent address data.

@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Swashbuckle.AspNetCore.SwaggerGen;
 using VirtoCommerce.MCP.Core.Extensions;
 using VirtoCommerce.MCP.Core.Models;
@@ -42,6 +43,15 @@ public class Module : IModule, IHasConfiguration
 
         serviceCollection.AddHttpContextAccessor();
         serviceCollection.Configure<UcpOptions>(Configuration.GetSection("UCP"));
+        // MCP:Scopes:ucp:PublicOrigin replaces UCP:PublicOrigin, so discovery and the profile follow it too.
+        serviceCollection.AddOptions<UcpOptions>().PostConfigure<IOptions<McpOptions>>((options, mcpOptions) =>
+        {
+            if (mcpOptions.Value.Scopes?.TryGetValue(ModuleConstants.McpScopeName, out var scope) == true &&
+                !string.IsNullOrWhiteSpace(scope.PublicOrigin))
+            {
+                options.PublicOrigin = scope.PublicOrigin;
+            }
+        });
         serviceCollection.Configure<MvcOptions>(options =>
         {
             options.Filters.Add<UcpOperationResourceFilter>();
@@ -108,7 +118,7 @@ public class Module : IModule, IHasConfiguration
         settingsRegistrar.RegisterSettings(ModuleConstants.Settings.AllSettings, ModuleInfo.Id);
         settingsRegistrar.RegisterSettingsForType(ModuleConstants.Settings.StoreLevelSettings, nameof(Store));
 
-        LogObsoleteConfiguration(serviceProvider.GetRequiredService<ILogger<Module>>());
+        LogObsoleteConfiguration(Configuration, serviceProvider.GetRequiredService<ILogger<Module>>());
 
         appBuilder.UseScopedSchema<XapiAssemblyMarker>("ucp");
     }
@@ -116,11 +126,11 @@ public class Module : IModule, IHasConfiguration
     // UCP keys that the store, its settings or the MCP module's configuration now provide. They still work, so a deployment
     // moves them at its own pace: as the fallback for a request that no store is resolved for, and UCP:PublicOrigin as
     // before.
-    private void LogObsoleteConfiguration(ILogger logger)
+    internal static void LogObsoleteConfiguration(IConfiguration configuration, ILogger logger)
     {
         foreach (var (key, replacement) in ObsoleteKeys)
         {
-            if (!string.IsNullOrWhiteSpace(Configuration[$"UCP:{key}"]))
+            if (!string.IsNullOrWhiteSpace(configuration[$"UCP:{key}"]))
             {
                 logger.LogWarning("UCP:{Key} is obsolete: {Replacement}.", key, replacement);
             }

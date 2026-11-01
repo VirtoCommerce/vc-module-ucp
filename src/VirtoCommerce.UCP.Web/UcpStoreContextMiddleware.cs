@@ -1,6 +1,9 @@
+using System;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using VirtoCommerce.StoreModule.Core.Model;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Web.Services;
 
@@ -17,9 +20,20 @@ internal sealed class UcpStoreContextMiddleware
         _next = next;
     }
 
-    public async Task InvokeAsync(HttpContext context, UcpStoreContextResolver storeContextResolver, IOptions<UcpOptions> options)
+    public async Task InvokeAsync(HttpContext context, UcpStoreContextResolver storeContextResolver, IOptions<UcpOptions> options, ILogger<UcpStoreContextMiddleware> logger)
     {
-        var store = await storeContextResolver.ResolveStoreAsync(context);
+        // This runs ahead of the platform's exception handling: a store that cannot be read leaves the request with the
+        // configuration, as a request with no store has, instead of a bare error response.
+        Store store = null;
+        try
+        {
+            store = await storeContextResolver.ResolveStoreAsync(context);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogError(ex, "UCP could not resolve the store of {Host}{Path}; the request uses the configuration", context.Request.Host, context.Request.Path);
+        }
+
         UcpRequestOptions.SetStore(context, store, options.Value);
 
         await _next(context);

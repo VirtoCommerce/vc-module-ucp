@@ -21,7 +21,8 @@ namespace VirtoCommerce.UCP.Web.Services;
 // 2. the store of the request's Origin or Referer host, for calls a storefront makes to the platform's API host;
 // 3. the platform's default store, VirtoCommerce:Stores:DefaultStore, then the obsolete UCP:DefaultStoreId;
 // 4. the only open store.
-// A host matches a store through VirtoCommerce:Stores:Domains or the domain of the store's URL.
+// A host matches a store through VirtoCommerce:Stores:Domains or the host of the store's URL or secure URL.
+// An operation that names another store with store_id switches the request to that store (UseOperationStoreAsync).
 public class UcpStoreContextResolver(
     IStoreService storeService,
     IStoreSearchService storeSearchService,
@@ -30,6 +31,12 @@ public class UcpStoreContextResolver(
 {
     // Two results are enough to tell whether a store is the only open one.
     private const int OnlyStoreProbeSize = 2;
+
+    // The store search's domain filter is a substring match on the URL, so a few candidates are checked for the exact host.
+    private const int DomainProbeSize = 20;
+
+    // The stores read to match a host by the secure URL, which the store search does not filter by.
+    private const int AllStoresProbeSize = 1000;
 
     private readonly StoresOptions _storesOptions = storesOptions.Value;
     private readonly UcpOptions _ucpOptions = ucpOptions.Value;
@@ -57,6 +64,31 @@ public class UcpStoreContextResolver(
         return await GetOnlyOpenStoreAsync();
     }
 
+    // The store an operation names with store_id, when it is not the store of the request: the operation runs with that
+    // store's options (its currency, language, URL and UCP settings) for the rest of the request. Null when no store has
+    // that id; the request keeps its store then.
+    public virtual async Task<Store> UseOperationStoreAsync(HttpContext context, string storeId)
+    {
+        if (context == null || string.IsNullOrWhiteSpace(storeId))
+        {
+            return null;
+        }
+
+        var current = UcpRequestOptions.GetStore(context);
+        if (current != null && string.Equals(current.Id, storeId, StringComparison.Ordinal))
+        {
+            return current;
+        }
+
+        var store = await GetStoreByIdAsync(storeId);
+        if (store != null)
+        {
+            UcpRequestOptions.SetStore(context, store, _ucpOptions);
+        }
+
+        return store;
+    }
+
     protected virtual IEnumerable<string> GetCandidateHosts(HttpRequest request)
     {
         if (request == null)
@@ -78,10 +110,25 @@ public class UcpStoreContextResolver(
 
         var criteria = AbstractTypeFactory<StoreSearchCriteria>.TryCreateInstance();
         criteria.Domain = host;
-        criteria.Take = 1;
-        var result = await SearchStoresAsync(criteria);
+        criteria.Take = DomainProbeSize;
+        var match = FindByHost((await SearchStoresAsync(criteria)).Results, host);
+        if (match != null)
+        {
+            return match;
+        }
 
-        return result.Results.FirstOrDefault();
+        // A store whose host is only in its secure URL
+        var allStores = AbstractTypeFactory<StoreSearchCriteria>.TryCreateInstance();
+        allStores.Take = AllStoresProbeSize;
+
+        return FindByHost((await SearchStoresAsync(allStores)).Results, host);
+    }
+
+    protected static Store FindByHost(IEnumerable<Store> stores, string host)
+    {
+        return stores?.FirstOrDefault(store =>
+            string.Equals(GetHost(store.SecureUrl), host, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(GetHost(store.Url), host, StringComparison.OrdinalIgnoreCase));
     }
 
     protected virtual async Task<Store> GetOnlyOpenStoreAsync()

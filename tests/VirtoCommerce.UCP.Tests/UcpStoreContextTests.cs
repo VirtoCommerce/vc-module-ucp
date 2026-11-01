@@ -3,11 +3,15 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VirtoCommerce.Platform.Core.Settings;
 using VirtoCommerce.StoreModule.Core.Model;
 using VirtoCommerce.StoreModule.Core.Model.Search;
+using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
+using VirtoCommerce.UCP.Web;
+using VirtoCommerce.UCP.Web.Filters;
 using VirtoCommerce.UCP.Web.Services;
 using VirtoCommerce.Xapi.Core.Models;
 using Xunit;
@@ -31,6 +35,100 @@ public class UcpStoreContextTests
         var store = await resolver.ResolveStoreAsync(Request("fashion.example"));
 
         Assert.Equal("fashion", store.Id);
+    }
+
+    [Fact]
+    public async Task ResolveStoreAsync_MatchesTheExactHost_NotAHostThatStartsTheSame()
+    {
+        // The store search's domain filter matches "://shop.example" in both URLs
+        var resolver = CreateResolver(stores:
+        [
+            new Store { Id = "australia", Url = "https://shop.example.au", StoreState = StoreState.Open },
+            new Store { Id = "main", Url = "https://shop.example/", StoreState = StoreState.Open },
+        ]);
+
+        var store = await resolver.ResolveStoreAsync(Request("shop.example"));
+
+        Assert.Equal("main", store.Id);
+    }
+
+    [Fact]
+    public async Task ResolveStoreAsync_FindsTheStoreByItsSecureUrl_WhichTheDomainSearchDoesNotCover()
+    {
+        var resolver = CreateResolver(stores:
+        [
+            new Store { Id = "secure-only", Url = "http://legacy.example", SecureUrl = "https://secure.example", StoreState = StoreState.Open },
+            _electronics,
+        ]);
+
+        var store = await resolver.ResolveStoreAsync(Request("secure.example"));
+
+        Assert.Equal("secure-only", store.Id);
+    }
+
+    [Fact]
+    public async Task UseOperationStoreAsync_RunsTheOperationWithTheOptionsOfTheStoreItNames()
+    {
+        var fashion = new Store
+        {
+            Id = "fashion",
+            SecureUrl = "https://fashion.example",
+            DefaultCurrency = "EUR",
+            Settings = [new ObjectSettingEntry { Name = StoreSettings.CheckoutLinkLifetimeMinutes.Name, Value = 45 }],
+        };
+        var resolver = CreateResolver(stores: [_electronics, fashion]);
+        var context = Request("electronics.example");
+        UcpRequestOptions.SetStore(context, _electronics, new UcpOptions());
+
+        var store = await resolver.UseOperationStoreAsync(context, "fashion");
+        var options = new UcpRequestOptions(new HttpContextAccessor { HttpContext = context }, Options.Create(new UcpOptions())).Current;
+
+        Assert.Same(fashion, store);
+        Assert.Same(fashion, UcpRequestOptions.GetStore(context));
+        Assert.Equal("fashion", options.DefaultStoreId);
+        Assert.Equal("EUR", options.DefaultCurrency);
+        Assert.Equal("https://fashion.example", options.StorefrontOrigin);
+        Assert.Equal(45, options.HandoffTokenTtlMinutes);
+    }
+
+    [Fact]
+    public async Task UseOperationStoreAsync_KeepsTheRequestsStore_When_NoStoreHasTheId()
+    {
+        var resolver = CreateResolver();
+        var context = Request("electronics.example");
+        UcpRequestOptions.SetStore(context, _electronics, new UcpOptions());
+
+        var store = await resolver.UseOperationStoreAsync(context, "unknown");
+
+        Assert.Null(store);
+        Assert.Same(_electronics, UcpRequestOptions.GetStore(context));
+    }
+
+    [Fact]
+    public void FindStoreId_ReadsTheStoreOfARestRequestOrOfItsContext()
+    {
+        Assert.Equal("direct", UcpOperationResourceFilter.FindStoreId(["cart-1", new UcpCheckoutRequest { StoreId = "direct" }]));
+        Assert.Equal("from-context", UcpOperationResourceFilter.FindStoreId([new UcpCartRequest { Context = new UcpCartContext { StoreId = "from-context" } }]));
+        Assert.Null(UcpOperationResourceFilter.FindStoreId(["cart-1", new UcpCheckoutRequest()]));
+    }
+
+    [Fact]
+    public async Task StoreContextMiddleware_GoesOnWithTheConfiguration_When_TheStoreCannotBeRead()
+    {
+        var configured = new UcpOptions { DefaultStoreId = "configured" };
+        var context = Request("electronics.example");
+        var nextCalled = false;
+        var middleware = new UcpStoreContextMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+
+        await middleware.InvokeAsync(context, new FailingStoreContextResolver(), Options.Create(configured), NullLogger<UcpStoreContextMiddleware>.Instance);
+
+        Assert.True(nextCalled);
+        Assert.Null(UcpRequestOptions.GetStore(context));
+        Assert.Equal("configured", new UcpRequestOptions(new HttpContextAccessor { HttpContext = context }, Options.Create(configured)).Current.DefaultStoreId);
     }
 
     [Fact]
@@ -177,6 +275,15 @@ public class UcpStoreContextTests
             new UcpOptions { DefaultStoreId = ucpDefaultStoreId });
     }
 
+    private sealed class FailingStoreContextResolver()
+        : UcpStoreContextResolver(null, null, Options.Create(new StoresOptions()), Options.Create(new UcpOptions()))
+    {
+        public override Task<Store> ResolveStoreAsync(HttpContext context)
+        {
+            throw new InvalidOperationException("The store search is not available.");
+        }
+    }
+
     private sealed class InMemoryStoreContextResolver(IList<Store> stores, StoresOptions storesOptions, UcpOptions ucpOptions)
         : UcpStoreContextResolver(null, null, Options.Create(storesOptions), Options.Create(ucpOptions))
     {
@@ -187,8 +294,9 @@ public class UcpStoreContextTests
 
         protected override Task<StoreSearchResult> SearchStoresAsync(StoreSearchCriteria criteria)
         {
+            // As the Store module filters by domain: a substring of the URL, not of the secure URL
             var found = stores
-                .Where(x => criteria.Domain == null || new Uri(x.SecureUrl ?? x.Url).Host == criteria.Domain)
+                .Where(x => criteria.Domain == null || (x.Url?.Contains("://" + criteria.Domain, StringComparison.OrdinalIgnoreCase) ?? false))
                 .Where(x => criteria.StoreStates == null || criteria.StoreStates.Contains(x.StoreState))
                 .Take(criteria.Take)
                 .ToList();

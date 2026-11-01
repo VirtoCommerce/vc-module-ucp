@@ -11,11 +11,11 @@ using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.Platform.Core.Common;
-using VirtoCommerce.StoreModule.Core.Services;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Diagnostics;
+using VirtoCommerce.UCP.Web.Services;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
 
@@ -110,8 +110,10 @@ public sealed class UcpMcpCallToolFilter : IMcpCallToolFilter
             return;
         }
 
-        var storeService = context.Services.GetRequiredService<IStoreService>();
-        var store = await UcpDiagnostics.ExecuteDependency("stores", "GetStore", () => storeService.GetNoCloneAsync(storeId.GetString()));
+        // The call runs with the options of the store it names, not of the store of the host it came to.
+        var storeContextResolver = context.Services.GetRequiredService<UcpStoreContextResolver>();
+        var httpContext = context.Services.GetRequiredService<IHttpContextAccessor>().HttpContext;
+        var store = await storeContextResolver.UseOperationStoreAsync(httpContext, storeId.GetString());
         if (store == null)
         {
             throw new UcpException(ModuleConstants.ErrorCodes.InvalidRequest, "store_id does not identify an existing store.");

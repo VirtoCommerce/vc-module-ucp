@@ -231,6 +231,22 @@ public partial class UcpCartServiceTests
     }
 
     [Fact]
+    public async Task ListCarts_WithoutCartType_LeavesOutCartsTypedCartBeforeTheUpgrade()
+    {
+        var executor = new StubXApiExecutor(BuildCartListJson(
+            BuildCartListItem("cart-1", "null", "buyer-1", "null"),
+            BuildCartListItem("legacy-1", "\"cart\"", "buyer-1", "null")));
+        var service = CreateService(executor);
+
+        var response = await service.ListCarts(new UcpCartListRequest
+        {
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US", BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("cart-1", Assert.Single(response.Carts).Id);
+    }
+
+    [Fact]
     public async Task ListCarts_WithoutCartType_WhenMorePagesExist_ReportsServerTotalCount()
     {
         var executor = new StubXApiExecutor(BuildPagedCartListJson(
