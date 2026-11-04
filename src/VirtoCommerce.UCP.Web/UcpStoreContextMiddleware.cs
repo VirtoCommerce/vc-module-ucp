@@ -9,7 +9,7 @@ using VirtoCommerce.UCP.Web.Services;
 
 namespace VirtoCommerce.UCP.Web;
 
-// Resolves the store of a UCP request once, before the REST API, the MCP endpoint and the scoped GraphQL schema run,
+// Resolves the store of a UCP request once, before the REST API and the MCP endpoint run,
 // so every UCP service of the request sees the same store and its options (IUcpRequestOptions).
 internal sealed class UcpStoreContextMiddleware
 {

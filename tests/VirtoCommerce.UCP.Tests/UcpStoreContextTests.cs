@@ -14,6 +14,7 @@ using VirtoCommerce.UCP.Web;
 using VirtoCommerce.UCP.Web.Filters;
 using VirtoCommerce.UCP.Web.Services;
 using VirtoCommerce.Xapi.Core.Models;
+using VirtoCommerce.Xapi.Core.Services;
 using Xunit;
 using StoreSettings = VirtoCommerce.UCP.Core.ModuleConstants.Settings.Store;
 
@@ -24,8 +25,8 @@ namespace VirtoCommerce.UCP.Tests;
 [Trait("Category", "Unit")]
 public class UcpStoreContextTests
 {
-    private static readonly Store _electronics = new() { Id = "electronics", SecureUrl = "https://electronics.example/", DefaultCurrency = "USD", DefaultLanguage = "en-US", StoreState = StoreState.Open };
-    private static readonly Store _fashion = new() { Id = "fashion", SecureUrl = "https://fashion.example", DefaultCurrency = "EUR", DefaultLanguage = "de-DE", StoreState = StoreState.Open };
+    private static readonly Store _electronics = new() { Id = "electronics", Url = "https://electronics.example/", SecureUrl = "https://electronics.example/", DefaultCurrency = "USD", DefaultLanguage = "en-US", StoreState = StoreState.Open };
+    private static readonly Store _fashion = new() { Id = "fashion", Url = "https://fashion.example", SecureUrl = "https://fashion.example", DefaultCurrency = "EUR", DefaultLanguage = "de-DE", StoreState = StoreState.Open };
 
     [Fact]
     public async Task ResolveStoreAsync_UsesTheStoreOfTheRequestHost()
@@ -35,35 +36,6 @@ public class UcpStoreContextTests
         var store = await resolver.ResolveStoreAsync(Request("fashion.example"));
 
         Assert.Equal("fashion", store.Id);
-    }
-
-    [Fact]
-    public async Task ResolveStoreAsync_MatchesTheExactHost_NotAHostThatStartsTheSame()
-    {
-        // The store search's domain filter matches "://shop.example" in both URLs
-        var resolver = CreateResolver(stores:
-        [
-            new Store { Id = "australia", Url = "https://shop.example.au", StoreState = StoreState.Open },
-            new Store { Id = "main", Url = "https://shop.example/", StoreState = StoreState.Open },
-        ]);
-
-        var store = await resolver.ResolveStoreAsync(Request("shop.example"));
-
-        Assert.Equal("main", store.Id);
-    }
-
-    [Fact]
-    public async Task ResolveStoreAsync_FindsTheStoreByItsSecureUrl_WhichTheDomainSearchDoesNotCover()
-    {
-        var resolver = CreateResolver(stores:
-        [
-            new Store { Id = "secure-only", Url = "http://legacy.example", SecureUrl = "https://secure.example", StoreState = StoreState.Open },
-            _electronics,
-        ]);
-
-        var store = await resolver.ResolveStoreAsync(Request("secure.example"));
-
-        Assert.Equal("secure-only", store.Id);
     }
 
     [Fact]
@@ -144,13 +116,23 @@ public class UcpStoreContextTests
     [Theory]
     [InlineData("Origin", "https://fashion.example")]
     [InlineData("Referer", "https://fashion.example/checkout?step=2")]
-    public async Task ResolveStoreAsync_UsesTheOriginOrRefererOfACallFromAStorefront(string header, string value)
+    public async Task ResolveStoreAsync_IgnoresTheOriginAndRefererTheCallerSets(string header, string value)
     {
         var resolver = CreateResolver(defaultStore: "electronics");
         var context = Request("api.example");
         context.Request.Headers[header] = value;
 
         var store = await resolver.ResolveStoreAsync(context);
+
+        Assert.Equal("electronics", store.Id);
+    }
+
+    [Fact]
+    public async Task ResolveStoreAsync_FallsBackToThePlatformDefaultStore_When_TheRequestHasNoHost()
+    {
+        var resolver = CreateResolver(defaultStore: "fashion");
+
+        var store = await resolver.ResolveStoreAsync(new DefaultHttpContext());
 
         Assert.Equal("fashion", store.Id);
     }
@@ -276,7 +258,7 @@ public class UcpStoreContextTests
     }
 
     private sealed class FailingStoreContextResolver()
-        : UcpStoreContextResolver(null, null, Options.Create(new StoresOptions()), Options.Create(new UcpOptions()))
+        : UcpStoreContextResolver(null, null, null, Options.Create(new StoresOptions()), Options.Create(new UcpOptions()))
     {
         public override Task<Store> ResolveStoreAsync(HttpContext context)
         {
@@ -285,7 +267,7 @@ public class UcpStoreContextTests
     }
 
     private sealed class InMemoryStoreContextResolver(IList<Store> stores, StoresOptions storesOptions, UcpOptions ucpOptions)
-        : UcpStoreContextResolver(null, null, Options.Create(storesOptions), Options.Create(ucpOptions))
+        : UcpStoreContextResolver(new InMemoryStoreDomainResolver(stores, storesOptions), null, null, Options.Create(storesOptions), Options.Create(ucpOptions))
     {
         protected override Task<Store> GetStoreByIdAsync(string storeId)
         {
@@ -302,6 +284,20 @@ public class UcpStoreContextTests
                 .ToList();
 
             return Task.FromResult(new StoreSearchResult { Results = found, TotalCount = found.Count });
+        }
+    }
+
+    // As XAPI's StoreDomainResolverService resolves a domain: the platform's domain mapping, then the first store whose URL
+    // contains "://{domain}", then the platform's default store.
+    private sealed class InMemoryStoreDomainResolver(IList<Store> stores, StoresOptions storesOptions) : IStoreDomainResolverService
+    {
+        public Task<Store> GetStoreAsync(StoreDomainRequest request)
+        {
+            var store = storesOptions.Domains.TryGetValue(request.Domain, out var storeId)
+                ? stores.FirstOrDefault(x => x.Id == storeId)
+                : stores.FirstOrDefault(x => x.Url?.Contains("://" + request.Domain, StringComparison.OrdinalIgnoreCase) ?? false);
+
+            return Task.FromResult(store ?? stores.FirstOrDefault(x => x.Id == storesOptions.DefaultStore));
         }
     }
 }

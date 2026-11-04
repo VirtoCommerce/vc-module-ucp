@@ -1,4 +1,3 @@
-using GraphQL.MicrosoftDI;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
@@ -19,14 +18,11 @@ using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Data.Caching;
 using VirtoCommerce.UCP.Data.Services;
-using VirtoCommerce.UCP.ExperienceApi;
 using VirtoCommerce.UCP.Web.Diagnostics;
 using VirtoCommerce.UCP.Web.Filters;
 using VirtoCommerce.UCP.Web.Mcp;
 using VirtoCommerce.UCP.Web.Services;
 using VirtoCommerce.UCP.Web.Swagger;
-using VirtoCommerce.Xapi.Core.Extensions;
-using VirtoCommerce.Xapi.Core.Infrastructure;
 
 namespace VirtoCommerce.UCP.Web;
 
@@ -93,13 +89,6 @@ public class Module : IModule, IHasConfiguration
         serviceCollection.AddTransient<IUcpGeographyService, UcpGeographyService>();
         serviceCollection.AddTransient<XApiDocumentExecuters>();
         serviceCollection.AddTransient<IXApiInProcessExecutor, XApiInProcessExecutor>();
-
-        _ = new GraphQLBuilder(serviceCollection, builder =>
-        {
-            builder.AddSchema(serviceCollection, typeof(XapiAssemblyMarker));
-        });
-
-        serviceCollection.AddSingleton<ScopedSchemaFactory<XapiAssemblyMarker>>();
     }
 
     internal static string BuildMcpInstructions(UcpOptions options)
@@ -119,8 +108,6 @@ public class Module : IModule, IHasConfiguration
         settingsRegistrar.RegisterSettingsForType(ModuleConstants.Settings.StoreLevelSettings, nameof(Store));
 
         LogObsoleteConfiguration(Configuration, serviceProvider.GetRequiredService<ILogger<Module>>());
-
-        appBuilder.UseScopedSchema<XapiAssemblyMarker>("ucp");
     }
 
     // UCP keys that the store, its settings or the MCP module's configuration now provide. They still work, so a deployment

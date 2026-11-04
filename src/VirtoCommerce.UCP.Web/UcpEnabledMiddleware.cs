@@ -7,8 +7,8 @@ namespace VirtoCommerce.UCP.Web;
 
 /// <summary>
 /// Answers 404 on every UCP surface while the MCP module's <c>ucp</c> scope is switched off
-/// (<c>MCP:Scopes:ucp:Enabled</c> is <c>false</c>), so one switch turns UCP off: the MCP endpoint, the REST API,
-/// discovery and the scoped GraphQL schema.
+/// (<c>MCP:Scopes:ucp:Enabled</c> is <c>false</c>), so one switch turns UCP off: the MCP endpoint, the REST API
+/// and discovery.
 /// </summary>
 internal sealed class UcpEnabledMiddleware
 {

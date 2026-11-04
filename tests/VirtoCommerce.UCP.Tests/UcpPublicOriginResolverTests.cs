@@ -81,7 +81,7 @@ public class UcpPublicOriginResolverTests
     }
 
     internal sealed class TestStoreContextResolver()
-        : UcpStoreContextResolver(null, null, Options.Create(new StoresOptions { Domains = new Dictionary<string, string>() }), Options.Create(new UcpOptions()))
+        : UcpStoreContextResolver(null, null, null, Options.Create(new StoresOptions { Domains = new Dictionary<string, string>() }), Options.Create(new UcpOptions()))
     {
         public Store Store { get; init; }
         public bool Called { get; private set; }

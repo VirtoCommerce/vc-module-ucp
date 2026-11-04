@@ -331,7 +331,7 @@ UCP needs almost no configuration of its own: it takes the store of each request
 
 | Value | Source | Who sets it |
 | --- | --- | --- |
-| The store of a request | The request's host: the store whose `SecureUrl` or `Url` has exactly that host, or `VirtoCommerce:Stores:Domains`; for a storefront's call to the platform API host, its `Origin` or `Referer`; then `VirtoCommerce:Stores:DefaultStore`; then the only open store. An operation that names another store with `store_id` runs with that store's values | Store administrator (the store's URL); IT for domain mappings |
+| The store of a request | The request's host, resolved as XAPI resolves a storefront's domain (`IStoreDomainResolverService`): `VirtoCommerce:Stores:Domains`, then the store whose `Url` has that host; then `VirtoCommerce:Stores:DefaultStore`; then the only open store. `Origin` and `Referer` are not used. An operation that names another store with `store_id` runs with that store's values | Store administrator (the store's URL); IT for domain mappings |
 | Currency and language | The store's default currency and language | Store administrator |
 | Storefront, checkout and cart links, public origin | The store's `SecureUrl`, then `Url` | Store administrator |
 | Anonymous shopping | The store's **Allow anonymous users**; `UCP:AnonymousCatalog = false` turns it off for assistants only | Store administrator |
@@ -403,8 +403,6 @@ With `MCP:Scopes:ucp:Enabled` set to `false`, the MCP module serves no `/ucp/mcp
 - `/ucp` (the REST API `/ucp/v1/*` and the MCP endpoint `/ucp/mcp`, for every HTTP method)
 - `/.well-known/ucp`
 - `/.well-known/oauth-protected-resource/ucp`
-- `/graphql/ucp`
-- `/ui/graphiql/ucp`
 
 The scope is on by default. The value is read at startup, so a change applies after a restart of every instance; as an environment variable, `MCP__Scopes__ucp__Enabled=false`. To stop a single shopping tool without a restart, switch it off on the MCP module's **Agent tools** screen instead.
 
@@ -519,7 +517,7 @@ flowchart LR
     Services["UCP services<br/>VirtoCommerce.UCP.Data"]
     Cache["Handoff session store<br/>Platform Redis or in-memory fallback<br/>handoff sessions"]
     Executor["IXApiInProcessExecutor"]
-    XApi["Virto Commerce XAPI<br/>scoped schema: ucp"]
+    XApi["Virto Commerce XAPI<br/>scoped schemas of XCatalog, XCart, XOrder"]
     Modules["Commerce modules<br/>XCatalog, XCart, Orders,<br/>Marketing, Store, Pricing, Inventory"]
 
     Client --> UcpHttp
@@ -837,7 +835,6 @@ Earlier versions mapped `/ucp/mcp` themselves. This version moves the endpoint t
 | --- | --- | --- |
 | `VirtoCommerce.UCP.Core` | Core | Protocol models, service interfaces, module constants, options, errors, diagnostics |
 | `VirtoCommerce.UCP.Data` | Data | UCP services: discovery, catalog, cart, checkout handoff, orders, geography; the handoff session stores |
-| `VirtoCommerce.UCP.ExperienceApi` | XAPI | Marker of the `ucp` scoped XAPI schema |
 | `VirtoCommerce.UCP.Web` | Web | Module bootstrapping, REST controllers and filters, the MCP tools and their call filter, the in-process XAPI executor |
 | `VirtoCommerce.UCP.Tests` | Tests | Unit tests |
 
@@ -860,7 +857,7 @@ The module has no database tables and no migrations.
 | `UcpMcpCallToolFilter` | `IMcpCallToolFilter` | Store checks, UCP errors and telemetry of the commerce tools on `/ucp/mcp` |
 | `UcpMcpChallengeWriter` | `McpChallengeWriter` | UCP's `identity_required` body of the HTTP 401 and 403 responses on `/ucp/mcp` |
 | `UcpMcpPublicOriginResolver` | `IMcpPublicOriginResolver` | The store-based public origin of the `ucp` scope |
-| `UcpStoreContextResolver` | | The store of a request: its host, `Origin` or `Referer`, the platform's default store, the only open store |
+| `UcpStoreContextResolver` | | The store of a request: its host through XAPI's `IStoreDomainResolverService`, the platform's default store, the only open store |
 | `UcpRequestOptions` | `IUcpRequestOptions` | The options of the request's store: id, currency, language, URLs and the UCP store settings, with the configuration as the fallback |
 | `UcpStartupFilter` | `IStartupFilter` | Puts the scope-switch gate, the store of the request and the closed-catalog sign-in rule ahead of the MCP module's `/ucp/mcp` branch |
 

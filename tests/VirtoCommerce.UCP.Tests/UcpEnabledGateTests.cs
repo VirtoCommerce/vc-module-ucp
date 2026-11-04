@@ -40,9 +40,6 @@ public class UcpEnabledGateTests
     [InlineData("/.well-known/ucp")]
     [InlineData("/.well-known/UCP")]
     [InlineData("/.well-known/oauth-protected-resource/ucp/mcp")]
-    [InlineData("/graphql/ucp")]
-    [InlineData("/GraphQL/ucp")]
-    [InlineData("/ui/graphiql/ucp")]
     public void IsGatedPath_UcpPrefix_ReturnsTrue(string path)
     {
         Assert.True(UcpEnabledGateExtensions.IsGatedPath(path));
@@ -95,8 +92,6 @@ public class UcpEnabledGateTests
     [InlineData("POST", "/ucp/mcp")]
     [InlineData("GET", "/.well-known/ucp")]
     [InlineData("GET", "/.well-known/oauth-protected-resource/ucp/mcp")]
-    [InlineData("POST", "/graphql/ucp")]
-    [InlineData("GET", "/ui/graphiql/ucp")]
     public async Task UseUcpEnabledGate_ScopeOff_UcpSurfaceAnswers404(string method, string path)
     {
         var (pipeline, terminal) = BuildPipeline(new StubMcpScopeRegistry(ucpEnabled: false));
@@ -115,8 +110,6 @@ public class UcpEnabledGateTests
     [InlineData("POST", "/ucp/mcp")]
     [InlineData("GET", "/.well-known/ucp")]
     [InlineData("GET", "/.well-known/oauth-protected-resource/ucp/mcp")]
-    [InlineData("POST", "/graphql/ucp")]
-    [InlineData("GET", "/ui/graphiql/ucp")]
     public async Task UseUcpEnabledGate_ScopeOn_UcpSurfaceReachesTerminal(string method, string path)
     {
         var (pipeline, terminal) = BuildPipeline(new StubMcpScopeRegistry(ucpEnabled: true));

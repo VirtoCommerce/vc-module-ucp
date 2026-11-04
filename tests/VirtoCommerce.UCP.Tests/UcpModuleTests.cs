@@ -99,7 +99,7 @@ public class UcpModuleTests
     }
 
     private sealed class FixedStoreContextResolver(Store store)
-        : UcpStoreContextResolver(null, null, Options.Create(new StoresOptions()), Options.Create(new UcpOptions()))
+        : UcpStoreContextResolver(null, null, null, Options.Create(new StoresOptions()), Options.Create(new UcpOptions()))
     {
         public override Task<Store> ResolveStoreAsync(HttpContext context)
         {

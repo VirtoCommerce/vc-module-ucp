@@ -14,8 +14,6 @@ internal static class UcpEnabledGateExtensions
         new("/ucp"),
         new(ModuleConstants.Endpoints.Discovery),
         new("/.well-known/oauth-protected-resource/ucp"),
-        new("/graphql/ucp"),
-        new("/ui/graphiql/ucp"),
     ];
 
     public static IApplicationBuilder UseUcpEnabledGate(this IApplicationBuilder app)
