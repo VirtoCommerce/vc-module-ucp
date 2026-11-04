@@ -4,8 +4,12 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using VirtoCommerce.MCP.Core.Extensions;
 using VirtoCommerce.MCP.Core.Models;
+using VirtoCommerce.MCP.Core.Services;
+using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Mcp;
@@ -116,7 +120,20 @@ public class UcpMcpSignInRequiredMiddlewareTests
                 await next(context);
             }
         });
-        var context = new DefaultHttpContext();
+        // The MCP module's services with the ucp scope's own challenge writer and origin, as UCP declares them
+        var scope = new McpScope { Name = ModuleConstants.McpScopeName };
+        var services = new ServiceCollection()
+            .AddSingleton(Options.Create(new McpOptions()))
+            .AddSingleton<IUcpPublicOriginResolver>(new StubUcpOriginResolver())
+            .AddTransient<McpChallengeWriter>()
+            .AddTransient<IMcpPublicOriginResolver, McpPublicOriginResolver>();
+        new McpScopeBuilder(services, scope)
+            .WithChallengeWriter<UcpMcpChallengeWriter>()
+            .WithPublicOriginResolver<UcpMcpPublicOriginResolver>();
+
+        var context = new DefaultHttpContext { RequestServices = services.BuildServiceProvider() };
+        context.SetMcpScope(scope);
+        context.SetMcpEndpointPath(path == McpScope.HostEndpointPath ? McpScope.HostEndpointPath : scope.Path);
         context.Request.Method = HttpMethods.Post;
         context.Request.Scheme = "https";
         context.Request.Host = new HostString(StubMcpScopeRegistry.ScopeHost);
@@ -129,12 +146,7 @@ public class UcpMcpSignInRequiredMiddlewareTests
             context.Request.Headers.Authorization = authorization;
         }
 
-        await middleware.InvokeAsync(
-            context,
-            new StubMcpScopeRegistry(),
-            new StubProfileService(anonymousCatalog),
-            new UcpMcpPublicOriginResolver(Options.Create(new McpOptions()), new StubUcpOriginResolver()),
-            new UcpMcpChallengeWriter());
+        await middleware.InvokeAsync(context, new StubProfileService(anonymousCatalog));
 
         return (nextCalled, context);
     }

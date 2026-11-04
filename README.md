@@ -548,7 +548,7 @@ Commerce tools do not expose an authentication mode. A request without a Platfor
 
 The MCP module signs buyers in: it publishes the protected-resource metadata at `/.well-known/oauth-protected-resource/ucp/mcp`, answers a call that needs a buyer with the HTTP 401 challenge, and checks the token and its revocation on every request ([Authentication](https://github.com/VirtoCommerce/vc-module-mcp#authentication)). The platform issues the tokens; UCP issues none and does not register OAuth clients. UCP decides who the buyer is and what a sign-in changes:
 
-When `UCP:AnonymousCatalog` is `false`, or the default store does not allow anonymous users, the MCP endpoint asks for a sign-in from the first request: an anonymous request, `initialize` and `tools/list` included, gets the HTTP 401 challenge, so the client starts OAuth when it connects. `logout_buyer` is never challenged. UCP answers these requests itself, ahead of the MCP module's endpoint, with the MCP module's challenge.
+When `UCP:AnonymousCatalog` is `false`, or the default store does not allow anonymous users, the MCP endpoint asks for a sign-in from the first request: an anonymous request, `initialize` and `tools/list` included, gets the HTTP 401 challenge, so the client starts OAuth when it connects. `logout_buyer` is never challenged. UCP answers these requests itself, in the platform pipeline before authentication, with the scope's challenge.
 
 * An assistant calls `link_buyer_identity` when the buyer asks to use their account. Without a token, the call gets the challenge and the client signs the buyer in; with a valid token, it returns the buyer and organization without another sign-in. The commerce tools are then called unchanged.
 * To keep an anonymous cart, the assistant calls `update_cart` with the saved anonymous `buyer_id`, the `cart_id` and the complete line state. UCP checks the anonymous owner and calls XCart `mergeCart`.
@@ -568,12 +568,14 @@ serviceCollection.AddMcpScope(new McpScope
     Version = ModuleConstants.UcpVersion,
     Instructions = ModuleConstants.McpInstructions,
     RequireAuthenticatedUser = false, // anonymous shopping; link_buyer_identity asks for a sign-in
-});
+}, scope => scope
+    .WithChallengeWriter<UcpMcpChallengeWriter>()
+    .WithPublicOriginResolver<UcpMcpPublicOriginResolver>()
+    .WithCallToolFilter<UcpMcpCallToolFilter>());
 serviceCollection.AddMcpToolsFromAssembly(typeof(UcpMcpCommerceTools).Assembly, UcpMcpSerialization.Options);
-serviceCollection.AddMcpCallToolFilter<UcpMcpCallToolFilter>(ModuleConstants.McpScopeName);
-serviceCollection.AddTransient<McpChallengeWriter, UcpMcpChallengeWriter>();
-serviceCollection.AddTransient<IMcpPublicOriginResolver, UcpMcpPublicOriginResolver>();
 ```
+
+The writer, the resolver and the filter are declared with the scope, so they serve `/ucp/mcp` only and other scopes keep the MCP module's ones; none of them checks which scope it serves.
 
 The MCP module serves the endpoint: the transport, sign-in and token checks, tool switches, argument validation, the audit log and the tool call span ([Scopes](https://github.com/VirtoCommerce/vc-module-mcp#scopes), [Tool call flow](https://github.com/VirtoCommerce/vc-module-mcp#tool-call-flow)). UCP adds:
 
@@ -859,7 +861,7 @@ The module has no database tables and no migrations.
 | `UcpMcpPublicOriginResolver` | `IMcpPublicOriginResolver` | The store-based public origin of the `ucp` scope |
 | `UcpStoreContextResolver` | | The store of a request: its host through XAPI's `IStoreDomainResolverService`, the platform's default store, the only open store |
 | `UcpRequestOptions` | `IUcpRequestOptions` | The options of the request's store: id, currency, language, URLs and the UCP store settings, with the configuration as the fallback |
-| `UcpStartupFilter` | `IStartupFilter` | Puts the scope-switch gate, the store of the request and the closed-catalog sign-in rule ahead of the MCP module's `/ucp/mcp` branch |
+| `UcpStartup` | `IPlatformStartup` | Adds the scope-switch gate, the store of the request and the closed-catalog sign-in rule to the platform pipeline after routing (`ConfigureAfterRouting`), where they cover the REST API, discovery and the MCP module's `/ucp/mcp` endpoint |
 
 ### Dependencies
 
@@ -867,7 +869,7 @@ The module manifest declares these runtime dependencies:
 
 | Module | Version |
 | --- | --- |
-| `VirtoCommerce.MCP` | `3.1000.0-alpha.15-vcst-6155-core-mcp-module` |
+| `VirtoCommerce.MCP` | `3.1000.0-alpha.33-vcst-6155-core-mcp-module` |
 | `VirtoCommerce.Xapi` | `3.1029.0` |
 | `VirtoCommerce.XCatalog` | `3.1023.0` |
 | `VirtoCommerce.XCart` | `3.1044.0` |

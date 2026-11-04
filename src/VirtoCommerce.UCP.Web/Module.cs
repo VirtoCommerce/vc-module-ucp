@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -8,7 +7,6 @@ using Microsoft.Extensions.Options;
 using Swashbuckle.AspNetCore.SwaggerGen;
 using VirtoCommerce.MCP.Core.Extensions;
 using VirtoCommerce.MCP.Core.Models;
-using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.Platform.Core.Modularity;
 using VirtoCommerce.Platform.Core.Settings;
 using VirtoCommerce.StoreModule.Core.Model;
@@ -64,16 +62,17 @@ public class Module : IModule, IHasConfiguration
             Version = ModuleConstants.UcpVersion,
             Instructions = BuildMcpInstructions(ucpOptions),
             RequireAuthenticatedUser = false,
-        });
+        }, scope => scope
+            // UCP's messages[] body of a refused request (identity_required)
+            .WithChallengeWriter<UcpMcpChallengeWriter>()
+            // The OAuth resource is the origin of the store the request came to, as /.well-known/ucp advertises
+            .WithPublicOriginResolver<UcpMcpPublicOriginResolver>()
+            // UCP's errors and telemetry for the calls, inside the MCP module's checks and audit
+            .WithCallToolFilter<UcpMcpCallToolFilter>());
         serviceCollection.AddMcpToolsFromAssembly(typeof(UcpMcpCommerceTools).Assembly, UcpMcpSerialization.Options);
-        serviceCollection.AddTransient<McpChallengeWriter, UcpMcpChallengeWriter>();
-        serviceCollection.AddTransient<IMcpPublicOriginResolver, UcpMcpPublicOriginResolver>();
 
-        // UCP's errors and telemetry for the calls of the ucp scope, inside the MCP module's checks and audit.
-        serviceCollection.AddMcpCallToolFilter<UcpMcpCallToolFilter>(ModuleConstants.McpScopeName);
-
-        // The gate of the ucp scope switch and the sign-in rule of a closed catalog run ahead of the MCP module's endpoints.
-        serviceCollection.AddTransient<IStartupFilter, UcpStartupFilter>();
+        // The gate of the ucp scope switch, the store of the request and the sign-in rule of a closed catalog run in the
+        // platform pipeline from UcpStartup (module.manifest startupType).
 
         // The store of each request, from its host, and the options it gives the UCP services.
         serviceCollection.AddTransient<UcpStoreContextResolver>();

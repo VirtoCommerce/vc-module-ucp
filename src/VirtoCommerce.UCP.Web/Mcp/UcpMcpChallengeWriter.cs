@@ -5,15 +5,15 @@ using VirtoCommerce.UCP.Core;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
 
-// Keeps the UCP messages[] body of a refused /ucp/mcp request. The writer replaces the MCP module's one for every scope,
-// so other scopes keep the module's body.
+// Keeps the UCP messages[] body of a refused /ucp/mcp request. Declared with the ucp scope (WithChallengeWriter), so it
+// writes the responses of that scope only.
 public class UcpMcpChallengeWriter : McpChallengeWriter
 {
     private const string LinkBuyerIdentityMessage = "Platform OAuth user identity is required to link the buyer account.";
 
     protected override object GetChallengeBody(McpChallenge challenge)
     {
-        if (challenge == null || !IsUcpScope(challenge.Scope))
+        if (challenge == null)
         {
             return base.GetChallengeBody(challenge);
         }
@@ -28,14 +28,7 @@ public class UcpMcpChallengeWriter : McpChallengeWriter
 
     protected override object GetForbiddenBody(McpScope scope, string message)
     {
-        return IsUcpScope(scope)
-            ? CreateBody(ModuleConstants.ErrorCodes.IdentityRequired, message)
-            : base.GetForbiddenBody(scope, message);
-    }
-
-    private static bool IsUcpScope(McpScope scope)
-    {
-        return string.Equals(scope?.Name, ModuleConstants.McpScopeName, StringComparison.OrdinalIgnoreCase);
+        return CreateBody(ModuleConstants.ErrorCodes.IdentityRequired, message);
     }
 
     private static object CreateBody(string code, string message)

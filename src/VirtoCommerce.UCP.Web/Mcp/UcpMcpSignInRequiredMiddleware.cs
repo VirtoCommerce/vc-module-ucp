@@ -2,6 +2,7 @@ using System;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using VirtoCommerce.MCP.Core.Extensions;
 using VirtoCommerce.MCP.Core.Models;
 using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.UCP.Core;
@@ -29,10 +30,7 @@ internal sealed class UcpMcpSignInRequiredMiddleware
 
     public async Task InvokeAsync(
         HttpContext context,
-        IMcpScopeRegistry scopeRegistry,
-        IUcpProfileService profileService,
-        IMcpPublicOriginResolver originResolver,
-        McpChallengeWriter challengeWriter)
+        IUcpProfileService profileService)
     {
         if (HasBearerHeader(context.Request))
         {
@@ -53,12 +51,15 @@ internal sealed class UcpMcpSignInRequiredMiddleware
             return;
         }
 
-        var scope = scopeRegistry.FindScope(context.Request.Host, context.Request.Path);
+        // The scope's own challenge writer and origin, as the MCP module challenges its requests.
+        var scope = context.GetMcpScope();
+        var originResolver = context.RequestServices.GetMcpScopeService<IMcpPublicOriginResolver>(scope);
+        var challengeWriter = context.RequestServices.GetMcpScopeService<McpChallengeWriter>(scope);
         await challengeWriter.WriteChallengeAsync(context, new McpChallenge
         {
             Scope = scope,
             Origin = await originResolver.GetOriginAsync(context, scope),
-            EndpointPath = IsHostEndpointPath(context.Request.Path) ? McpScope.HostEndpointPath : scope.Path,
+            EndpointPath = context.GetMcpEndpointPath(),
             ToolName = toolName,
             ErrorDescription = SignInRequiredMessage,
         });
@@ -108,10 +109,5 @@ internal sealed class UcpMcpSignInRequiredMiddleware
         return authorization.Count == 1 &&
             authorization[0].StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase) &&
             authorization[0].Length > BearerPrefix.Length;
-    }
-
-    private static bool IsHostEndpointPath(PathString path)
-    {
-        return string.Equals(path.Value?.TrimEnd('/'), McpScope.HostEndpointPath, StringComparison.OrdinalIgnoreCase);
     }
 }

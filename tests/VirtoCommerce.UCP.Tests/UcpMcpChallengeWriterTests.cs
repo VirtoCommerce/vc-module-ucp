@@ -10,7 +10,6 @@ using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Mcp;
 using Xunit;
-using McpScopes = VirtoCommerce.MCP.Core.McpScopes;
 
 namespace VirtoCommerce.UCP.Tests;
 
@@ -68,26 +67,7 @@ public class UcpMcpChallengeWriterTests
     }
 
     [Fact]
-    public async Task WriteChallengeAsync_OtherScopeKeepsMcpModuleBody()
-    {
-        var context = CreateContext();
-        var adminScope = new McpScope { Name = McpScopes.Admin };
-
-        await new UcpMcpChallengeWriter().WriteChallengeAsync(context, new McpChallenge
-        {
-            Scope = adminScope,
-            Origin = "https://admin.example",
-            EndpointPath = adminScope.Path,
-            ErrorDescription = "Sign in to use this MCP server.",
-        });
-
-        var body = ReadBody(context);
-        Assert.False(body.TryGetProperty("messages", out _));
-        Assert.Equal("unauthorized", body.GetProperty("error").GetString());
-    }
-
-    [Fact]
-    public async Task GetOriginAsync_UcpScopeUsesStoreOriginAndOtherScopesTheMcpModuleOrigin()
+    public async Task GetOriginAsync_UsesTheOriginOfTheStore_NotTheMcpModulesOrigin()
     {
         var context = new DefaultHttpContext();
         context.Request.Scheme = "https";
@@ -97,7 +77,6 @@ public class UcpMcpChallengeWriterTests
             new FixedUcpOriginResolver("https://store.example"));
 
         Assert.Equal("https://store.example", await resolver.GetOriginAsync(context, _ucpScope));
-        Assert.Equal("https://admin.example", await resolver.GetOriginAsync(context, new McpScope { Name = McpScopes.Admin }));
     }
 
     private static DefaultHttpContext CreateContext()

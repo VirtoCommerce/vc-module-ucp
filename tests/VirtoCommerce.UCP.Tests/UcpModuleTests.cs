@@ -7,12 +7,15 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using VirtoCommerce.MCP.Core.Extensions;
 using VirtoCommerce.MCP.Core.Models;
 using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.StoreModule.Core.Model;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Options;
+using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web;
+using VirtoCommerce.UCP.Web.Mcp;
 using VirtoCommerce.UCP.Web.Services;
 using VirtoCommerce.Xapi.Core.Models;
 using Xunit;
@@ -31,7 +34,7 @@ public class UcpModuleTests
     [InlineData("/ucp/v1/catalog/search", true)]
     [InlineData("/.well-known/ucp", true)]
     [InlineData("/api/platform/settings", false)]
-    public async Task StartupFilter_ResolvesTheStoreOfUcpRequests_AheadOfTheEndpoints(string path, bool resolved)
+    public async Task UcpRequests_ResolveTheStoreOfUcpRequests_AheadOfTheEndpoints(string path, bool resolved)
     {
         await using var services = new ServiceCollection()
             .AddSingleton<IMcpScopeRegistry>(new StubMcpScopeRegistry())
@@ -41,11 +44,12 @@ public class UcpModuleTests
             .BuildServiceProvider();
         var app = new ApplicationBuilder(services);
         Store seenByEndpoint = null;
-        new UcpStartupFilter().Configure(builder => builder.Run(context =>
+        app.UseUcpRequests();
+        app.Run(context =>
         {
             seenByEndpoint = UcpRequestOptions.GetStore(context);
             return Task.CompletedTask;
-        }))(app);
+        });
         var context = new DefaultHttpContext { RequestServices = services };
         context.Request.Host = new HostString("fashion.example");
         context.Request.Path = path;
@@ -91,6 +95,25 @@ public class UcpModuleTests
     }
 
     [Fact]
+    public void Initialize_DeclaresTheChallengeWriterAndOriginOfTheUcpScope_And_LeavesOtherScopesTheMcpModulesOnes()
+    {
+        var services = new ServiceCollection();
+        new UcpModule { Configuration = new ConfigurationBuilder().Build() }.Initialize(services);
+        services.AddTransient<McpChallengeWriter>();
+        services.AddTransient<IMcpPublicOriginResolver, McpPublicOriginResolver>();
+        services.AddSingleton<IUcpPublicOriginResolver>(new FixedUcpOriginResolver());
+
+        using var provider = services.BuildServiceProvider();
+        var ucp = new McpScope { Name = ModuleConstants.McpScopeName };
+        var admin = new McpScope { Name = "admin" };
+
+        Assert.IsType<UcpMcpChallengeWriter>(provider.GetMcpScopeService<McpChallengeWriter>(ucp));
+        Assert.IsType<UcpMcpPublicOriginResolver>(provider.GetMcpScopeService<IMcpPublicOriginResolver>(ucp));
+        Assert.IsType<McpChallengeWriter>(provider.GetMcpScopeService<McpChallengeWriter>(admin));
+        Assert.IsType<McpPublicOriginResolver>(provider.GetMcpScopeService<IMcpPublicOriginResolver>(admin));
+    }
+
+    [Fact]
     public void McpInstructions_LeaveTheAddressRulesToTheStore_When_ItAssignsAddressesItself()
     {
         var instructions = UcpModule.BuildMcpInstructions(new UcpOptions());
@@ -105,6 +128,11 @@ public class UcpModuleTests
         {
             return Task.FromResult(store);
         }
+    }
+
+    private sealed class FixedUcpOriginResolver : IUcpPublicOriginResolver
+    {
+        public Task<string> GetOriginAsync() => Task.FromResult("https://store.example");
     }
 
     private sealed class CapturingLogger : ILogger
