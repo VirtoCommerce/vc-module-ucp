@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
@@ -44,12 +46,16 @@ internal sealed class UcpMcpSignInRequiredMiddleware
             return;
         }
 
-        var toolName = await ReadToolNameAsync(context.Request);
-        if (string.Equals(toolName, ModuleConstants.McpTools.LogoutBuyer, StringComparison.Ordinal))
+        // A request that names its tool more than once, in properties that differ only in case, goes on only when every
+        // name is logout_buyer: the MCP server may bind any of them.
+        var toolNames = await ReadToolNamesAsync(context.Request);
+        if (toolNames.Count > 0 && toolNames.All(IsLogoutBuyer))
         {
             await _next(context);
             return;
         }
+
+        var toolName = toolNames.FirstOrDefault(x => !IsLogoutBuyer(x));
 
         // The scope's own challenge writer and origin, as the MCP module challenges its requests.
         var scope = context.GetMcpScope();
@@ -65,12 +71,19 @@ internal sealed class UcpMcpSignInRequiredMiddleware
         });
     }
 
-    // The tool of a tools/call request; the body stays readable for the MCP server.
-    private static async Task<string> ReadToolNameAsync(HttpRequest request)
+    private static bool IsLogoutBuyer(string toolName)
+    {
+        return string.Equals(toolName, ModuleConstants.McpTools.LogoutBuyer, StringComparison.Ordinal);
+    }
+
+    // The tool names of a tools/call request; empty for any other request. The MCP server binds the properties of a
+    // request ignoring case, so every property that matches ignoring case is read, and a value that is not a string
+    // is read as null. The body stays readable for the MCP server.
+    private static async Task<IList<string>> ReadToolNamesAsync(HttpRequest request)
     {
         if (!HttpMethods.IsPost(request.Method))
         {
-            return null;
+            return [];
         }
 
         request.EnableBuffering();
@@ -78,14 +91,19 @@ internal sealed class UcpMcpSignInRequiredMiddleware
         {
             using var document = await JsonDocument.ParseAsync(request.Body, cancellationToken: request.HttpContext.RequestAborted);
             var root = document.RootElement;
+            var methods = ReadStrings(root, "method");
+            if (methods.Count == 0 || !methods.All(x => x == "tools/call"))
+            {
+                return [];
+            }
 
-            return ReadString(root, "method") == "tools/call" && root.TryGetProperty("params", out var parameters)
-                ? ReadString(parameters, "name")
-                : null;
+            return FindProperties(root, "params")
+                .SelectMany(parameters => parameters.ValueKind == JsonValueKind.Object ? ReadStrings(parameters, "name") : [null])
+                .ToList();
         }
         catch (JsonException)
         {
-            return null;
+            return [];
         }
         finally
         {
@@ -93,13 +111,20 @@ internal sealed class UcpMcpSignInRequiredMiddleware
         }
     }
 
-    private static string ReadString(JsonElement element, string propertyName)
+    private static List<string> ReadStrings(JsonElement element, string propertyName)
     {
-        return element.ValueKind == JsonValueKind.Object &&
-            element.TryGetProperty(propertyName, out var value) &&
-            value.ValueKind == JsonValueKind.String
-                ? value.GetString()
-                : null;
+        return FindProperties(element, propertyName)
+            .Select(value => value.ValueKind == JsonValueKind.String ? value.GetString() : null)
+            .ToList();
+    }
+
+    private static IEnumerable<JsonElement> FindProperties(JsonElement element, string propertyName)
+    {
+        return element.ValueKind == JsonValueKind.Object
+            ? element.EnumerateObject()
+                .Where(x => string.Equals(x.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                .Select(x => x.Value)
+            : [];
     }
 
     private static bool HasBearerHeader(HttpRequest request)

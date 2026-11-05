@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Server;
 using VirtoCommerce.MCP.Core.Attributes;
@@ -24,6 +25,44 @@ namespace VirtoCommerce.UCP.Tests;
 [Trait("Category", "Unit")]
 public class UcpMcpCommerceToolsTests
 {
+    // A scope that requires a signed-in user serves only tools that declare who may use them. The commerce tools and
+    // logout_buyer serve anonymous buyers too ([AllowAnonymous]), so they stay open to anonymous callers;
+    // link_buyer_identity needs a buyer, and challenges an anonymous call as before ([McpRequiresUser]).
+    [Fact]
+    public void UcpMcpTools_DeclareWhoMayUseThem()
+    {
+        // Arrange
+        var methods = new[] { typeof(UcpMcpCommerceTools), typeof(UcpMcpIdentityTools) }
+            .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
+            .Where(method => method.GetCustomAttribute<McpServerToolAttribute>() != null)
+            .ToList();
+
+        // Act
+        var tools = methods
+            .Select(method => McpServerTool.Create(method, target: null, new McpServerToolCreateOptions { SerializerOptions = CreateMcpToolSerializerOptions() }))
+            .ToDictionary(tool => tool.ProtocolTool.Name, tool => tool.Metadata);
+
+        // Assert
+        Assert.Equal(18, tools.Count);
+        foreach (var (name, metadata) in tools)
+        {
+            var allowsAnonymous = metadata.OfType<IAllowAnonymous>().Any();
+            var requiresUser = metadata.OfType<McpRequiresUserAttribute>().Any() || metadata.OfType<McpAnyUserAttribute>().Any() ||
+                metadata.OfType<IAuthorizeData>().Any() || metadata.OfType<McpPermissionAttribute>().Any();
+            if (name == ModuleConstants.McpTools.LinkBuyerIdentity)
+            {
+                Assert.False(allowsAnonymous, name);
+                Assert.Contains(metadata, x => x is McpRequiresUserAttribute);
+                Assert.Contains(metadata, x => x is McpAnyUserAttribute);
+            }
+            else
+            {
+                Assert.True(allowsAnonymous, name);
+                Assert.False(requiresUser, name);
+            }
+        }
+    }
+
     [Fact]
     public void UcpMcpTools_ExposeCommerceToolsOnly()
     {

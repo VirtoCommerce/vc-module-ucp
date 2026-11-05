@@ -2,9 +2,12 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
+using VirtoCommerce.MCP.Core.Extensions;
 using VirtoCommerce.MCP.Core.Models;
 using VirtoCommerce.StoreModule.Core.Model;
+using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Options;
+using VirtoCommerce.UCP.Web.Mcp;
 using VirtoCommerce.UCP.Web.Services;
 using VirtoCommerce.Xapi.Core.Models;
 using Xunit;
@@ -73,6 +76,96 @@ public class UcpPublicOriginResolverTests
     public async Task GetOriginAsync_NoStoreOrRequestReturnsNull()
     {
         Assert.Null(await CreateResolver(new HttpContextAccessor()).GetOriginAsync());
+    }
+
+    // Without MCP:Scopes:ucp:PublicOrigin, the MCP module accepts a bearer token outside Development only when the
+    // origin is configured: the store's URL is, the request's own origin is not.
+    [Theory]
+    [InlineData("https://shop.example/", null, true)]
+    [InlineData(null, "http://shop.example/", true)]
+    [InlineData(null, null, false)]
+    [InlineData(" ", " ", false)]
+    public void IsOriginConfigured_TheRequestsStoreUrlIsAConfiguredOrigin(string secureUrl, string url, bool expected)
+    {
+        // Arrange
+        var context = CreateMcpContext(_ucpScope.Path);
+        UcpRequestOptions.SetStore(context, new Store { Id = "a", SecureUrl = secureUrl, Url = url }, new UcpOptions());
+        var resolver = CreateMcpResolver(new McpOptions());
+
+        // Act
+        var actual = resolver.IsOriginConfigured(context, _ucpScope);
+
+        // Assert
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void IsOriginConfigured_NoStoreFallsBackToTheRequestOrigin_NotConfigured()
+    {
+        // Arrange
+        var context = CreateMcpContext(_ucpScope.Path);
+        var resolver = CreateMcpResolver(new McpOptions { PublicOrigin = "https://admin.example" });
+
+        // Act
+        var actual = resolver.IsOriginConfigured(context, _ucpScope);
+
+        // Assert
+        Assert.False(actual);
+    }
+
+    [Fact]
+    public void IsOriginConfigured_ScopeOriginOrObsoleteUcpOriginIsConfigured()
+    {
+        // Arrange
+        var context = CreateMcpContext(_ucpScope.Path);
+        var mcpOptions = new McpOptions();
+        mcpOptions.Scopes[ModuleConstants.McpScopeName] = new McpScopeOptions { PublicOrigin = "https://agents.example" };
+
+        // Act
+        var scopeOrigin = CreateMcpResolver(mcpOptions).IsOriginConfigured(context, _ucpScope);
+        var obsoleteOrigin = CreateMcpResolver(new McpOptions(), new UcpOptions { PublicOrigin = "https://public.example" })
+            .IsOriginConfigured(context, _ucpScope);
+
+        // Assert
+        Assert.True(scopeOrigin);
+        Assert.True(obsoleteOrigin);
+    }
+
+    [Fact]
+    public void IsOriginConfigured_TheMcpEndpointOfAScopeHostIsConfigured()
+    {
+        // Arrange
+        var context = CreateMcpContext(McpScope.HostEndpointPath);
+        var resolver = CreateMcpResolver(new McpOptions());
+
+        // Act
+        var actual = resolver.IsOriginConfigured(context, _ucpScope);
+
+        // Assert
+        Assert.True(actual);
+    }
+
+    private readonly McpScope _ucpScope = new() { Name = ModuleConstants.McpScopeName };
+
+    private DefaultHttpContext CreateMcpContext(string endpointPath)
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Scheme = "https";
+        context.Request.Host = new HostString("backend.example");
+        context.SetMcpScope(_ucpScope);
+        context.SetMcpEndpointPath(endpointPath);
+
+        return context;
+    }
+
+    private static UcpMcpPublicOriginResolver CreateMcpResolver(McpOptions mcpOptions, UcpOptions ucpOptions = null)
+    {
+        ucpOptions ??= new UcpOptions();
+
+        return new UcpMcpPublicOriginResolver(
+            Options.Create(mcpOptions),
+            new UcpPublicOriginResolver(Options.Create(ucpOptions), new HttpContextAccessor(), new TestStoreContextResolver()),
+            Options.Create(ucpOptions));
     }
 
     internal static UcpPublicOriginResolver CreateResolver(IHttpContextAccessor accessor, UcpOptions options = null, Store store = null)

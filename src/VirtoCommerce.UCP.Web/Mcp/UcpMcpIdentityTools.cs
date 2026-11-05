@@ -1,8 +1,10 @@
 using System.ComponentModel;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using ModelContextProtocol.Server;
+using OpenIddict.Abstractions;
 using VirtoCommerce.MCP.Core.Attributes;
 using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.UCP.Core;
@@ -15,8 +17,11 @@ namespace VirtoCommerce.UCP.Web.Mcp;
 [McpScope(ModuleConstants.McpScopeName)]
 public static class UcpMcpIdentityTools
 {
+    // [McpRequiresUser] lists the tool to anonymous buyers and challenges their call, so the client signs the buyer in;
+    // [McpAnyUser] declares that every signed-in buyer may call it.
     [McpServerTool(Name = ModuleConstants.McpTools.LinkBuyerIdentity, ReadOnly = true, Destructive = false)]
     [McpRequiresUser]
+    [McpAnyUser]
     [Description(
         "REQUIRED first step for an authenticated buyer request. Call this before search_products, get_product, create_cart, " +
         "cart, checkout, or order tools whenever the user says 'my account', 'my cart', 'on my behalf', 'from my name', " +
@@ -46,7 +51,9 @@ public static class UcpMcpIdentityTools
         });
     }
 
+    // Callable without a token, so an assistant that has none can still finish a sign-out.
     [McpServerTool(Name = ModuleConstants.McpTools.LogoutBuyer, ReadOnly = false, Destructive = true, Idempotent = true)]
+    [AllowAnonymous]
     [Description(
         "Sign out the current buyer from this MCP OAuth application. Call when the user asks to log out. " +
         "Revokes the current Platform OAuth authorization and its access/refresh tokens, including other connections sharing that authorization. " +
@@ -61,6 +68,18 @@ public static class UcpMcpIdentityTools
         var principal = httpContextAccessor.HttpContext.User;
         if (principal.Identity?.IsAuthenticated == true)
         {
+            // The session service revokes the token's authorization, or the token itself; a token that names neither
+            // cannot be revoked, and the client keeps using it until it expires.
+            if (string.IsNullOrEmpty(principal.GetAuthorizationId()) && string.IsNullOrEmpty(principal.GetTokenId()))
+            {
+                return new
+                {
+                    logged_out = false,
+                    instructions = "The current sign-in cannot be revoked from this connection. To sign out, disconnect the MCP client " +
+                        "or reconnect it without signing in. Stop using the previous buyer, organization, cart, and checkout identifiers.",
+                };
+            }
+
             await sessionService.SignOutAsync(principal, cancellationToken);
         }
 

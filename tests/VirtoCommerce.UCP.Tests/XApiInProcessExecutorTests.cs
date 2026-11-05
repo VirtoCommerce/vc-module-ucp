@@ -2,26 +2,106 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Security.Claims;
 using System.Text.Json;
 using System.Threading.Tasks;
 using GraphQL;
 using GraphQL.Execution;
+using GraphQL.SystemTextJson;
+using GraphQL.Types;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
+using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Web.Diagnostics;
 using VirtoCommerce.UCP.Web.Services;
+using VirtoCommerce.Xapi.Core.Infrastructure;
 using Xunit;
+using XCartDataAssemblyMarker = VirtoCommerce.XCart.Data.DataAssemblyMarker;
 
 namespace VirtoCommerce.UCP.Tests;
 
 [Trait("Category", "Unit")]
 public class XApiInProcessExecutorTests
 {
+    // XAPI's validation rules that key on the caller read ValidationContext.User, which GraphQL takes from
+    // ExecutionOptions.User; GraphQLUserContext alone leaves it null.
+    [Fact]
+    public async Task ExecuteCart_PassesTheBuyerToValidationAsTheUser()
+    {
+        // Arrange
+        var cart = new CapturingDocumentExecuter<ScopedSchemaFactory<XCartDataAssemblyMarker>>();
+        var executor = new XApiInProcessExecutor(
+            new XApiDocumentExecuters(null, cart, null),
+            new GraphQLSerializer(),
+            new ServiceCollection().BuildServiceProvider(),
+            new HttpContextAccessor(),
+            new UcpOperationTelemetry(NullLogger<UcpOperationTelemetry>.Instance, Options.Create(new UcpOptions())),
+            NullLogger<XApiInProcessExecutor>.Instance);
+        var buyer = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", "buyer-1")], "Bearer"));
+
+        // Act
+        await executor.ExecuteCart(new XApiExecutionRequest
+        {
+            Query = "mutation UcpAddCartItem { addItem { id } }",
+            OperationName = "UcpAddCartItem",
+            User = buyer,
+        }, TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.Same(buyer, cart.Options.User);
+        Assert.Same(buyer, Assert.IsType<GraphQLUserContext>(cart.Options.UserContext).User);
+    }
+
+    // An installation that replaces an XCart input type has that type, with its own name, in the executing schema.
+    [Fact]
+    public void GetMutationArgumentTypeName_ReadsTheTypeNameFromTheSchema()
+    {
+        // Arrange
+        var mutation = new ObjectGraphType { Name = "Mutations" };
+        mutation.Field<StringGraphType>("addItem").Argument<NonNullGraphType<ExtendedInputAddItemType>>("command");
+        var query = new ObjectGraphType { Name = "Query" };
+        query.Field<StringGraphType>("version");
+        var schema = new Schema { Query = query, Mutation = mutation };
+        var executor = new TestableXApiInProcessExecutor(NullLogger<XApiInProcessExecutor>.Instance);
+
+        // Act
+        var typeName = executor.ReadMutationArgumentTypeName(schema, "addItem", "command");
+        var missingField = executor.ReadMutationArgumentTypeName(schema, "removeCartItem", "command");
+        var missingSchema = executor.ReadMutationArgumentTypeName(null, "addItem", "command");
+
+        // Assert
+        Assert.Equal("InputAddItemExtendedType", typeName);
+        Assert.Null(missingField);
+        Assert.Null(missingSchema);
+    }
+
+    private sealed class ExtendedInputAddItemType : InputObjectGraphType
+    {
+        public ExtendedInputAddItemType()
+        {
+            Name = "InputAddItemExtendedType";
+            Field<StringGraphType>("productId");
+        }
+    }
+
+    private sealed class CapturingDocumentExecuter<TSchema> : IDocumentExecuter<TSchema>
+        where TSchema : ISchema
+    {
+        public ExecutionOptions Options { get; private set; }
+
+        public Task<ExecutionResult> ExecuteAsync(ExecutionOptions options)
+        {
+            Options = options;
+            return Task.FromResult(new ExecutionResult { Executed = true });
+        }
+    }
+
     [Theory]
     [InlineData("{ viewer { id } }", "query")]
     [InlineData("query ReadViewer { viewer { id } }", "query")]
@@ -419,6 +499,11 @@ public class XApiInProcessExecutorTests
         public static string ClassifyOperation(string query, string operationName = null)
         {
             return GetOperationType(query, operationName);
+        }
+
+        public string ReadMutationArgumentTypeName(ISchema schema, string mutationName, string argumentName)
+        {
+            return GetMutationArgumentTypeName(schema, mutationName, argumentName);
         }
 
         public Task HandleUnhandledException(

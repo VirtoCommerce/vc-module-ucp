@@ -22,8 +22,9 @@ internal sealed class UcpStoreContextMiddleware
 
     public async Task InvokeAsync(HttpContext context, UcpStoreContextResolver storeContextResolver, IOptions<UcpOptions> options, ILogger<UcpStoreContextMiddleware> logger)
     {
-        // This runs ahead of the platform's exception handling: a store that cannot be read leaves the request with the
-        // configuration, as a request with no store has, instead of a bare error response.
+        // This runs from ConfigureAfterRouting, inside the platform's exception handling, for every UCP request, discovery
+        // included: a store that cannot be read is logged and leaves the request with the configuration, as a request
+        // with no store has, instead of failing the request.
         Store store = null;
         try
         {

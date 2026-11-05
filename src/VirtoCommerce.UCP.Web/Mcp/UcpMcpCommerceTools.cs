@@ -5,6 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using ModelContextProtocol.Server;
 using VirtoCommerce.MCP.Core.Attributes;
 using VirtoCommerce.UCP.Core;
@@ -14,8 +15,12 @@ using VirtoCommerce.UCP.Web.Mcp.Models;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
 
+// Every commerce tool serves anonymous buyers as well as signed-in ones: the buyer comes from the token when there is
+// one. [AllowAnonymous] declares it, so a declaration of the ucp scope that requires a signed-in user still serves the
+// tools; a closed catalog asks for a sign-in in UcpMcpSignInRequiredMiddleware, ahead of the tools.
 [McpServerToolType]
 [McpScope(ModuleConstants.McpScopeName)]
+[AllowAnonymous]
 public static class UcpMcpCommerceTools
 {
     private const string FlatArgumentsJustification = "Each parameter is an argument of the MCP tool's input schema; an agent fills flat arguments more reliably than a nested object.";

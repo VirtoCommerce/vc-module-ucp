@@ -553,7 +553,7 @@ When `UCP:AnonymousCatalog` is `false`, or the default store does not allow anon
 * An assistant calls `link_buyer_identity` when the buyer asks to use their account. Without a token, the call gets the challenge and the client signs the buyer in; with a valid token, it returns the buyer and organization without another sign-in. The commerce tools are then called unchanged.
 * To keep an anonymous cart, the assistant calls `update_cart` with the saved anonymous `buyer_id`, the `cart_id` and the complete line state. UCP checks the anonymous owner and calls XCart `mergeCart`.
 * Signing in or out of the storefront does not change the assistant's account. To switch buyers, reconnect the assistant, then call `link_buyer_identity` and check the identity it returns.
-* `logout_buyer` revokes the current authorization and its tokens, which also signs out other connections that share it; other OAuth applications and storefront cookies are not affected. Without a token, it succeeds and does nothing. Afterwards the assistant discards the buyer, organization, cart and checkout ids, and does not sign in again until the buyer asks.
+* `logout_buyer` revokes the current authorization and its tokens, which also signs out other connections that share it; other OAuth applications and storefront cookies are not affected. Without a token, it succeeds and does nothing. A token that names neither an authorization nor a token id cannot be revoked: the result is `logged_out: false`, with the instruction to disconnect the client. Afterwards the assistant discards the buyer, organization, cart and checkout ids, and does not sign in again until the buyer asks.
 * Anonymous carts use an opaque `ucp-anonymous-*` buyer id. `X-Buyer-User-Id` and `X-Buyer-Organization-Id` headers are refused.
 
 ### MCP endpoint
@@ -582,7 +582,7 @@ The MCP module serves the endpoint: the transport, sign-in and token checks, too
 * the tools in the table below, which call the same UCP services as the REST API;
 * `UcpMcpCallToolFilter`: for the 16 commerce tools, the `store_id` checks, UCP and XAPI error envelopes, the `UCP {operation}` span, and the trace id in `_meta.trace_id` and in the text of the result;
 * `UcpMcpChallengeWriter`: UCP's `identity_required` body of the HTTP 401 and 403 responses;
-* `UcpMcpPublicOriginResolver`: the public origin of the scope, from `MCP:Scopes:ucp:PublicOrigin` or the request's store (see [Multiple instances and the public origin](#multiple-instances-and-the-public-origin)); the MCP module's `MCP:PublicOrigin` and `MCP:Scopes:ucp:PublicOrigin` do not apply to this scope.
+* `UcpMcpPublicOriginResolver`: the public origin of the scope, from `MCP:Scopes:ucp:PublicOrigin` or the request's store (see [Multiple instances and the public origin](#multiple-instances-and-the-public-origin)); the MCP module's global `MCP:PublicOrigin` does not apply to this scope. Either origin counts as configured for the MCP module's token check, so a signed-in buyer's token is accepted outside Development with only the store's URL set; the request's own origin, the last fallback, does not.
 
 To serve the scope also at `https://store.example.com/mcp`, set `MCP:Scopes:ucp:Hosts` and add that address to `Authorization:Resources` and to the OAuth client's `rsrc:` permissions: it is a separate OAuth resource. Discovery keeps naming `/ucp/mcp`.
 
@@ -828,6 +828,7 @@ Earlier versions mapped `/ucp/mcp` themselves. This version moves the endpoint t
 - Code that referenced `UcpDiagnostics.McpActivitySourceName` uses `McpDiagnostics.SdkActivitySourceName` from `VirtoCommerce.MCP.Core`.
 - These public types are removed, so code that used or derived from them changes: `UcpMcpStartup` (and the module's `startupType`), `UcpMcpSessionService`, `UcpMcpBuyerAuthenticationMiddleware`, `UcpOAuthMetadataController`, `UcpProtectedResourceMetadata`, `UcpMcpActivityStatusFilter` and `UcpApplicationInsightsActivityBridge`. Their work is done by the MCP module; to change it, replace the MCP module's services ([Replace the MCP infrastructure](https://github.com/VirtoCommerce/vc-module-mcp#replace-the-mcp-infrastructure)).
 - Every MCP call is now in the MCP module's audit log; its retention is the MCP module setting `MCP.Cleanup.AuditRetentionDays`.
+- A client that calls `logout_buyer` with an expired or revoked token now gets the HTTP 401 challenge, as on every other call, and must sign in again to sign out; a call without a token still succeeds.
 
 ## Components
 
@@ -870,7 +871,7 @@ The module manifest declares these runtime dependencies:
 | Module | Version |
 | --- | --- |
 | `VirtoCommerce.MCP` | `3.1000.0-alpha.34-vcst-6155-core-mcp-module` |
-| `VirtoCommerce.Xapi` | `3.1029.0` |
+| `VirtoCommerce.Xapi` | `3.1030.0` |
 | `VirtoCommerce.XCatalog` | `3.1023.0` |
 | `VirtoCommerce.XCart` | `3.1044.0` |
 | `VirtoCommerce.XOrder` | `3.1017.0` |

@@ -66,6 +66,42 @@ public class UcpMcpSignInRequiredMiddlewareTests
         Assert.Equal(0, context.Response.Headers.WWWAuthenticate.Count);
     }
 
+    // The MCP server binds the parameters of a request ignoring case, so "Name" names the tool as "name" does.
+    [Fact]
+    public async Task InvokeAsync_ReadsTheToolNameIgnoringCase()
+    {
+        // Arrange
+        const string logout = """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"Name":"logout_buyer"}}""";
+        const string search = """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"Name":"search_products"}}""";
+
+        // Act
+        var (logoutNextCalled, _) = await Invoke(logout, anonymousCatalog: false);
+        var (searchNextCalled, searchContext) = await Invoke(search, anonymousCatalog: false);
+
+        // Assert
+        Assert.True(logoutNextCalled);
+        Assert.False(searchNextCalled);
+        Assert.Equal(StatusCodes.Status401Unauthorized, searchContext.Response.StatusCode);
+    }
+
+    // A request that names its tool twice is challenged unless every name is logout_buyer: the server may bind either.
+    [Theory]
+    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"logout_buyer","Name":"search_products"}}""", false)]
+    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"Name":"search_products","name":"logout_buyer"}}""", false)]
+    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"logout_buyer","NAME":"logout_buyer"}}""", true)]
+    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"logout_buyer","Name":1}}""", false)]
+    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"logout_buyer"},"Params":{"name":"search_products"}}""", false)]
+    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","Method":"initialize","params":{"name":"logout_buyer"}}""", false)]
+    public async Task InvokeAsync_ChallengesAnAmbiguousToolNameUnlessEveryNameIsLogout(string json, bool expectedNextCalled)
+    {
+        // Act
+        var (nextCalled, context) = await Invoke(json, anonymousCatalog: false);
+
+        // Assert
+        Assert.Equal(expectedNextCalled, nextCalled);
+        Assert.Equal(expectedNextCalled ? StatusCodes.Status200OK : StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+    }
+
     [Fact]
     public async Task InvokeAsync_KeepsIdentityLinkingMessageWhenCatalogIsClosed()
     {

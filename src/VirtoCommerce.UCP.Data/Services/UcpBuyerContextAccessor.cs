@@ -9,7 +9,7 @@ using VirtoCommerce.UCP.Core.Services;
 
 namespace VirtoCommerce.UCP.Data.Services;
 
-public sealed class UcpBuyerContextAccessor : IUcpBuyerContextAccessor
+public class UcpBuyerContextAccessor : IUcpBuyerContextAccessor
 {
     private const string _anonymousBuyerPrefix = "ucp-anonymous-";
     private const string _organizationIdClaimType = "organization_id";
@@ -24,7 +24,7 @@ public sealed class UcpBuyerContextAccessor : IUcpBuyerContextAccessor
         _httpContextAccessor = httpContextAccessor;
     }
 
-    public UcpBuyerContext Resolve(UcpBuyerContextRequest request = null)
+    public virtual UcpBuyerContext Resolve(UcpBuyerContextRequest request = null)
     {
         request ??= new UcpBuyerContextRequest();
         RejectLegacyBuyerHeaders();

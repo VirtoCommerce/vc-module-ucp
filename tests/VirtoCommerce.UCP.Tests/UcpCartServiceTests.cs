@@ -1066,6 +1066,28 @@ public partial class UcpCartServiceTests
         Assert.Equal(string.Empty, shippingAddress["regionName"]);
     }
 
+    // An installation that replaces XCart's InputAddItemType has its own type in the schema: the variable takes that
+    // type's name, and XCart's own name when the schema does not tell.
+    [Fact]
+    public async Task CreateCart_DeclaresTheCommandWithTheSchemasInputTypeName()
+    {
+        // Arrange
+        var executor = new StubXApiExecutor(CartWithOneItemJson, CartWithCouponJson);
+        executor.CommandTypeNames["addItem"] = "InputAddItemExtendedType";
+        var service = CreateService(executor);
+
+        // Act
+        await service.CreateCart(new UcpCartRequest
+        {
+            LineItems = { new UcpCartLineItemRequest { ProductId = "product-1", Quantity = 1 } },
+            Coupons = { "SAVE10" },
+        }, TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.Contains("($command: InputAddItemExtendedType!)", executor.Requests[0].Query, System.StringComparison.Ordinal);
+        Assert.Contains("($command: InputAddCouponType!)", executor.Requests[1].Query, System.StringComparison.Ordinal);
+    }
+
     private static UcpCartService CreateService(
         IXApiInProcessExecutor executor,
         ICountriesService countriesService = null,
@@ -1161,6 +1183,14 @@ public partial class UcpCartServiceTests
         public Task<XApiExecutionResult> ExecuteOrder(XApiExecutionRequest request, CancellationToken cancellationToken = default)
         {
             return ExecuteCart(request, cancellationToken);
+        }
+
+        // The command type names of the executing schema, by mutation; none by default, as XAPI without the schema.
+        public Dictionary<string, string> CommandTypeNames { get; } = [];
+
+        public string GetCartMutationArgumentTypeName(string mutationName, string argumentName)
+        {
+            return argumentName == "command" ? CommandTypeNames.GetValueOrDefault(mutationName) : null;
         }
     }
 

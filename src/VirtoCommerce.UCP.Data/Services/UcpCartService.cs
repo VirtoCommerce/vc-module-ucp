@@ -391,7 +391,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         return CreateMutationResponse(cartElement);
     }
 
-    private CartExecutionRequest BuildCartExecutionRequest(
+    protected virtual CartExecutionRequest BuildCartExecutionRequest(
         UcpCartRequest request,
         bool generateAnonymousBuyer = false,
         bool requireBuyer = false)
@@ -703,7 +703,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         return cart;
     }
 
-    private async Task<JsonElement> ExecuteCartMutation(string mutationName, string operationName, CartExecutionRequest cartRequest, IDictionary<string, object> command, CancellationToken cancellationToken)
+    protected virtual async Task<JsonElement> ExecuteCartMutation(string mutationName, string operationName, CartExecutionRequest cartRequest, IDictionary<string, object> command, CancellationToken cancellationToken)
     {
         var result = await _xApiExecutor.ExecuteCart(new XApiExecutionRequest
         {
@@ -1354,10 +1354,10 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         };
     }
 
-    protected static string BuildCartMutation(string mutationName, string operationName)
+    protected virtual string BuildCartMutation(string mutationName, string operationName)
     {
         return $$"""
-            mutation {{operationName}}($command: Input{{GetMutationInputName(mutationName)}}Type!) {
+            mutation {{operationName}}($command: {{GetMutationInputTypeName(mutationName)}}!) {
               {{mutationName}}(command: $command) {
             {{CartFields}}
               }
@@ -1365,7 +1365,16 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             """;
     }
 
-    protected static string GetMutationInputName(string mutationName)
+    // The type of the mutation's command in the executing XCart schema: an installation that replaces an XCart input
+    // type has its own type there, with its own name. XCart's own name (InputAddItemType) when the schema does not tell.
+    protected virtual string GetMutationInputTypeName(string mutationName)
+    {
+        var xCartTypeName = $"Input{GetMutationInputName(mutationName)}Type";
+
+        return _xApiExecutor.GetCartMutationArgumentTypeName(mutationName, "command") ?? xCartTypeName;
+    }
+
+    protected virtual string GetMutationInputName(string mutationName)
     {
         if (MutationInputNames.TryGetValue(mutationName, out var inputName))
         {
