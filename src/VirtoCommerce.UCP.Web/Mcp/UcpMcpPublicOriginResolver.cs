@@ -31,9 +31,15 @@ public class UcpMcpPublicOriginResolver : McpPublicOriginResolver
         _ucpOriginResolver = ucpOriginResolver;
     }
 
-    public override Task<string> GetOriginAsync(HttpContext context, McpScope scope)
+    public override async Task<string> GetOriginAsync(HttpContext context, McpScope scope)
     {
-        return _ucpOriginResolver.GetOriginAsync();
+        var origin = await _ucpOriginResolver.GetOriginAsync();
+
+        // At /mcp of a scope host, the resource is the host the request came to, as the MCP module decides for its
+        // scopes: a configured origin of another host would expect an audience the client was not issued.
+        return context.GetMcpEndpointPath() == McpScope.HostEndpointPath && !IsOriginOfHost(origin, context.Request.Host)
+            ? GetRequestOrigin(context)
+            : origin;
     }
 
     // The origin is configured when it is MCP:Scopes:ucp:PublicOrigin (or the obsolete UCP:PublicOrigin), the URL of

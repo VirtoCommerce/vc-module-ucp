@@ -145,6 +145,38 @@ public class UcpPublicOriginResolverTests
         Assert.True(actual);
     }
 
+    [Theory]
+    [InlineData("https://agents.example", "https://backend.example")]
+    [InlineData("https://backend.example", "https://backend.example")]
+    public async Task GetOriginAsync_TheMcpEndpointOfAScopeHostIsThatHost(string scopeOrigin, string expected)
+    {
+        // Arrange: /mcp on a host of the scope, with the scope's origin configured for another host or for that one
+        var context = CreateMcpContext(McpScope.HostEndpointPath);
+        var mcpOptions = new McpOptions();
+        mcpOptions.Scopes[ModuleConstants.McpScopeName] = new McpScopeOptions { PublicOrigin = scopeOrigin };
+
+        // Act
+        var origin = await CreateMcpResolver(mcpOptions).GetOriginAsync(context, _ucpScope);
+
+        // Assert
+        Assert.Equal(expected, origin);
+    }
+
+    [Fact]
+    public async Task GetOriginAsync_TheScopePathKeepsTheConfiguredOrigin()
+    {
+        // Arrange
+        var context = CreateMcpContext(_ucpScope.Path);
+        var mcpOptions = new McpOptions();
+        mcpOptions.Scopes[ModuleConstants.McpScopeName] = new McpScopeOptions { PublicOrigin = "https://agents.example" };
+
+        // Act
+        var origin = await CreateMcpResolver(mcpOptions).GetOriginAsync(context, _ucpScope);
+
+        // Assert
+        Assert.Equal("https://agents.example", origin);
+    }
+
     private readonly McpScope _ucpScope = new() { Name = ModuleConstants.McpScopeName };
 
     private DefaultHttpContext CreateMcpContext(string endpointPath)
@@ -164,7 +196,7 @@ public class UcpPublicOriginResolverTests
 
         return new UcpMcpPublicOriginResolver(
             Options.Create(mcpOptions),
-            new UcpPublicOriginResolver(Options.Create(ucpOptions), new HttpContextAccessor(), new TestStoreContextResolver()),
+            new UcpPublicOriginResolver(Options.Create(ucpOptions), new HttpContextAccessor(), new TestStoreContextResolver(), Options.Create(mcpOptions)),
             Options.Create(ucpOptions));
     }
 
