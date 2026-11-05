@@ -334,7 +334,7 @@ UCP needs almost no configuration of its own: it takes the store of each request
 | The store of a request | The request's host, resolved as XAPI resolves a storefront's domain (`IStoreDomainResolverService`): `VirtoCommerce:Stores:Domains`, then the store whose `Url` has that host; then `VirtoCommerce:Stores:DefaultStore`; then the only open store. `Origin` and `Referer` are not used. An operation that names another store with `store_id` runs with that store's values | Store administrator (the store's URL); IT for domain mappings |
 | Currency and language | The store's default currency and language | Store administrator |
 | Storefront, checkout and cart links, public origin | The store's `SecureUrl`, then `Url` | Store administrator |
-| Anonymous shopping | The store's **Allow anonymous users**; `UCP:AnonymousCatalog = false` turns it off for assistants only | Store administrator |
+| Anonymous shopping | The store's **Allow anonymous users**; `UCP:AnonymousCatalog = false` makes MCP clients ask the buyer to sign in from the first request | Store administrator |
 | Addresses the storefront assigns itself | Store setting `UCP.StoreManagedAddresses` | Store administrator |
 | Lifetime of a checkout link | Store setting `UCP.CheckoutLinkLifetimeMinutes` (15) | Store administrator |
 | Checkout page of a storefront not at `/checkout` | Store setting `UCP.CheckoutUrlTemplate`, with `{token}` | Store administrator |
@@ -355,7 +355,7 @@ Only infrastructure, secrets and privacy choices stay in configuration:
 | `ConnectionStrings:RedisConnectionString` | Shares checkout links between replicas |
 | `MCP:Scopes:ucp:Enabled`, `MCP:Scopes:ucp:Hosts`, `MCP:Scopes:ucp:PublicOrigin` | The buyer endpoint, in the MCP module's configuration |
 | `VirtoCommerce:Stores:DefaultStore`, `VirtoCommerce:Stores:Domains` | The store of a request to a host that is not a store's own, shared with the Experience API |
-| `UCP:Observability:InputCaptureMode`, `UCP:AnonymousCatalog` | Privacy and the assistants-only switch for anonymous shopping |
+| `UCP:Observability:InputCaptureMode`, `UCP:AnonymousCatalog` | Privacy, and whether MCP clients ask the buyer to sign in from the first request |
 | Forwarded headers, proxy routes, OpenTelemetry, Serilog levels | The host in front of the platform and the telemetry |
 
 ```json
@@ -369,7 +369,7 @@ Only infrastructure, secrets and privacy choices stay in configuration:
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `UCP:AnonymousCatalog` | Boolean | `true` | `false` makes assistants sign the buyer in from the first request, even where the store allows anonymous users. `get_store_capabilities` reports the result as `auth.anonymous_catalog` (see [Buyer identity](#buyer-identity)). |
+| `UCP:AnonymousCatalog` | Boolean | `true` | `false` makes MCP clients of `/ucp/mcp` ask the buyer to sign in from the first request, even where the store allows anonymous users. It is not an access boundary: the REST API is not covered, and neither is a store that an operation names with `store_id`. `get_store_capabilities` reports the result as `auth.anonymous_catalog` (see [Buyer identity](#buyer-identity)). |
 | `UCP:Observability:InputCaptureMode` | Enum | `ErrorsOnly` | The bounded, allowlisted operation input in logs and span attributes: `None`, `ErrorsOnly` or `Always`. Trace correlation, safe context attributes and counters stay on in every mode. |
 
 ### Obsolete keys
@@ -405,6 +405,8 @@ With `MCP:Scopes:ucp:Enabled` set to `false`, the MCP module serves no `/ucp/mcp
 - `/.well-known/oauth-protected-resource/ucp`
 
 The scope is on by default. The value is read at startup, so a change applies after a restart of every instance; as an environment variable, `MCP__Scopes__ucp__Enabled=false`. To stop a single shopping tool without a restart, switch it off on the MCP module's **Agent tools** screen instead.
+
+The `UCP.Enabled` setting of earlier versions no longer switches UCP off: set `MCP:Scopes:ucp:Enabled` before upgrading (see [Upgrading](#upgrading-from-a-version-that-hosted-its-own-mcp-endpoint)).
 
 ### Permissions
 
@@ -542,19 +544,30 @@ flowchart LR
 6. `IXApiInProcessExecutor` runs GraphQL inside the current platform process.
 7. The service maps XCatalog, XCart, Orders, Store, and platform dictionary data back to UCP response models.
 
-Commerce tools do not expose an authentication mode. A request without a Platform user bearer token uses the public/anonymous flow; a request with a valid token uses the linked buyer and organization from the Platform `ClaimsPrincipal`.
+Commerce tools and REST operations do not expose an authentication mode. A request without a bearer token uses the anonymous flow; a request with a valid token for the UCP resource uses its buyer and organization (see [REST API authentication](#rest-api-authentication)).
 
 ### Buyer identity
 
 The MCP module signs buyers in: it publishes the protected-resource metadata at `/.well-known/oauth-protected-resource/ucp/mcp`, answers a call that needs a buyer with the HTTP 401 challenge, and checks the token and its revocation on every request ([Authentication](https://github.com/VirtoCommerce/vc-module-mcp#authentication)). The platform issues the tokens; UCP issues none and does not register OAuth clients. UCP decides who the buyer is and what a sign-in changes:
 
-When `UCP:AnonymousCatalog` is `false`, or the default store does not allow anonymous users, the MCP endpoint asks for a sign-in from the first request: an anonymous request, `initialize` and `tools/list` included, gets the HTTP 401 challenge, so the client starts OAuth when it connects. `logout_buyer` is never challenged. UCP answers these requests itself, in the platform pipeline before authentication, with the scope's challenge.
+When `UCP:AnonymousCatalog` is `false`, or the default store does not allow anonymous users, the MCP endpoint asks for a sign-in from the first request: an anonymous request, `initialize` and `tools/list` included, gets the HTTP 401 challenge, so the client starts OAuth when it connects. `logout_buyer` is never challenged. UCP answers these requests itself, in the platform pipeline before authentication, with the scope's challenge. This makes MCP clients ask for the sign-in early; it is not an access boundary: the REST API and a store that an operation names with `store_id` are not covered by it.
 
 * An assistant calls `link_buyer_identity` when the buyer asks to use their account. Without a token, the call gets the challenge and the client signs the buyer in; with a valid token, it returns the buyer and organization without another sign-in. The commerce tools are then called unchanged.
 * To keep an anonymous cart, the assistant calls `update_cart` with the saved anonymous `buyer_id`, the `cart_id` and the complete line state. UCP checks the anonymous owner and calls XCart `mergeCart`.
 * Signing in or out of the storefront does not change the assistant's account. To switch buyers, reconnect the assistant, then call `link_buyer_identity` and check the identity it returns.
 * `logout_buyer` revokes the current authorization and its tokens, which also signs out other connections that share it; other OAuth applications and storefront cookies are not affected. Without a token, it succeeds and does nothing. A token that names neither an authorization nor a token id cannot be revoked: the result is `logged_out: false`, with the instruction to disconnect the client. Afterwards the assistant discards the buyer, organization, cart and checkout ids, and does not sign in again until the buyer asks.
 * Anonymous carts use an opaque `ucp-anonymous-*` buyer id. `X-Buyer-User-Id` and `X-Buyer-Organization-Id` headers are refused.
+
+#### REST API authentication
+
+The REST API `/ucp/v1/*` follows the same token rules as the MCP endpoint, checked with the MCP module's `IMcpTokenValidator` after the platform's authentication:
+
+* The buyer comes only from an OAuth bearer token that the platform issued for the UCP resource `<public origin>/ucp/mcp`, the resource that `/.well-known/oauth-protected-resource/ucp/mcp` advertises, to an OAuth client, for a user, and that is not revoked. The client gets it as an MCP client does (see [Quick start, part 2](#quick-start-part-2-enable-signed-in-buyers)).
+* A back-office cookie, an API key (`api_key`) or Basic credentials never act as the buyer: such a request is anonymous for UCP.
+* A request without a bearer token is anonymous, as before.
+* A bearer token that is invalid or expired, issued for another audience (such as a storefront or back-office token), revoked, issued by client credentials, or issued with no client, is refused with `401`, `WWW-Authenticate: Bearer error="invalid_token", error_description="..."` and an `identity_required` body; it is not served anonymously. Outside Development, a bearer token is also refused when UCP has no public origin to check its audience against (neither `MCP:Scopes:ucp:PublicOrigin` nor the store's URL).
+
+`POST /ucp/v1/internal/handoff/restore` keeps the platform's own authentication: the storefront calls it with the buyer's storefront sign-in, and the restore checks that this user is the buyer the checkout link was created for.
 
 ### MCP endpoint
 
@@ -786,7 +799,7 @@ If the order has not been created yet (with `placed_after`: the buyer has not pl
 Known UCP error codes:
 
 - `invalid_request` (`400`; `404` for an unknown country)
-- `identity_required` (`401`): the call needs a signed-in buyer
+- `identity_required` (`401`): the call needs a signed-in buyer, or the REST API refused the bearer token (`invalid_token`)
 - `buyer_context_mismatch` (`403`): the buyer id, the checkout link or a legacy `X-Buyer-*` header does not match the buyer
 - `handoff_in_progress` — another request is restoring the same `ucp_session`; retryable (`409`)
 - `missing_store_id`
@@ -820,12 +833,14 @@ Earlier versions mapped `/ucp/mcp` themselves. This version moves the endpoint t
 
 - Install the `VirtoCommerce.MCP` module; UCP depends on it.
 - The store of a request comes from its host, and the store provides the currency, the language and the links; several stores are served from one platform. `UCP:DefaultStoreId` no longer overrides the host, and the single-store `UCP:*` keys are obsolete fallbacks (see [Obsolete keys](#obsolete-keys)); move them to the store and its UCP settings.
-- The `UCP.Enabled` platform setting is removed; it was registered but not read. UCP is switched off with `MCP:Scopes:ucp:Enabled` (see [Switching UCP on and off](#switching-ucp-on-and-off)).
+- **Breaking, security-relevant: `UCP.Enabled` is removed.** UCP is switched off only with `MCP:Scopes:ucp:Enabled` (see [Switching UCP on and off](#switching-ucp-on-and-off)). An installation that switched UCP off with the `UCP.Enabled` setting or its platform override `VirtoCommerce__Settings__Override__CurrentValue__Global__UCP_Enabled` must set `MCP:Scopes:ucp:Enabled = false` (`MCP__Scopes__ucp__Enabled=false`) before upgrading; otherwise every UCP surface, anonymous carts included, comes up enabled on the first start. The new switch is configuration only, not a setting, and a change needs a restart of every instance.
+- **Breaking: the REST API follows the MCP token rules** (see [REST API authentication](#rest-api-authentication)). A REST client that used a back-office cookie, an API key, Basic credentials or a token of another audience as the buyer must use an OAuth token for the UCP resource `<public origin>/ucp/mcp`. A cookie, an API key or Basic credentials now make the request anonymous, and a token of another audience gets `401 invalid_token`.
 - `UCP:AnonymousCatalog` now also follows the default store's `AllowAnonymousUsers`; when either is off, the MCP endpoint asks for a sign-in from the first request.
 - Cart tools work with the buyer's storefront cart when no `cart_type` is given, a cart's `continue_url` is `{storefront}/cart/{id}`, and `track_order` takes `placed_after` (the handoff's `issued_at`) and returns `orders`.
 - The minimum platform version is `3.1091.0` (was `3.1076.0`), with the latest Xapi, XCart, XOrder, Store, Orders and Marketing modules.
 - `UCP:Observability:EnableApplicationInsightsCompatibilityBridge` is removed, with the optional dependency on the `VirtoCommerce.ApplicationInsights` module. To send traces to Application Insights, set `OpenTelemetry:AzureMonitor:ConnectionString` in the OpenTelemetry module (see [Observability](#observability)).
 - Code that referenced `UcpDiagnostics.McpActivitySourceName` uses `McpDiagnostics.SdkActivitySourceName` from `VirtoCommerce.MCP.Core`.
+- `UcpOperationAttribute` moved from `VirtoCommerce.UCP.Web.Filters` to `VirtoCommerce.UCP.Core.Attributes`.
 - These public types are removed, so code that used or derived from them changes: `UcpMcpStartup` (and the module's `startupType`), `UcpMcpSessionService`, `UcpMcpBuyerAuthenticationMiddleware`, `UcpOAuthMetadataController`, `UcpProtectedResourceMetadata`, `UcpMcpActivityStatusFilter` and `UcpApplicationInsightsActivityBridge`. Their work is done by the MCP module; to change it, replace the MCP module's services ([Replace the MCP infrastructure](https://github.com/VirtoCommerce/vc-module-mcp#replace-the-mcp-infrastructure)).
 - Every MCP call is now in the MCP module's audit log; its retention is the MCP module setting `MCP.Cleanup.AuditRetentionDays`.
 - A client that calls `logout_buyer` with an expired or revoked token now gets the HTTP 401 challenge, as on every other call, and must sign in again to sign out; a call without a token still succeeds.
@@ -862,7 +877,16 @@ The module has no database tables and no migrations.
 | `UcpMcpPublicOriginResolver` | `IMcpPublicOriginResolver` | The store-based public origin of the `ucp` scope |
 | `UcpStoreContextResolver` | | The store of a request: its host through XAPI's `IStoreDomainResolverService`, the platform's default store, the only open store |
 | `UcpRequestOptions` | `IUcpRequestOptions` | The options of the request's store: id, currency, language, URLs and the UCP store settings, with the configuration as the fallback |
-| `UcpStartup` | `IPlatformStartup` | Adds the scope-switch gate, the store of the request and the closed-catalog sign-in rule to the platform pipeline after routing (`ConfigureAfterRouting`), where they cover the REST API, discovery and the MCP module's `/ucp/mcp` endpoint |
+| `UcpStartup` | `IPlatformStartup` | Adds the scope-switch gate, the store of the request and the closed-catalog sign-in rule to the platform pipeline after routing (`ConfigureAfterRouting`), where they cover the REST API, discovery and the MCP module's `/ucp/mcp` endpoint; after authentication (`ConfigureAfterAuthentication`), the buyer of a REST request by the MCP token rules |
+
+### Extending UCP
+
+A host module can tell a UCP REST operation by its `UcpOperationAttribute` (`VirtoCommerce.UCP.Core.Attributes`) in the endpoint metadata, with a reference to `VirtoCommerce.UCP.Core` only, not to `VirtoCommerce.UCP.Web`:
+
+```csharp
+var operation = context.GetEndpoint()?.Metadata.GetMetadata<UcpOperationAttribute>();
+// operation.Name is the UCP operation, such as search_products or create_cart; null for any other endpoint
+```
 
 ### Dependencies
 
@@ -870,7 +894,7 @@ The module manifest declares these runtime dependencies:
 
 | Module | Version |
 | --- | --- |
-| `VirtoCommerce.MCP` | `3.1000.0-alpha.34-vcst-6155-core-mcp-module` |
+| `VirtoCommerce.MCP` | `3.1000.0-alpha.38-vcst-6155-core-mcp-module` |
 | `VirtoCommerce.Xapi` | `3.1030.0` |
 | `VirtoCommerce.XCatalog` | `3.1023.0` |
 | `VirtoCommerce.XCart` | `3.1044.0` |
@@ -907,12 +931,13 @@ After installing `VirtoCommerce.UCP` on a platform:
 8. `POST /ucp/v1/checkouts` creates a checkout snapshot.
 9. `POST /ucp/v1/checkouts/{checkoutId}/handoff` returns a hosted checkout `continue_url`.
 10. `POST /ucp/v1/internal/handoff/restore` restores the temporary handoff session.
-11. `GET /ucp/v1/geography/countries/resolve?query=KZ` returns the platform country id for checkout address normalization.
-12. `GET /ucp/v1/geography/countries/{countryId}/regions` returns regions when they exist in the platform dictionary.
-13. After storefront checkout, `GET /ucp/v1/orders?cart_id={cartId}&placed_after={issuedAt}&buyer_id={buyerId}` returns the order tracking snapshot.
-14. `POST /ucp/mcp` with `initialize` reports the server `Virto Commerce UCP`, and `tools/list` returns the 18 UCP tools without a token.
-15. An anonymous `tools/call` of `link_buyer_identity` returns HTTP 401 with a `WWW-Authenticate` header that points to `/.well-known/oauth-protected-resource/ucp/mcp`.
-16. The calls appear in the back office under **Configuration → AI agents (MCP) → Agent audit log**, in the `ucp` scope.
+11. `GET /ucp/v1/carts` with a bearer token of another audience, such as a storefront token, returns `401` with `error="invalid_token"`.
+12. `GET /ucp/v1/geography/countries/resolve?query=KZ` returns the platform country id for checkout address normalization.
+13. `GET /ucp/v1/geography/countries/{countryId}/regions` returns regions when they exist in the platform dictionary.
+14. After storefront checkout, `GET /ucp/v1/orders?cart_id={cartId}&placed_after={issuedAt}&buyer_id={buyerId}` returns the order tracking snapshot.
+15. `POST /ucp/mcp` with `initialize` reports the server `Virto Commerce UCP`, and `tools/list` returns the 18 UCP tools without a token.
+16. An anonymous `tools/call` of `link_buyer_identity` returns HTTP 401 with a `WWW-Authenticate` header that points to `/.well-known/oauth-protected-resource/ucp/mcp`.
+17. The calls appear in the back office under **Configuration → AI agents (MCP) → Agent audit log**, in the `ucp` scope.
 
 ## Roadmap
 

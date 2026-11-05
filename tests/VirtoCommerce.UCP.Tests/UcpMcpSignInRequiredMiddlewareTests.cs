@@ -1,4 +1,3 @@
-using System;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -24,7 +23,7 @@ public class UcpMcpSignInRequiredMiddlewareTests
     [Fact]
     public async Task InvokeAsync_ChallengesAnonymousInitializeWhenCatalogIsClosed()
     {
-        var (nextCalled, context) = await Invoke("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""", anonymousCatalog: false);
+        var (nextCalled, context) = await Invoke(Initialize(), anonymousCatalog: false);
 
         Assert.False(nextCalled);
         Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
@@ -34,7 +33,7 @@ public class UcpMcpSignInRequiredMiddlewareTests
     [Fact]
     public async Task InvokeAsync_AllowsAnonymousInitializeWhenCatalogIsOpen()
     {
-        var (nextCalled, context) = await Invoke("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}""", anonymousCatalog: true);
+        var (nextCalled, context) = await Invoke(Initialize(), anonymousCatalog: true);
 
         Assert.True(nextCalled);
         Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
@@ -66,40 +65,38 @@ public class UcpMcpSignInRequiredMiddlewareTests
         Assert.Equal(0, context.Response.Headers.WWWAuthenticate.Count);
     }
 
-    // The MCP server binds the parameters of a request ignoring case, so "Name" names the tool as "name" does.
-    [Fact]
-    public async Task InvokeAsync_ReadsTheToolNameIgnoringCase()
+    // The MCP module reads the request ignoring case and keeps every tool name it carries: a request that names its tool
+    // more than once is challenged unless every name is logout_buyer, as the server may bind either.
+    [Theory]
+    [InlineData("tools/call", new[] { "logout_buyer", "search_products" }, false)]
+    [InlineData("tools/call", new[] { "search_products", "logout_buyer" }, false)]
+    [InlineData("tools/call", new[] { "logout_buyer", "logout_buyer" }, true)]
+    [InlineData("tools/call", new[] { "Logout_Buyer" }, false)]
+    [InlineData("tools/call", new string[0], false)]
+    [InlineData("initialize", new[] { "logout_buyer" }, false)]
+    public async Task InvokeAsync_ChallengesAnAmbiguousToolNameUnlessEveryNameIsLogout(string method, string[] toolNames, bool expectedNextCalled)
     {
         // Arrange
-        const string logout = """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"Name":"logout_buyer"}}""";
-        const string search = """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"Name":"search_products"}}""";
+        var request = new McpRequestInfo(method, toolNames);
 
         // Act
-        var (logoutNextCalled, _) = await Invoke(logout, anonymousCatalog: false);
-        var (searchNextCalled, searchContext) = await Invoke(search, anonymousCatalog: false);
-
-        // Assert
-        Assert.True(logoutNextCalled);
-        Assert.False(searchNextCalled);
-        Assert.Equal(StatusCodes.Status401Unauthorized, searchContext.Response.StatusCode);
-    }
-
-    // A request that names its tool twice is challenged unless every name is logout_buyer: the server may bind either.
-    [Theory]
-    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"logout_buyer","Name":"search_products"}}""", false)]
-    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"Name":"search_products","name":"logout_buyer"}}""", false)]
-    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"logout_buyer","NAME":"logout_buyer"}}""", true)]
-    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"logout_buyer","Name":1}}""", false)]
-    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"logout_buyer"},"Params":{"name":"search_products"}}""", false)]
-    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","Method":"initialize","params":{"name":"logout_buyer"}}""", false)]
-    public async Task InvokeAsync_ChallengesAnAmbiguousToolNameUnlessEveryNameIsLogout(string json, bool expectedNextCalled)
-    {
-        // Act
-        var (nextCalled, context) = await Invoke(json, anonymousCatalog: false);
+        var (nextCalled, context) = await Invoke(request, anonymousCatalog: false);
 
         // Assert
         Assert.Equal(expectedNextCalled, nextCalled);
         Assert.Equal(expectedNextCalled ? StatusCodes.Status200OK : StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+    }
+
+    // A request the MCP module did not read is challenged as an unknown call: logout_buyer in its body does not let it through.
+    [Fact]
+    public async Task InvokeAsync_ChallengesARequestTheMcpModuleDidNotRead()
+    {
+        // Act
+        var (nextCalled, context) = await Invoke(null, anonymousCatalog: false);
+
+        // Assert
+        Assert.False(nextCalled);
+        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
     }
 
     [Fact]
@@ -111,37 +108,47 @@ public class UcpMcpSignInRequiredMiddlewareTests
         Assert.Contains("link the buyer account", await ReadBody(context));
     }
 
+    // The middleware decides on the request the MCP module read, not on the body, which stays untouched for the MCP server.
     [Fact]
-    public async Task InvokeAsync_KeepsTheBodyReadableForTheMcpServer()
+    public async Task InvokeAsync_DoesNotReadTheBody()
     {
-        var json = ToolCall("search_products");
+        // Arrange
         string bodySeenByNext = null;
 
-        await Invoke(json, anonymousCatalog: true, next: async context =>
+        // Act
+        await Invoke(ToolCall("search_products"), anonymousCatalog: true, next: async context =>
         {
             using var reader = new StreamReader(context.Request.Body, leaveOpen: true);
             bodySeenByNext = await reader.ReadToEndAsync();
         });
 
-        Assert.Equal(json, bodySeenByNext);
+        // Assert
+        Assert.Equal(RequestBody, bodySeenByNext);
     }
 
     [Fact]
     public async Task InvokeAsync_ChallengesAtTheMcpEndpointOfAScopeHost()
     {
-        var (_, context) = await Invoke("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}""", anonymousCatalog: false, path: "/mcp");
+        var (_, context) = await Invoke(new McpRequestInfo("tools/list", []), anonymousCatalog: false, path: "/mcp");
 
         Assert.Contains("resource_metadata=\"https://store.example/.well-known/oauth-protected-resource/mcp\"", context.Response.Headers.WWWAuthenticate.ToString());
     }
 
-    private static string ToolCall(string toolName)
+    // The body of every request, which names logout_buyer: the middleware must decide on the request info alone.
+    private const string RequestBody = """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"logout_buyer"}}""";
+
+    private static McpRequestInfo Initialize()
     {
-        return """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"TOOL_NAME","arguments":{"query":"Epson"}}}"""
-            .Replace("TOOL_NAME", toolName, StringComparison.Ordinal);
+        return new McpRequestInfo("initialize", []);
+    }
+
+    private static McpRequestInfo ToolCall(string toolName)
+    {
+        return new McpRequestInfo("tools/call", [toolName]);
     }
 
     private static async Task<(bool NextCalled, DefaultHttpContext Context)> Invoke(
-        string json,
+        McpRequestInfo request,
         bool anonymousCatalog,
         string authorization = null,
         string path = "/ucp/mcp",
@@ -170,12 +177,18 @@ public class UcpMcpSignInRequiredMiddlewareTests
         var context = new DefaultHttpContext { RequestServices = services.BuildServiceProvider() };
         context.SetMcpScope(scope);
         context.SetMcpEndpointPath(path == McpScope.HostEndpointPath ? McpScope.HostEndpointPath : scope.Path);
+        if (request != null)
+        {
+            // The request as the MCP module reads it after routing (UseMcpScopeRequests), ahead of UCP's steps
+            context.SetMcpRequest(request);
+        }
+
         context.Request.Method = HttpMethods.Post;
         context.Request.Scheme = "https";
         context.Request.Host = new HostString(StubMcpScopeRegistry.ScopeHost);
         context.Request.Path = path;
         context.Request.ContentType = "application/json";
-        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(json));
+        context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(RequestBody));
         context.Response.Body = new MemoryStream();
         if (authorization != null)
         {

@@ -26,6 +26,7 @@ using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using VirtoCommerce.MCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core;
+using VirtoCommerce.UCP.Core.Attributes;
 using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;

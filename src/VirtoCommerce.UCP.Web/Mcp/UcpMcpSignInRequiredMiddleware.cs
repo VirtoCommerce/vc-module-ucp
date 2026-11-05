@@ -1,7 +1,5 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using VirtoCommerce.MCP.Core.Extensions;
@@ -46,16 +44,17 @@ internal sealed class UcpMcpSignInRequiredMiddleware
             return;
         }
 
-        // A request that names its tool more than once, in properties that differ only in case, goes on only when every
-        // name is logout_buyer: the MCP server may bind any of them.
-        var toolNames = await ReadToolNamesAsync(context.Request);
-        if (toolNames.Count > 0 && toolNames.All(IsLogoutBuyer))
+        // The request as the MCP module read it ahead of authentication (UseMcpScopeRequests). A request that names its
+        // tool more than once, in properties that differ only in case, goes on only when every name is logout_buyer: the
+        // MCP server may bind any of them. A request the MCP module did not read is challenged as any other call.
+        var request = context.GetMcpRequest();
+        if (request?.IsToolCall == true && request.ToolNames.Count > 0 && request.ToolNames.All(IsLogoutBuyer))
         {
             await _next(context);
             return;
         }
 
-        var toolName = toolNames.FirstOrDefault(x => !IsLogoutBuyer(x));
+        var toolName = request?.IsToolCall == true ? request.ToolNames.FirstOrDefault(x => !IsLogoutBuyer(x)) : null;
 
         // The scope's own challenge writer and origin, as the MCP module challenges its requests.
         var scope = context.GetMcpScope();
@@ -74,57 +73,6 @@ internal sealed class UcpMcpSignInRequiredMiddleware
     private static bool IsLogoutBuyer(string toolName)
     {
         return string.Equals(toolName, ModuleConstants.McpTools.LogoutBuyer, StringComparison.Ordinal);
-    }
-
-    // The tool names of a tools/call request; empty for any other request. The MCP server binds the properties of a
-    // request ignoring case, so every property that matches ignoring case is read, and a value that is not a string
-    // is read as null. The body stays readable for the MCP server.
-    private static async Task<IList<string>> ReadToolNamesAsync(HttpRequest request)
-    {
-        if (!HttpMethods.IsPost(request.Method))
-        {
-            return [];
-        }
-
-        request.EnableBuffering();
-        try
-        {
-            using var document = await JsonDocument.ParseAsync(request.Body, cancellationToken: request.HttpContext.RequestAborted);
-            var root = document.RootElement;
-            var methods = ReadStrings(root, "method");
-            if (methods.Count == 0 || !methods.All(x => x == "tools/call"))
-            {
-                return [];
-            }
-
-            return FindProperties(root, "params")
-                .SelectMany(parameters => parameters.ValueKind == JsonValueKind.Object ? ReadStrings(parameters, "name") : [null])
-                .ToList();
-        }
-        catch (JsonException)
-        {
-            return [];
-        }
-        finally
-        {
-            request.Body.Position = 0;
-        }
-    }
-
-    private static List<string> ReadStrings(JsonElement element, string propertyName)
-    {
-        return FindProperties(element, propertyName)
-            .Select(value => value.ValueKind == JsonValueKind.String ? value.GetString() : null)
-            .ToList();
-    }
-
-    private static IEnumerable<JsonElement> FindProperties(JsonElement element, string propertyName)
-    {
-        return element.ValueKind == JsonValueKind.Object
-            ? element.EnumerateObject()
-                .Where(x => string.Equals(x.Name, propertyName, StringComparison.OrdinalIgnoreCase))
-                .Select(x => x.Value)
-            : [];
     }
 
     private static bool HasBearerHeader(HttpRequest request)

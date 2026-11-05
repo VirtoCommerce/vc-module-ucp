@@ -3,9 +3,9 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using VirtoCommerce.UCP.Core;
+using VirtoCommerce.UCP.Core.Attributes;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Services;
-using VirtoCommerce.UCP.Web.Filters;
 using VirtoCommerce.UCP.Web.Models;
 
 namespace VirtoCommerce.UCP.Web.Controllers.Api;
