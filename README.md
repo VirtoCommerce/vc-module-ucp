@@ -869,7 +869,7 @@ The module manifest declares these runtime dependencies:
 
 | Module | Version |
 | --- | --- |
-| `VirtoCommerce.MCP` | `3.1000.0-alpha.33-vcst-6155-core-mcp-module` |
+| `VirtoCommerce.MCP` | `3.1000.0-alpha.34-vcst-6155-core-mcp-module` |
 | `VirtoCommerce.Xapi` | `3.1029.0` |
 | `VirtoCommerce.XCatalog` | `3.1023.0` |
 | `VirtoCommerce.XCart` | `3.1044.0` |

@@ -6,7 +6,7 @@
 
   <platformVersion>3.1091.0</platformVersion>
   <dependencies>
-    <dependency id="VirtoCommerce.MCP" version="3.1000.0-alpha.33-vcst-6155-core-mcp-module" />
+    <dependency id="VirtoCommerce.MCP" version="3.1000.0-alpha.34-vcst-6155-core-mcp-module" />
     <dependency id="VirtoCommerce.Xapi" version="3.1029.0" />
     <dependency id="VirtoCommerce.XCatalog" version="3.1023.0" />
     <dependency id="VirtoCommerce.XCart" version="3.1044.0" />
