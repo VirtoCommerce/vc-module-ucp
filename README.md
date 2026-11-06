@@ -157,7 +157,7 @@ platform:
 - `Authorization__Resources__0` allows Platform to issue tokens for the UCP MCP endpoint. If `Authorization:Resources` already lists other addresses, add this one with the next index instead of replacing them.
 - `Authorization__OAuthLoginPath` sends buyers to the Storefront sign-in page instead of the Platform back-office sign-in page.
 
-The resource, the OAuth client permission in step 5 and the store's Secure URL must use the **same host**: UCP advertises the store's URL for discovery, MCP and OAuth. Mixing the platform host and the storefront host produces tokens that UCP rejects. For several stores, add one resource and one `rsrc:` permission per store host.
+The resource, the OAuth client's **Resources** in step 5 and the store's Secure URL must use the **same host**: UCP advertises the store's URL for discovery, MCP and OAuth. Mixing the platform host and the storefront host produces tokens that UCP rejects. For several stores, add one resource per store host here and in the client's **Resources**.
 
 ### 3. Provide Redis when the Platform has more than one replica
 
@@ -198,33 +198,20 @@ Deploy the updated environment.
 
 ### 5. Register an OAuth client for the AI assistant
 
-Each AI assistant signs buyers in through a registered OAuth client:
+Each AI assistant signs buyers in through a registered OAuth client. As an administrator, open **Security → OAuth applications** in the Admin Shell (3.1094.0 or later) or the classic Manager (`VirtoCommerce.AdminAngularJs` 3.1096.0 or later), on platform 3.1095.0 or later, select **Add** and fill in:
 
 | Field | Value |
 | --- | --- |
-| Client type | `public` (no client secret) |
-| Consent type | `explicit` (the buyer sees which assistant they let shop as them, once per buyer and assistant) |
-| Redirect URI | The callback URL of the AI assistant. For Claude custom connectors this is `https://claude.ai/api/mcp/auth_callback` (*to verify against the current Anthropic documentation*). |
-| Permissions | `rsrc:https://store.example.com/ucp/mcp` |
+| Display name, Client ID | The name buyers see on the consent page, for example `Shopping assistant (claude.ai)`, and the ID you enter in the assistant |
+| Client type | *Public* (no client secret); **Require PKCE** switches on |
+| Consent | *Explicit*: the buyer sees which assistant they let shop as them, once per buyer and assistant |
+| Grant types | *Authorization code* and *Refresh token* only |
+| Redirect URIs | The callback URL of the AI assistant. For Claude custom connectors this is `https://claude.ai/api/mcp/auth_callback` (*to verify against the current Anthropic documentation*); type it and press Enter |
+| Resources (MCP endpoints and APIs) | Tick *MCP: Virto Commerce UCP*. Its address must be `https://store.example.com/ucp/mcp`; if the list shows another host, for example the back office's, type `https://store.example.com/ucp/mcp` in **Other resources** instead |
 
-The **Security > OAuth applications** screen has no field for `rsrc:` permissions yet ([VCST-6641](https://virtocommerce.atlassian.net/browse/VCST-6641) adds it, and this step then moves to the screen). Until then, create the client through the Platform API, for example from the browser console while signed in to the Platform Manager as an administrator:
+Select **Save**, and give the client ID to whoever sets up the assistant. What the screen shows after saving is what is stored, as `rsrc:` permissions for the resources.
 
-```javascript
-(async () => {
-  const api = angular.element(document.body).injector().get("platformWebApp.oauthapps");
-  const app = await api.new().$promise;
-  app.displayName = "Claude";
-  app.clientType = "public";
-  app.clientSecret = null;
-  app.consentType = "explicit";
-  app.redirectUris = ["https://claude.ai/api/mcp/auth_callback"];
-  app.permissions = ["rsrc:https://store.example.com/ucp/mcp"];
-  const saved = await api.save({}, app).$promise;
-  console.log("CLIENT_ID:", saved.clientId, "PERMISSIONS:", saved.permissions);
-})().catch(console.error);
-```
-
-Check that the printed permissions contain `rsrc:https://store.example.com/ucp/mcp`, and give the printed `CLIENT_ID` to whoever sets up the assistant. Later edits to the client on the OAuth applications screen keep the `rsrc:` permission.
+![A shopping assistant client for /ucp/mcp in Security → OAuth applications of the Admin Shell](docs/media/oauth-app-shopping-assistant.png)
 
 ### 6. Connect the AI assistant
 
@@ -249,7 +236,7 @@ The checkout link carries its one-time token in the `ucp_session` query paramete
 
 | Symptom | Check |
 | --- | --- |
-| Token request fails with `invalid_target` | `Authorization__Resources__0` contains `https://store.example.com/ucp/mcp`, and the OAuth client has the permission `rsrc:https://store.example.com/ucp/mcp`. |
+| Token request fails with `invalid_target` | `Authorization__Resources__0` contains `https://store.example.com/ucp/mcp`, and the OAuth client lists `https://store.example.com/ucp/mcp` under **Resources**. |
 | `link_buyer_identity` returns `401 invalid_token` after sign-in | The MCP URL, the store's Secure URL, the resource and the OAuth client permission all use the Storefront host. |
 | Sign-in opens the Platform back-office page | `Authorization__OAuthLoginPath` is set to `/oauth/authorize`, and the Storefront includes the sign-in page. |
 | Sign-in page cannot complete, or the assistant never receives a token | `/connect` and `/.well-known/openid-configuration` are routed to `platform` on the Storefront host. |
@@ -429,7 +416,7 @@ To restore handoff sessions across replicas, configure the same `ConnectionStrin
 
 UCP's public origin is the URL of the request's store (`SecureUrl`, then `Url`; see [Where each value comes from](#where-each-value-comes-from)), and the request's own origin when the store has none. Set `MCP:Scopes:ucp:PublicOrigin` only where the platform cannot see the public host, for example behind a proxy that does not forward it.
 
-Discovery, protected-resource metadata, bearer challenges and MCP audience validation use this same origin even when discovery is read through the backend host. Add `<resolved-origin>/ucp/mcp` to Platform `Authorization:Resources` and grant `rsrc:<resolved-origin>/ucp/mcp` to the registered OAuth client. The client must connect to the advertised public MCP endpoint and use the authorization server advertised there. Resource registration and OAuth client permissions remain enforced by Platform/OpenIddict.
+Discovery, protected-resource metadata, bearer challenges and MCP audience validation use this same origin even when discovery is read through the backend host. Add `<resolved-origin>/ucp/mcp` to Platform `Authorization:Resources` and to the **Resources** of the registered OAuth client. The client must connect to the advertised public MCP endpoint and use the authorization server advertised there. Resource registration and OAuth client permissions remain enforced by Platform/OpenIddict.
 
 For rollout from process-local sessions, drain existing handoffs on the old deployment before switching traffic, or wait at least the checkout link lifetime (`UCP.CheckoutLinkLifetimeMinutes`) after stopping issuance. A Redis-backed release cannot recover sessions stored only in an old process. Do not mix releases using raw-token cache keys with releases using hashed keys; use a drained cutover. Current releases keep the hashed key format and use one shared lock for each session. If a concurrent restore holds that lock, UCP returns `409` with `handoff_in_progress`; the session is not consumed and the client may retry. Do not add retry-on-400 behavior: a consumed, expired or forged token must remain rejected.
 
@@ -597,7 +584,7 @@ The MCP module serves the endpoint: the transport, sign-in and token checks, too
 * `UcpMcpChallengeWriter`: UCP's `identity_required` body of the HTTP 401 and 403 responses;
 * `UcpMcpPublicOriginResolver`: the public origin of the scope, from `MCP:Scopes:ucp:PublicOrigin` or the request's store (see [Multiple instances and the public origin](#multiple-instances-and-the-public-origin)); the MCP module's global `MCP:PublicOrigin` does not apply to this scope. Either origin counts as configured for the MCP module's token check, so a signed-in buyer's token is accepted outside Development with only the store's URL set; the request's own origin, the last fallback, does not.
 
-To serve the scope also at `https://store.example.com/mcp`, set `MCP:Scopes:ucp:Hosts` and add that address to `Authorization:Resources` and to the OAuth client's `rsrc:` permissions: it is a separate OAuth resource. At `/mcp` of such a host, the origin, and so the OAuth resource and the token audience, is that host, whatever `MCP:Scopes:ucp:PublicOrigin` says. Discovery keeps naming `/ucp/mcp`.
+To serve the scope also at `https://store.example.com/mcp`, set `MCP:Scopes:ucp:Hosts` and add that address to `Authorization:Resources` and to the OAuth client's **Resources** (in **Other resources**): it is a separate OAuth resource. At `/mcp` of such a host, the origin, and so the OAuth resource and the token audience, is that host, whatever `MCP:Scopes:ucp:PublicOrigin` says. Discovery keeps naming `/ucp/mcp`.
 
 | Area | Tools |
 | --- | --- |
