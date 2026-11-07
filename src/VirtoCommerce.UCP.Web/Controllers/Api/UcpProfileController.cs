@@ -22,6 +22,9 @@ public class UcpProfileController : ControllerBase
     // seconds, never private, no-store or no-cache, and SHOULD carry a validator (ETag or Last-Modified).
     private static readonly TimeSpan ProfileMaxAge = TimeSpan.FromMinutes(5);
 
+    // The validator is the first 128 bits of the SHA-256 of the profile.
+    private const int ETagHashBytes = 16;
+
     private readonly IUcpProfileService _ucpProfileService;
 
     public UcpProfileController(IUcpProfileService ucpProfileService)
@@ -60,6 +63,6 @@ public class UcpProfileController : ControllerBase
     private static string ComputeHash(UcpDiscoveryDocument document)
     {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(document)));
-        return Convert.ToHexString(hash, 0, 16).ToLowerInvariant();
+        return Convert.ToHexString(hash, 0, ETagHashBytes).ToLowerInvariant();
     }
 }

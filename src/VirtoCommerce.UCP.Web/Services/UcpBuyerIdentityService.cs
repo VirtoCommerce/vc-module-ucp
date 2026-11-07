@@ -14,10 +14,15 @@ namespace VirtoCommerce.UCP.Web.Services;
 // for. The names need the profile scope and the email the email scope the buyer consented to.
 public class UcpBuyerIdentityService(Func<UserManager<ApplicationUser>> userManagerFactory, IMemberService memberService)
 {
-    public virtual async Task<UcpBuyerIdentity> GetIdentityAsync(UcpBuyerContext context)
+    public virtual Task<UcpBuyerIdentity> GetIdentityAsync(UcpBuyerContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
 
+        return GetIdentityCoreAsync(context);
+    }
+
+    protected virtual async Task<UcpBuyerIdentity> GetIdentityCoreAsync(UcpBuyerContext context)
+    {
         var identity = new UcpBuyerIdentity
         {
             BuyerId = context.PublicBuyerId,
@@ -46,20 +51,28 @@ public class UcpBuyerIdentityService(Func<UserManager<ApplicationUser>> userMana
         if (withProfile)
         {
             identity.UserName = user.UserName;
-
-            var memberIds = new[] { user.MemberId, context.OrganizationId }
-                .Where(x => !string.IsNullOrEmpty(x))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            var members = memberIds.Length > 0 ? await memberService.GetByIdsAsync(memberIds) ?? [] : [];
-
-            var contact = members.FirstOrDefault(x => string.Equals(x.Id, user.MemberId, StringComparison.OrdinalIgnoreCase));
-            identity.BuyerName = (contact as Contact)?.FullName ?? contact?.Name;
-            identity.OrganizationName = members
-                .OfType<Organization>()
-                .FirstOrDefault(x => string.Equals(x.Id, context.OrganizationId, StringComparison.OrdinalIgnoreCase))?.Name;
+            await SetNamesAsync(identity, user.MemberId, context.OrganizationId);
         }
 
         return identity;
+    }
+
+    protected virtual async Task SetNamesAsync(UcpBuyerIdentity identity, string contactId, string organizationId)
+    {
+        var memberIds = new[] { contactId, organizationId }
+            .Where(x => !string.IsNullOrEmpty(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (memberIds.Length == 0)
+        {
+            return;
+        }
+
+        var members = await memberService.GetByIdsAsync(memberIds) ?? [];
+        var contact = members.FirstOrDefault(x => string.Equals(x.Id, contactId, StringComparison.OrdinalIgnoreCase));
+        identity.BuyerName = (contact as Contact)?.FullName ?? contact?.Name;
+        identity.OrganizationName = members
+            .OfType<Organization>()
+            .FirstOrDefault(x => string.Equals(x.Id, organizationId, StringComparison.OrdinalIgnoreCase))?.Name;
     }
 }

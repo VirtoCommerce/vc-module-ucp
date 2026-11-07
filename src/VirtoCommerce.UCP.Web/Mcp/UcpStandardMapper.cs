@@ -83,7 +83,7 @@ public class UcpStandardMapper
     {
         ArgumentNullException.ThrowIfNull(payload);
 
-        var structuredContent = JsonSerializer.SerializeToElement(payload, payload.GetType(), UcpMcpSerialization.Options);
+        var structuredContent = JsonSerializer.SerializeToElement(payload, payload.GetType(), UcpMcpSerialization.StandardPayloadOptions);
 
         return new CallToolResult
         {
@@ -224,7 +224,7 @@ public class UcpStandardMapper
                 .Select(product => MapProduct(product, fallbackCurrency))
                 .ToList(),
             Pagination = MapPagination(response?.Pagination),
-            Messages = NullIfEmpty(MapMessages(response?.Messages)),
+            Messages = MapMessages(response?.Messages),
         };
     }
 
@@ -234,7 +234,7 @@ public class UcpStandardMapper
         {
             Ucp = CreateMetadata(ModuleConstants.Discovery.CatalogLookup),
             Product = MapProduct(response?.Product ?? new UcpProduct(), fallbackCurrency),
-            Messages = NullIfEmpty(MapMessages(response?.Messages)),
+            Messages = MapMessages(response?.Messages),
         };
     }
 
@@ -284,7 +284,7 @@ public class UcpStandardMapper
         {
             Ucp = CreateMetadata(ModuleConstants.Discovery.CatalogLookup),
             Products = products,
-            Messages = NullIfEmpty(messages),
+            Messages = messages,
         };
     }
 
@@ -381,13 +381,16 @@ public class UcpStandardMapper
 
     protected virtual UcpStandardAvailability MapAvailability(UcpProductAvailability availability)
     {
-        return availability == null
-            ? null
-            : new UcpStandardAvailability
-            {
-                Available = availability.IsAvailable,
-                Status = availability.IsInStock ? "in_stock" : "out_of_stock",
-            };
+        if (availability == null)
+        {
+            return null;
+        }
+
+        return new UcpStandardAvailability
+        {
+            Available = availability.IsAvailable,
+            Status = availability.IsInStock ? "in_stock" : "out_of_stock",
+        };
     }
 
     protected virtual IDictionary<string, object> MapProductMetadata(UcpProduct product)
@@ -403,7 +406,7 @@ public class UcpStandardMapper
             metadata["product_type"] = product.ProductType;
         }
 
-        return metadata.Count == 0 ? null : metadata;
+        return metadata;
     }
 
     protected virtual UcpStandardPagination MapPagination(UcpPaginationResponse pagination)
@@ -435,7 +438,7 @@ public class UcpStandardMapper
             LineItems = MapLineItems(cart.LineItems),
             Currency = NormalizeCurrency(FirstNotEmpty(cart.Currency, fallbackCurrency)),
             Totals = MapTotals(cart.Totals),
-            Messages = NullIfEmpty(MapCartMessages(cart, response?.Messages)),
+            Messages = MapCartMessages(cart, response?.Messages),
             ContinueUrl = AbsoluteUrlOrNull(cart.ContinueUrl),
             BuyerId = NullIfWhiteSpace(cart.BuyerId),
         };
@@ -461,7 +464,7 @@ public class UcpStandardMapper
             Status = status,
             Currency = NormalizeCurrency(FirstNotEmpty(cart.Currency, fallbackCurrency)),
             Totals = MapTotals(cart.Totals),
-            Messages = NullIfEmpty(MapCheckoutMessages(checkout, response?.Messages, status)),
+            Messages = MapCheckoutMessages(checkout, response?.Messages, status),
             Links = MapCheckoutLinks(checkout),
             ContinueUrl = AbsoluteUrlOrNull(status == CheckoutRequiresEscalation
                 ? checkout.ContinueUrl
@@ -478,7 +481,7 @@ public class UcpStandardMapper
             return CheckoutRequiresEscalation;
         }
 
-        if (checkout.Cart?.InventoryErrors?.Count > 0 || checkout.Cart?.LineItems?.Count is null or 0)
+        if (!HasCheckoutLines(checkout.Cart))
         {
             return CheckoutIncomplete;
         }
@@ -486,6 +489,17 @@ public class UcpStandardMapper
         return storeManagedAddresses || HasRequiredShippingAddress(checkout.ShippingAddress)
             ? CheckoutReadyForComplete
             : CheckoutIncomplete;
+    }
+
+    /// <summary>Whether the cart has lines and no inventory error.</summary>
+    protected virtual bool HasCheckoutLines(UcpCart cart)
+    {
+        if (cart?.LineItems == null || cart.LineItems.Count == 0)
+        {
+            return false;
+        }
+
+        return cart.InventoryErrors == null || cart.InventoryErrors.Count == 0;
     }
 
     protected virtual bool HasRequiredShippingAddress(UcpCheckoutAddress address)
@@ -548,43 +562,55 @@ public class UcpStandardMapper
             PhoneNumber = NullIfWhiteSpace(buyer.Phone),
         };
 
-        return result.FirstName == null && result.LastName == null && result.Email == null && result.PhoneNumber == null
-            ? null
-            : result;
+        var hasValue = new[] { result.FirstName, result.LastName, result.Email, result.PhoneNumber }.Any(value => value != null);
+
+        return hasValue ? result : null;
     }
 
     protected virtual IList<UcpStandardMessage> MapCartMessages(UcpCart cart, IList<UcpMessage> responseMessages)
     {
         var lineItems = (cart.LineItems ?? []).Where(IsStandardLineItem).ToList();
         var inventoryErrors = (cart.InventoryErrors ?? []).Where(error => error != null).ToList();
+        // The inventory errors replace the XCart validation errors they come from.
+        var hasInventoryErrors = inventoryErrors.Count > 0;
         var cartMessages = (cart.Messages ?? [])
             .Concat((responseMessages ?? []).Where(message => cart.Messages?.Contains(message) != true))
-            // The inventory errors below replace the XCart validation errors they come from.
-            .Where(message => inventoryErrors.Count == 0 || message?.Code == null || !_inventorySourceCodes.Contains(message.Code));
+            .Where(message => !IsInventorySourceMessage(message, hasInventoryErrors));
 
         var messages = MapMessages(cartMessages);
         for (var index = 0; index < lineItems.Count; index++)
         {
             AddDistinctMessages(messages, MapMessages(
-                lineItems[index].Messages?.Where(message => inventoryErrors.Count == 0 || message?.Code == null || !_inventorySourceCodes.Contains(message.Code)),
+                (lineItems[index].Messages ?? []).Where(message => !IsInventorySourceMessage(message, hasInventoryErrors)),
                 $"$.line_items[{index}]"));
         }
 
         foreach (var error in inventoryErrors)
         {
-            var lineItemId = error.Details != null && error.Details.TryGetValue("line_item_id", out var value) ? value as string : null;
-            var index = lineItemId == null ? -1 : lineItems.FindIndex(lineItem => lineItem.Id == lineItemId);
-            messages.Add(new UcpStandardMessage
-            {
-                Type = "error",
-                Code = UcpMcpErrorResultFactory.GetSafeErrorCode(error.Code),
-                Path = index < 0 ? null : $"$.line_items[{index}]",
-                Content = FirstNotEmpty(error.Message, error.Code),
-                Severity = SeverityRecoverable,
-            });
+            messages.Add(MapInventoryError(error, lineItems));
         }
 
         return messages;
+    }
+
+    protected virtual bool IsInventorySourceMessage(UcpMessage message, bool hasInventoryErrors)
+    {
+        return hasInventoryErrors && message?.Code != null && _inventorySourceCodes.Contains(message.Code);
+    }
+
+    protected virtual UcpStandardMessage MapInventoryError(UcpError error, IList<UcpCartLineItem> lineItems)
+    {
+        var lineItemId = error.Details != null && error.Details.TryGetValue("line_item_id", out var value) ? value as string : null;
+        var index = lineItemId == null ? -1 : lineItems.IndexOf(lineItems.FirstOrDefault(lineItem => lineItem.Id == lineItemId));
+
+        return new UcpStandardMessage
+        {
+            Type = "error",
+            Code = UcpMcpErrorResultFactory.GetSafeErrorCode(error.Code),
+            Path = index < 0 ? null : $"$.line_items[{index}]",
+            Content = FirstNotEmpty(error.Message, error.Code),
+            Severity = SeverityRecoverable,
+        };
     }
 
     /// <summary>The lines with a quantity; the standard counts at least one of each.</summary>
@@ -686,7 +712,7 @@ public class UcpStandardMapper
             Fulfillment = MapOrderFulfillment(order, lineItems),
             Currency = NormalizeCurrency(order.Currency),
             Totals = MapTotals(totals.Subtotal, totals.DiscountTotal, totals.ShippingTotal, totals.TaxTotal, null, totals.Total),
-            Messages = NullIfEmpty(MapMessages(order.Messages)),
+            Messages = MapMessages(order.Messages),
         };
     }
 
@@ -792,16 +818,25 @@ public class UcpStandardMapper
     /// <summary>Standard line items as ours: item.id is the product id. A line id is kept only to update a cart.</summary>
     public virtual IList<UcpCartLineItemRequest> MapLineItemRequests(IEnumerable<UcpStandardLineItemRequest> lineItems, bool keepLineItemIds)
     {
-        return lineItems?
-            .Select(lineItem => lineItem == null
-                ? null
-                : new UcpCartLineItemRequest
-                {
-                    Id = keepLineItemIds ? NullIfWhiteSpace(lineItem.Id) : null,
-                    ProductId = NullIfWhiteSpace(lineItem.Item?.Id),
-                    Quantity = lineItem.Quantity,
-                })
+        return (lineItems ?? [])
+            .Select(lineItem => MapLineItemRequest(lineItem, keepLineItemIds))
             .ToList();
+    }
+
+    /// <summary>A standard line item as ours; a null line stays null, and the cart service rejects it.</summary>
+    protected virtual UcpCartLineItemRequest MapLineItemRequest(UcpStandardLineItemRequest lineItem, bool keepLineItemIds)
+    {
+        if (lineItem == null)
+        {
+            return null;
+        }
+
+        return new UcpCartLineItemRequest
+        {
+            Id = keepLineItemIds ? NullIfWhiteSpace(lineItem.Id) : null,
+            ProductId = NullIfWhiteSpace(lineItem.Item?.Id),
+            Quantity = lineItem.Quantity,
+        };
     }
 
     public virtual UcpCheckoutBuyer MapBuyerRequest(UcpStandardBuyer buyer)
@@ -888,7 +923,7 @@ public class UcpStandardMapper
     {
         var url = AbsoluteUrlOrNull(imageUrl);
 
-        return url == null ? null : [new UcpStandardMedia { Type = "image", Url = url, AltText = NullIfWhiteSpace(altText) }];
+        return url == null ? [] : [new UcpStandardMedia { Type = "image", Url = url, AltText = NullIfWhiteSpace(altText) }];
     }
 
     private static UcpStandardPrice ZeroPrice(string currency)
@@ -906,13 +941,15 @@ public class UcpStandardMapper
 
     private static void AddDistinctMessages(IList<UcpStandardMessage> target, IEnumerable<UcpStandardMessage> messages)
     {
-        foreach (var message in messages)
+        foreach (var message in messages.Where(message => !target.Any(x => IsSameMessage(x, message))))
         {
-            if (!target.Any(x => x.Type == message.Type && x.Code == message.Code && x.Path == message.Path && x.Content == message.Content))
-            {
-                target.Add(message);
-            }
+            target.Add(message);
         }
+    }
+
+    private static bool IsSameMessage(UcpStandardMessage x, UcpStandardMessage y)
+    {
+        return x.Type == y.Type && x.Code == y.Code && x.Path == y.Path && x.Content == y.Content;
     }
 
     private static bool IsOrderStatus(UcpOrder order, params string[] statuses)
@@ -930,11 +967,6 @@ public class UcpStandardMapper
         return Uri.TryCreate(url, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
             ? url.Trim()
             : null;
-    }
-
-    protected static IList<T> NullIfEmpty<T>(IList<T> items)
-    {
-        return items?.Count > 0 ? items : null;
     }
 
     protected static string NullIfWhiteSpace(string value)

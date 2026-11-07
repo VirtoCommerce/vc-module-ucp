@@ -103,7 +103,7 @@ public static class UcpMcpStandardTools
                 throw new UcpException(ModuleConstants.ErrorCodes.InvalidRequest, $"catalog.ids accepts at most {MaxLookupIds} ids.");
             }
 
-            var request = CreateCatalogRequest(catalog.Context, new UcpCatalogSearchRequest { StoreId = store_id });
+            var request = CreateCatalogRequest(catalog?.Context, new UcpCatalogSearchRequest { StoreId = store_id });
             UcpMcpCommerceTools.ApplyCatalogDefaults(request, await call.GetProfile());
 
             var resolved = new List<KeyValuePair<string, UcpProductResponse>>();
@@ -480,20 +480,24 @@ public static class UcpMcpStandardTools
 
     private static UcpCartRequest CreateCartRequest(UcpMcpStandardCall call, CartToolArguments arguments, UcpStandardCartRequest cart, bool keepLineItemIds)
     {
+        var context = cart?.Context ?? new UcpStandardContext();
+        var lineItems = cart?.LineItems != null
+            ? call.Mapper.MapLineItemRequests(cart.LineItems, keepLineItemIds)
+            : arguments.LineItems;
         var request = UcpMcpCommerceTools.CreateCartRequest(new CartToolArguments
         {
             StoreId = arguments.StoreId,
-            Currency = UcpMcpCommerceTools.FirstNotEmpty(cart?.Context?.Currency, arguments.Currency),
-            Language = UcpMcpCommerceTools.FirstNotEmpty(cart?.Context?.Language, arguments.Language),
+            Currency = UcpMcpCommerceTools.FirstNotEmpty(context.Currency, arguments.Currency),
+            Language = UcpMcpCommerceTools.FirstNotEmpty(context.Language, arguments.Language),
             BuyerId = arguments.BuyerId,
             OrganizationId = arguments.OrganizationId,
             CartName = arguments.CartName,
             CartType = arguments.CartType,
-            LineItems = call.Mapper.MapLineItemRequests(cart?.LineItems, keepLineItemIds) ?? arguments.LineItems,
+            LineItems = lineItems,
             Coupons = arguments.Coupons,
         });
-        request.Context.AddressCountry = cart?.Context?.AddressCountry;
-        request.Context.AddressRegion = cart?.Context?.AddressRegion;
+        request.Context.AddressCountry = context.AddressCountry;
+        request.Context.AddressRegion = context.AddressRegion;
 
         return request;
     }

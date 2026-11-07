@@ -102,7 +102,10 @@ public static class UcpMcpCommerceTools
 
     [SuppressMessage("Major Code Smell", "S107:Methods should not have too many parameters", Justification = FlatArgumentsJustification)]
     [McpServerTool(Name = ModuleConstants.McpTools.GetProduct, ReadOnly = true, Destructive = false)]
-    [Description("Get one product in this Virto Commerce storefront. Without a Platform bearer token this lookup is anonymous. If the user asks to use their account, act on their behalf, or use their organization or personalized prices, do not call this tool until link_buyer_identity succeeds." + StandardCallNote)]
+    [Description(
+        "Get one product in this Virto Commerce storefront. Without a Platform bearer token this lookup is anonymous. " +
+        "If the user asks to use their account, act on their behalf, or use their organization or personalized prices, " +
+        "do not call this tool until link_buyer_identity succeeds." + StandardCallNote)]
     public static Task<object> GetProduct(
         IUcpProfileService profileService,
         IUcpCatalogService catalogService,

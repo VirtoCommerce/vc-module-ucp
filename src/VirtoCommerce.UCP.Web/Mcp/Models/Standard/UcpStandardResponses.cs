@@ -136,6 +136,7 @@ public sealed class UcpStandardVariant
     [JsonPropertyName("availability")]
     public UcpStandardAvailability Availability { get; set; }
 
+    [UcpOmitWhenEmpty]
     [JsonPropertyName("media")]
     public IList<UcpStandardMedia> Media { get; set; }
 
@@ -164,12 +165,14 @@ public sealed class UcpStandardProduct
     [JsonPropertyName("list_price_range")]
     public UcpStandardPriceRange ListPriceRange { get; set; }
 
+    [UcpOmitWhenEmpty]
     [JsonPropertyName("media")]
     public IList<UcpStandardMedia> Media { get; set; }
 
     [JsonPropertyName("variants")]
     public IList<UcpStandardVariant> Variants { get; set; }
 
+    [UcpOmitWhenEmpty]
     [JsonPropertyName("metadata")]
     public IDictionary<string, object> Metadata { get; set; }
 }
@@ -197,6 +200,7 @@ public sealed class UcpStandardCatalogSearchResponse
     [JsonPropertyName("pagination")]
     public UcpStandardPagination Pagination { get; set; }
 
+    [UcpOmitWhenEmpty]
     [JsonPropertyName("messages")]
     public IList<UcpStandardMessage> Messages { get; set; }
 }
@@ -209,6 +213,7 @@ public sealed class UcpStandardCatalogLookupResponse
     [JsonPropertyName("products")]
     public IList<UcpStandardProduct> Products { get; set; }
 
+    [UcpOmitWhenEmpty]
     [JsonPropertyName("messages")]
     public IList<UcpStandardMessage> Messages { get; set; }
 }
@@ -221,6 +226,7 @@ public sealed class UcpStandardGetProductResponse
     [JsonPropertyName("product")]
     public UcpStandardProduct Product { get; set; }
 
+    [UcpOmitWhenEmpty]
     [JsonPropertyName("messages")]
     public IList<UcpStandardMessage> Messages { get; set; }
 }
@@ -296,6 +302,7 @@ public sealed class UcpStandardCart
     [JsonPropertyName("totals")]
     public IList<UcpStandardTotal> Totals { get; set; }
 
+    [UcpOmitWhenEmpty]
     [JsonPropertyName("messages")]
     public IList<UcpStandardMessage> Messages { get; set; }
 
@@ -330,6 +337,7 @@ public sealed class UcpStandardCheckout
     [JsonPropertyName("totals")]
     public IList<UcpStandardTotal> Totals { get; set; }
 
+    [UcpOmitWhenEmpty]
     [JsonPropertyName("messages")]
     public IList<UcpStandardMessage> Messages { get; set; }
 
@@ -463,6 +471,7 @@ public sealed class UcpStandardOrder
     [JsonPropertyName("totals")]
     public IList<UcpStandardTotal> Totals { get; set; }
 
+    [UcpOmitWhenEmpty]
     [JsonPropertyName("messages")]
     public IList<UcpStandardMessage> Messages { get; set; }
 }

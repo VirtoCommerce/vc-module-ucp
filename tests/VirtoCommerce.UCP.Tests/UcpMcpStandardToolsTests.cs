@@ -33,6 +33,10 @@ public class UcpMcpStandardToolsTests
     private const string Meta = """{"ucp-agent": {"profile": "https://agent.example/profile.json"}}""";
     private const string AnonymousBuyerId = "ucp-anonymous-22222222222222222222222222222222";
 
+    // error_response.json: ucp and messages, and nothing else but continue_url.
+    private static readonly string[] ErrorResponseMembers = ["ucp", "messages", "continue_url"];
+    private static readonly string[] CheckoutStatuses = ["incomplete", "requires_escalation", "ready_for_complete", "complete_in_progress", "completed", "canceled"];
+
     [Fact]
     public void StandardTools_AreTheSevenStandardOnlyTools_WithTheirAnnotations()
     {
@@ -556,7 +560,7 @@ public class UcpMcpStandardToolsTests
         var payload = result.StructuredContent.Value;
         Assert.Equal(payload.GetRawText(), Assert.IsType<TextContentBlock>(result.Content[0]).Text);
         // error_response.json: ucp (status error) and at least one message; nothing else but continue_url.
-        Assert.All(payload.EnumerateObject(), property => Assert.Contains(property.Name, new[] { "ucp", "messages", "continue_url" }));
+        Assert.All(payload.EnumerateObject(), property => Assert.Contains(property.Name, ErrorResponseMembers));
         Assert.Equal(Version, payload.GetProperty("ucp").GetProperty("version").GetString());
         Assert.Equal("error", payload.GetProperty("ucp").GetProperty("status").GetString());
         Assert.True(payload.GetProperty("ucp").GetProperty("capabilities").TryGetProperty(capability, out _));
@@ -604,8 +608,7 @@ public class UcpMcpStandardToolsTests
         AssertUcp(payload, ModuleConstants.Discovery.Checkout);
         AssertRequired(payload, "ucp", "id", "line_items", "status", "currency", "totals", "links");
         Assert.Equal(JsonValueKind.Object, payload.GetProperty("ucp").GetProperty("payment_handlers").ValueKind);
-        Assert.Contains(payload.GetProperty("status").GetString(),
-            new[] { "incomplete", "requires_escalation", "ready_for_complete", "complete_in_progress", "completed", "canceled" });
+        Assert.Contains(payload.GetProperty("status").GetString(), CheckoutStatuses);
         Assert.Equal(JsonValueKind.Array, payload.GetProperty("links").ValueKind);
         AssertLineItems(payload.GetProperty("line_items"));
         AssertTotals(payload.GetProperty("totals"));
