@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Primitives;
 using VirtoCommerce.MCP.Core.Extensions;
 using VirtoCommerce.MCP.Core.Models;
 using VirtoCommerce.MCP.Core.Services;
@@ -54,10 +55,18 @@ internal sealed class UcpMcpSignInRequiredMiddleware
             return;
         }
 
+        // A browser request from an origin the scope does not allow goes on to the MCP module, which refuses it with 403
+        // as the MCP transport requires, rather than being asked to sign in.
+        var scope = context.GetMcpScope();
+        if (await IsRefusedOriginAsync(context, scope))
+        {
+            await _next(context);
+            return;
+        }
+
         var toolName = request?.IsToolCall == true ? request.ToolNames.FirstOrDefault(x => !IsLogoutBuyer(x)) : null;
 
         // The scope's own challenge writer and origin, as the MCP module challenges its requests.
-        var scope = context.GetMcpScope();
         var originResolver = context.RequestServices.GetMcpScopeService<IMcpPublicOriginResolver>(scope);
         var challengeWriter = context.RequestServices.GetMcpScopeService<McpChallengeWriter>(scope);
         await challengeWriter.WriteChallengeAsync(context, new McpChallenge
@@ -68,6 +77,20 @@ internal sealed class UcpMcpSignInRequiredMiddleware
             ToolName = toolName,
             ErrorDescription = SignInRequiredMessage,
         });
+    }
+
+    // As the MCP module's Origin check decides: a request without an Origin header is not checked, more than one is refused.
+    private static async Task<bool> IsRefusedOriginAsync(HttpContext context, McpScope scope)
+    {
+        var origins = context.Request.Headers.Origin;
+        if (StringValues.IsNullOrEmpty(origins))
+        {
+            return false;
+        }
+
+        var originValidator = context.RequestServices.GetMcpScopeService<IMcpOriginValidator>(scope);
+
+        return origins.Count != 1 || !await originValidator.IsAllowedAsync(context, scope, origins.ToString());
     }
 
     private static bool IsLogoutBuyer(string toolName)

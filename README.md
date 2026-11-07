@@ -340,7 +340,7 @@ Only infrastructure, secrets and privacy choices stay in configuration:
 | `Authorization:Resources` | Allows tokens for each public MCP URL, one per store host: `https://store.example.com/ucp/mcp` |
 | `Authorization:OAuthLoginPath` | Sends buyers to the storefront sign-in page |
 | `ConnectionStrings:RedisConnectionString` | Shares checkout links between replicas |
-| `MCP:Scopes:ucp:Enabled`, `MCP:Scopes:ucp:Hosts`, `MCP:Scopes:ucp:PublicOrigin`, `MCP:Scopes:ucp:AllowedOrigins` | The buyer endpoint, in the MCP module's configuration; `AllowedOrigins` lists browser pages on other origins allowed to call `/ucp/mcp` (the store's own origin is always allowed) |
+| `MCP:Scopes:ucp:Enabled`, `MCP:Scopes:ucp:Hosts`, `MCP:Scopes:ucp:PublicOrigin`, `MCP:Scopes:ucp:AllowedOrigins` | The buyer endpoint, in the MCP module's configuration; `AllowedOrigins` lists browser pages on other origins allowed to call `/ucp/mcp` (the store's own origin is always allowed); a page of another origin gets `403`, also when the catalog is closed to anonymous buyers |
 | `VirtoCommerce:Stores:DefaultStore`, `VirtoCommerce:Stores:Domains` | The store of a request to a host that is not a store's own, shared with the Experience API |
 | `UCP:Observability:InputCaptureMode`, `UCP:AnonymousCatalog` | Privacy, and whether MCP clients ask the buyer to sign in from the first request |
 | Forwarded headers, proxy routes, OpenTelemetry, Serilog levels | The host in front of the platform and the telemetry |
@@ -882,7 +882,7 @@ The module manifest declares these runtime dependencies:
 
 | Module | Version |
 | --- | --- |
-| `VirtoCommerce.MCP` | `3.1000.0-alpha.38-vcst-6155-core-mcp-module` |
+| `VirtoCommerce.MCP` | `3.1000.0-alpha.48-vcst-6155-core-mcp-module` |
 | `VirtoCommerce.Xapi` | `3.1030.0` |
 | `VirtoCommerce.XCatalog` | `3.1023.0` |
 | `VirtoCommerce.XCart` | `3.1044.0` |

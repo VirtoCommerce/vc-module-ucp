@@ -8,10 +8,13 @@ using Microsoft.Extensions.Options;
 using VirtoCommerce.MCP.Core.Extensions;
 using VirtoCommerce.MCP.Core.Models;
 using VirtoCommerce.MCP.Core.Services;
+using VirtoCommerce.StoreModule.Core.Model;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
+using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Mcp;
+using VirtoCommerce.UCP.Web.Services;
 using Xunit;
 
 namespace VirtoCommerce.UCP.Tests;
@@ -134,6 +137,23 @@ public class UcpMcpSignInRequiredMiddlewareTests
         Assert.Contains("resource_metadata=\"https://store.example/.well-known/oauth-protected-resource/mcp\"", context.Response.Headers.WWWAuthenticate.ToString());
     }
 
+    // A browser page of an origin the scope does not allow is left to the MCP module's Origin check, which answers 403;
+    // the store's own origin is still asked to sign in.
+    [Theory]
+    [InlineData("https://evil.example", true)]
+    [InlineData("null", true)]
+    [InlineData("https://" + StubMcpScopeRegistry.ScopeHost, false)]
+    [InlineData(null, false)]
+    public async Task InvokeAsync_LeavesARequestFromAnOriginTheScopeDoesNotAllowToTheMcpModule(string origin, bool expectedNextCalled)
+    {
+        // Act
+        var (nextCalled, context) = await Invoke(ToolCall("search_products"), anonymousCatalog: false, origin: origin);
+
+        // Assert
+        Assert.Equal(expectedNextCalled, nextCalled);
+        Assert.Equal(expectedNextCalled ? StatusCodes.Status200OK : StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+    }
+
     // The body of every request, which names logout_buyer: the middleware must decide on the request info alone.
     private const string RequestBody = """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"logout_buyer"}}""";
 
@@ -152,7 +172,8 @@ public class UcpMcpSignInRequiredMiddlewareTests
         bool anonymousCatalog,
         string authorization = null,
         string path = "/ucp/mcp",
-        RequestDelegate next = null)
+        RequestDelegate next = null,
+        string origin = null)
     {
         var nextCalled = false;
         var middleware = new UcpMcpSignInRequiredMiddleware(async context =>
@@ -169,7 +190,8 @@ public class UcpMcpSignInRequiredMiddlewareTests
             .AddSingleton(Options.Create(new McpOptions()))
             .AddSingleton<IUcpPublicOriginResolver>(new StubUcpOriginResolver())
             .AddTransient<McpChallengeWriter>()
-            .AddTransient<IMcpPublicOriginResolver, McpPublicOriginResolver>();
+            .AddTransient<IMcpPublicOriginResolver, McpPublicOriginResolver>()
+            .AddTransient<IMcpOriginValidator, McpOriginValidator>();
         new McpScopeBuilder(services, scope)
             .WithChallengeWriter<UcpMcpChallengeWriter>()
             .WithPublicOriginResolver<UcpMcpPublicOriginResolver>();
@@ -193,6 +215,13 @@ public class UcpMcpSignInRequiredMiddlewareTests
         if (authorization != null)
         {
             context.Request.Headers.Authorization = authorization;
+        }
+
+        if (origin != null)
+        {
+            // The store UcpStoreContextMiddleware resolved for the request, whose URL is the scope's origin
+            UcpRequestOptions.SetStore(context, new Store { Id = "store", Url = "https://" + StubMcpScopeRegistry.ScopeHost }, new UcpOptions());
+            context.Request.Headers.Origin = origin;
         }
 
         await middleware.InvokeAsync(context, new StubProfileService(anonymousCatalog));
