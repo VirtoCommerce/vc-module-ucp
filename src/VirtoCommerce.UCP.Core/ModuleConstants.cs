@@ -6,7 +6,8 @@ namespace VirtoCommerce.UCP.Core;
 public static class ModuleConstants
 {
     public const string UcpVersion = "1.0";
-    public const string DiscoveryVersion = "2026-04-08";
+    // The UCP release the business profile (/.well-known/ucp) declares, and the version of its dev.ucp.* entries.
+    public const string DiscoveryVersion = "2026-08-25";
     public const string Source = "UCP";
     public const string Platform = "VirtoCommerce";
     // The MCP scope of the buyer tools, served by the MCP module at /ucp/mcp.
@@ -16,7 +17,15 @@ public static class ModuleConstants
         Use typed MCP tools for commerce operations.
         Available tools: link_buyer_identity, logout_buyer, get_store_capabilities, search_products, get_product, create_cart, list_carts,
         get_cart, update_cart, create_checkout, update_checkout, checkout_and_handoff, get_payment_handlers, handoff_checkout, list_countries,
-        resolve_country, list_regions, and track_order.
+        resolve_country, list_regions, track_order, search_catalog, lookup_catalog, cancel_cart, get_checkout, complete_checkout,
+        cancel_checkout, and get_order.
+        The standard UCP shopping tools (service dev.ucp.shopping, version 2026-08-25) are search_catalog, lookup_catalog, get_product,
+        create_cart, get_cart, update_cart, cancel_cart, create_checkout, get_checkout, update_checkout, complete_checkout, cancel_checkout, and get_order.
+        They take the standard arguments (meta, catalog, cart, checkout, id) and return the standard payload in structuredContent.
+        get_product, create_cart, get_cart, update_cart, create_checkout, and update_checkout also accept this server's flat arguments:
+        a call with catalog, cart, checkout, or meta (or with id instead of cart_id or checkout_id) gets the standard response; a flat call gets this server's response.
+        Standard calls of an anonymous buyer pass the buyer_id the standard cart or checkout returned, and may pass store_id.
+        complete_checkout does not take payment: it answers status requires_escalation with continue_url, where the buyer completes payment in the storefront.
         Do not pass storefront URLs to MCP tools. This MCP server already represents the target Virto Commerce UCP installation.
         Do not infer another target storefront from the MCP transport URL or user-provided links.
         Commerce tools execute local UCP services directly in this platform process.
@@ -89,7 +98,29 @@ public static class ModuleConstants
 
     public static class Discovery
     {
+        // Our own service: the same MCP endpoint, for the tools beyond the UCP standard (geography, handoff, order tracking).
         public const string Service = "com.virtocommerce.ucp";
+
+        // The standard UCP shopping service and capabilities, as an agent negotiates them.
+        public const string ShoppingService = "dev.ucp.shopping";
+        public const string SpecBaseUrl = "https://ucp.dev/" + DiscoveryVersion + "/specification/";
+        public const string SchemaBaseUrl = "https://ucp.dev/" + DiscoveryVersion + "/schemas/";
+        public const string ShoppingMcpSchemaUrl = "https://ucp.dev/" + DiscoveryVersion + "/services/shopping/mcp.openrpc.json";
+
+        public const string CatalogSearch = "dev.ucp.shopping.catalog.search";
+        public const string CatalogLookup = "dev.ucp.shopping.catalog.lookup";
+        public const string Cart = "dev.ucp.shopping.cart";
+        public const string Checkout = "dev.ucp.shopping.checkout";
+        public const string Order = "dev.ucp.shopping.order";
+        public const string IdentityLinking = "dev.ucp.common.identity_linking";
+
+        // The access a signed-in buyer grants an agent, in the identity linking scope format {capability}:{scope}.
+        public static readonly string[] IdentityLinkingScopes =
+        [
+            Cart + ":manage",
+            Checkout + ":manage",
+            Order + ":read",
+        ];
     }
 
     public static class Headers
@@ -193,6 +224,15 @@ public static class ModuleConstants
         public const string ListRegions = "list_regions";
         public const string RestoreHandoff = "restore_handoff";
         public const string LinkBuyerIdentity = "link_buyer_identity";
+
+        // The tools of the standard UCP MCP binding (dev.ucp.shopping) that do not share a name with our own tools.
+        public const string SearchCatalog = "search_catalog";
+        public const string LookupCatalog = "lookup_catalog";
+        public const string CancelCart = "cancel_cart";
+        public const string GetCheckout = "get_checkout";
+        public const string CompleteCheckout = "complete_checkout";
+        public const string CancelCheckout = "cancel_checkout";
+        public const string GetOrder = "get_order";
     }
 
     public static class McpTools
@@ -215,6 +255,36 @@ public static class ModuleConstants
             ListCountries,
             ResolveCountry,
             ListRegions,
+            SearchCatalog,
+            LookupCatalog,
+            CancelCart,
+            GetCheckout,
+            CompleteCheckout,
+            CancelCheckout,
+            GetOrder,
+        };
+
+        // The tools only the standard UCP MCP binding has; they have no REST action of ours.
+        public static IReadOnlySet<string> StandardOnlyToolNames { get; } = new HashSet<string>(System.StringComparer.Ordinal)
+        {
+            SearchCatalog,
+            LookupCatalog,
+            CancelCart,
+            GetCheckout,
+            CompleteCheckout,
+            CancelCheckout,
+            GetOrder,
+        };
+
+        // Our tools whose name the standard binding shares: each accepts our flat arguments and the standard ones.
+        public static IReadOnlySet<string> SharedToolNames { get; } = new HashSet<string>(System.StringComparer.Ordinal)
+        {
+            GetProduct,
+            CreateCart,
+            GetCart,
+            UpdateCart,
+            CreateCheckout,
+            UpdateCheckout,
         };
 
         public const string GetStoreCapabilities = Operations.GetStoreCapabilities;
@@ -235,6 +305,13 @@ public static class ModuleConstants
         public const string ListRegions = Operations.ListRegions;
         public const string LinkBuyerIdentity = Operations.LinkBuyerIdentity;
         public const string LogoutBuyer = "logout_buyer";
+        public const string SearchCatalog = Operations.SearchCatalog;
+        public const string LookupCatalog = Operations.LookupCatalog;
+        public const string CancelCart = Operations.CancelCart;
+        public const string GetCheckout = Operations.GetCheckout;
+        public const string CompleteCheckout = Operations.CompleteCheckout;
+        public const string CancelCheckout = Operations.CancelCheckout;
+        public const string GetOrder = Operations.GetOrder;
 
         public static bool IsUcpTool(string name)
         {

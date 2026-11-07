@@ -43,6 +43,13 @@ public class UcpOperationInputContractTests
         yield return Mcp(ModuleConstants.Operations.ListCountries, Args(("query", "country-marker"), ("limit", 10)), "country-marker");
         yield return Mcp(ModuleConstants.Operations.ResolveCountry, Args(("query", "resolve-marker")), "resolve-marker");
         yield return Mcp(ModuleConstants.Operations.ListRegions, Args(("country_id", "country-marker")), "country-marker");
+        yield return Mcp(ModuleConstants.Operations.SearchCatalog, Args(("catalog", new { query = "search-marker", context = new { postal_code = SecretAddress } })), "search-marker");
+        yield return Mcp(ModuleConstants.Operations.LookupCatalog, Args(("catalog", new { ids = new[] { "lookup-marker" } })), "catalog_id_count");
+        yield return Mcp(ModuleConstants.Operations.CancelCart, Args(("id", "cart-marker"), ("meta", new { idempotency_key = "key" })), "cart-marker");
+        yield return Mcp(ModuleConstants.Operations.GetCheckout, Args(("id", "checkout-marker"), ("buyer_id", "buyer-marker")), "checkout-marker");
+        yield return Mcp(ModuleConstants.Operations.CompleteCheckout, Args(("id", "checkout-marker"), ("checkout", new { payment = new { instruments = new[] { new { token = SecretSession } } } })), "checkout-marker");
+        yield return Mcp(ModuleConstants.Operations.CancelCheckout, Args(("id", "checkout-marker")), "checkout-marker");
+        yield return Mcp(ModuleConstants.Operations.GetOrder, Args(("id", "order-marker")), "order-marker");
     }
 
     private static IEnumerable<RestInputCase> RestCases()
@@ -101,8 +108,9 @@ public class UcpOperationInputContractTests
         var actualMcpOperations = McpCases().Select(x => x.Operation).OrderBy(x => x, StringComparer.Ordinal);
         Assert.Equal(expectedMcpOperations, actualMcpOperations);
 
+        // The standard-only UCP tools are MCP tools only.
         var expectedRestOperations = ModuleConstants.McpTools.UcpToolNames
-            .Where(x => x != ModuleConstants.Operations.CheckoutAndHandoff)
+            .Where(x => x != ModuleConstants.Operations.CheckoutAndHandoff && !ModuleConstants.McpTools.StandardOnlyToolNames.Contains(x))
             .Append(ModuleConstants.Operations.RestoreHandoff)
             .OrderBy(x => x, StringComparer.Ordinal);
         var actualRestOperations = RestCases().Select(x => x.Operation).OrderBy(x => x, StringComparer.Ordinal);

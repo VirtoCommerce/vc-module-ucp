@@ -12,6 +12,7 @@ using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Mcp.Models;
+using VirtoCommerce.UCP.Web.Mcp.Models.Standard;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
 
@@ -28,6 +29,13 @@ public static class UcpMcpCommerceTools
         "For physical goods, do not call until shipping_address.first_name, shipping_address.last_name, and " +
         "shipping_address.postal_code are provided, unless the store assigns cart addresses itself " +
         "(store_managed_addresses in get_store_capabilities); ask the user for missing values.";
+
+    private const string StandardMetaDescription =
+        "Standard UCP request metadata: {\"ucp-agent\": {\"profile\": \"<agent profile URL>\"}}. " +
+        "With it (or with the standard wrapper argument) the call is a standard UCP call and returns the standard payload.";
+
+    private const string StandardCallNote =
+        " Also the standard UCP tool of this name: a call with the standard arguments returns the standard UCP payload.";
 
     private const string TrackOrderNextStepNote =
         "Its next step for track_order carries placed_after (the handoff issued_at); " +
@@ -92,8 +100,9 @@ public static class UcpMcpCommerceTools
         });
     }
 
+    [SuppressMessage("Major Code Smell", "S107:Methods should not have too many parameters", Justification = FlatArgumentsJustification)]
     [McpServerTool(Name = ModuleConstants.McpTools.GetProduct, ReadOnly = true, Destructive = false)]
-    [Description("Get one product in this Virto Commerce storefront. Without a Platform bearer token this lookup is anonymous. If the user asks to use their account, act on their behalf, or use their organization or personalized prices, do not call this tool until link_buyer_identity succeeds.")]
+    [Description("Get one product in this Virto Commerce storefront. Without a Platform bearer token this lookup is anonymous. If the user asks to use their account, act on their behalf, or use their organization or personalized prices, do not call this tool until link_buyer_identity succeeds." + StandardCallNote)]
     public static Task<object> GetProduct(
         IUcpProfileService profileService,
         IUcpCatalogService catalogService,
@@ -102,8 +111,21 @@ public static class UcpMcpCommerceTools
         string store_id = null,
         string currency = null,
         string language = null,
+        [Description("Standard UCP get_product request: {\"id\": \"<product or variant id>\", \"context\": {...}}.")] UcpStandardGetProductRequest catalog = null,
+        [Description(StandardMetaDescription)] UcpStandardMeta meta = null,
+        UcpStandardMapper standardMapper = null,
         CancellationToken cancellationToken = default)
     {
+        if (UcpMcpStandardTools.IsStandardCall(catalog, meta))
+        {
+            return UcpMcpStandardTools.GetProduct(
+                new UcpMcpStandardCall(profileService, standardMapper, cancellationToken),
+                catalogService,
+                catalog,
+                FirstNotEmpty(product_id, id),
+                new UcpCatalogSearchRequest { StoreId = store_id, Currency = currency, Language = language });
+        }
+
         return Execute<object>(async () =>
         {
             var productId = FirstNotEmpty(product_id, id);
@@ -135,11 +157,12 @@ public static class UcpMcpCommerceTools
         "Create a cart in this Virto Commerce storefront, or add to the buyer's storefront cart: a signed-in buyer's lines are added to the cart they already have, " +
         "so tell the user when it already holds items. Without a Platform bearer token this creates an anonymous cart. " +
         "If the user asks for 'my cart', to act on their behalf, or to use their account or organization, do not call this tool " +
-        "until link_buyer_identity succeeds. Buyer and organization then come only from the validated Platform token; never invent them.")]
+        "until link_buyer_identity succeeds. Buyer and organization then come only from the validated Platform token; never invent them." + StandardCallNote)]
+    [SuppressMessage("Major Code Smell", "S107:Methods should not have too many parameters", Justification = FlatArgumentsJustification)]
     public static Task<object> CreateCart(
         IUcpProfileService profileService,
         IUcpCartService cartService,
-        [Description("Cart line items to add.")] IList<UcpCartLineItemRequest> line_items,
+        [Description("Cart line items to add. Required unless the standard cart argument is given.")] IList<UcpCartLineItemRequest> line_items = null,
         string store_id = null,
         string currency = null,
         string language = null,
@@ -147,21 +170,30 @@ public static class UcpMcpCommerceTools
         [Description("Stable cart name used together with buyer_id and store_id.")] string cart_name = null,
         string cart_type = null,
         IList<string> coupons = null,
+        [Description("Standard UCP cart: {\"line_items\": [{\"item\": {\"id\": \"<product id>\"}, \"quantity\": 1}], \"context\": {...}}.")] UcpStandardCartRequest cart = null,
+        [Description(StandardMetaDescription)] UcpStandardMeta meta = null,
+        UcpStandardMapper standardMapper = null,
         CancellationToken cancellationToken = default)
     {
+        var arguments = new CartToolArguments
+        {
+            StoreId = store_id,
+            Currency = currency,
+            Language = language,
+            BuyerId = buyer_id,
+            CartName = cart_name,
+            CartType = cart_type,
+            LineItems = line_items,
+            Coupons = coupons,
+        };
+        if (UcpMcpStandardTools.IsStandardCall(cart, meta))
+        {
+            return UcpMcpStandardTools.CreateCart(new UcpMcpStandardCall(profileService, standardMapper, cancellationToken), cartService, arguments, cart);
+        }
+
         return Execute(async () =>
         {
-            var request = CreateCartRequest(new CartToolArguments
-            {
-                StoreId = store_id,
-                Currency = currency,
-                Language = language,
-                BuyerId = buyer_id,
-                CartName = cart_name,
-                CartType = cart_type,
-                LineItems = line_items,
-                Coupons = coupons,
-            });
+            var request = CreateCartRequest(arguments);
             ApplyCartDefaults(request, await profileService.GetProfile(cancellationToken));
 
             return await cartService.CreateCart(request, cancellationToken);
@@ -204,27 +236,38 @@ public static class UcpMcpCommerceTools
         });
     }
 
+    [SuppressMessage("Major Code Smell", "S107:Methods should not have too many parameters", Justification = FlatArgumentsJustification)]
     [McpServerTool(Name = ModuleConstants.McpTools.GetCart, ReadOnly = true, Destructive = false)]
-    [Description("Get a cart in this Virto Commerce storefront. For the user's account, organization, or saved cart, do not call this tool until link_buyer_identity succeeds; authenticated buyer identity comes from the Platform token.")]
+    [Description("Get a cart in this Virto Commerce storefront. For the user's account, organization, or saved cart, do not call this tool until link_buyer_identity succeeds; authenticated buyer identity comes from the Platform token." + StandardCallNote)]
     public static Task<object> GetCart(
         IUcpProfileService profileService,
         IUcpCartService cartService,
-        string cart_id,
+        [Description("Cart id. Required unless the standard id is given.")] string cart_id = null,
         string store_id = null,
         string currency = null,
         string language = null,
         string buyer_id = null,
+        [Description("Standard UCP cart id; given instead of cart_id, the call is a standard UCP call.")] string id = null,
+        [Description(StandardMetaDescription)] UcpStandardMeta meta = null,
+        UcpStandardMapper standardMapper = null,
         CancellationToken cancellationToken = default)
     {
+        var arguments = new CartToolArguments
+        {
+            StoreId = store_id,
+            Currency = currency,
+            Language = language,
+            BuyerId = buyer_id,
+        };
+        if (UcpMcpStandardTools.IsStandardCall(null, meta, id, cart_id))
+        {
+            return UcpMcpStandardTools.GetCart(new UcpMcpStandardCall(profileService, standardMapper, cancellationToken), cartService, FirstNotEmpty(id, cart_id), arguments);
+        }
+
         return Execute(async () =>
         {
-            var request = CreateCartRequest(new CartToolArguments
-            {
-                StoreId = store_id,
-                Currency = currency,
-                Language = language,
-                BuyerId = buyer_id,
-            });
+            RequireArgument(cart_id, "cart_id");
+            var request = CreateCartRequest(arguments);
             ApplyCartDefaults(request, await profileService.GetProfile(cancellationToken));
 
             return await cartService.GetCart(cart_id, request, cancellationToken);
@@ -236,12 +279,12 @@ public static class UcpMcpCommerceTools
     [Description(
         "Update cart state in this Virto Commerce storefront. This replaces the cart's line items with the complete desired line_items state: " +
         "lines not listed are removed, so read the cart first and send every line that should remain. " +
-        "For the user's account, organization, or cart, do not call this tool until link_buyer_identity succeeds; authenticated buyer identity comes from the Platform token.")]
+        "For the user's account, organization, or cart, do not call this tool until link_buyer_identity succeeds; authenticated buyer identity comes from the Platform token." + StandardCallNote)]
     public static Task<object> UpdateCart(
         IUcpProfileService profileService,
         IUcpCartService cartService,
-        string cart_id,
-        [Description("The complete desired line items of the cart, not a delta. Existing lines that are not listed are removed.")] IList<UcpCartLineItemRequest> line_items,
+        [Description("Cart id. Required unless the standard id is given.")] string cart_id = null,
+        [Description("The complete desired line items of the cart, not a delta. Existing lines that are not listed are removed. Required unless the standard cart argument is given.")] IList<UcpCartLineItemRequest> line_items = null,
         string store_id = null,
         string currency = null,
         string language = null,
@@ -249,21 +292,38 @@ public static class UcpMcpCommerceTools
         string cart_name = null,
         string cart_type = null,
         IList<string> coupons = null,
+        [Description("Standard UCP cart id; given instead of cart_id, the call is a standard UCP call.")] string id = null,
+        [Description("Standard UCP cart: {\"line_items\": [...]}, the complete desired line items (a line keeps its id; item.id is the product id).")] UcpStandardCartRequest cart = null,
+        [Description(StandardMetaDescription)] UcpStandardMeta meta = null,
+        UcpStandardMapper standardMapper = null,
         CancellationToken cancellationToken = default)
     {
+        var arguments = new CartToolArguments
+        {
+            StoreId = store_id,
+            Currency = currency,
+            Language = language,
+            BuyerId = buyer_id,
+            CartName = cart_name,
+            CartType = cart_type,
+            LineItems = line_items,
+            Coupons = coupons,
+        };
+        if (UcpMcpStandardTools.IsStandardCall(cart, meta, id, cart_id))
+        {
+            return UcpMcpStandardTools.UpdateCart(new UcpMcpStandardCall(profileService, standardMapper, cancellationToken), cartService, FirstNotEmpty(id, cart_id), arguments, cart);
+        }
+
         return Execute(async () =>
         {
-            var request = CreateCartRequest(new CartToolArguments
+            RequireArgument(cart_id, "cart_id");
+            // Without line_items the complete desired state would be an empty cart: require them rather than clear it.
+            if (line_items == null)
             {
-                StoreId = store_id,
-                Currency = currency,
-                Language = language,
-                BuyerId = buyer_id,
-                CartName = cart_name,
-                CartType = cart_type,
-                LineItems = line_items,
-                Coupons = coupons,
-            });
+                throw new UcpException(ModuleConstants.ErrorCodes.InvalidRequest, "line_items is required: send the complete desired line items.");
+            }
+
+            var request = CreateCartRequest(arguments);
             ApplyCartDefaults(request, await profileService.GetProfile(cancellationToken));
 
             return await cartService.UpdateCart(cart_id, request, cancellationToken);
@@ -274,11 +334,11 @@ public static class UcpMcpCommerceTools
     [McpServerTool(Name = ModuleConstants.McpTools.CreateCheckout, ReadOnly = false, Destructive = false)]
     [Description(
         "Create checkout in this Virto Commerce storefront. For the user's account or organization, do not call this tool " +
-        "until link_buyer_identity succeeds. " + ShippingAddressRequirement)]
+        "until link_buyer_identity succeeds. " + ShippingAddressRequirement + StandardCallNote)]
     public static Task<object> CreateCheckout(
         IUcpProfileService profileService,
         IUcpCheckoutService checkoutService,
-        string cart_id,
+        [Description("Cart id. Required unless the standard checkout argument is given.")] string cart_id = null,
         string store_id = null,
         string currency = null,
         string language = null,
@@ -291,26 +351,38 @@ public static class UcpMcpCommerceTools
         [McpSensitive] UcpCheckoutAddress billing_address = null,
         string payment_handler = null,
         string notes = null,
+        [Description("Standard UCP checkout: {\"cart_id\": \"<cart id>\"} or {\"line_items\": [{\"item\": {\"id\": \"<product id>\"}, \"quantity\": 1}]}, " +
+            "with buyer and fulfillment.methods[].destinations[] (the shipping address).")] UcpStandardCheckoutRequest checkout = null,
+        [Description(StandardMetaDescription)] UcpStandardMeta meta = null,
+        IUcpCartService cartService = null,
+        UcpStandardMapper standardMapper = null,
         CancellationToken cancellationToken = default)
     {
+        var arguments = new CheckoutToolArguments
+        {
+            CartId = cart_id,
+            StoreId = store_id,
+            Currency = currency,
+            Language = language,
+            BuyerId = buyer_id,
+            Buyer = buyer,
+            BuyerEmail = buyer_email,
+            BuyerName = buyer_name,
+            BuyerPhone = buyer_phone,
+            ShippingAddress = shipping_address,
+            BillingAddress = billing_address,
+            PaymentHandler = payment_handler,
+            Notes = notes,
+        };
+        if (UcpMcpStandardTools.IsStandardCall(checkout, meta))
+        {
+            return UcpMcpStandardTools.CreateCheckout(
+                new UcpMcpStandardCall(profileService, standardMapper, cancellationToken), cartService, checkoutService, arguments, checkout);
+        }
+
         return Execute(async () =>
         {
-            var request = CreateCheckoutRequest(new CheckoutToolArguments
-            {
-                CartId = cart_id,
-                StoreId = store_id,
-                Currency = currency,
-                Language = language,
-                BuyerId = buyer_id,
-                Buyer = buyer,
-                BuyerEmail = buyer_email,
-                BuyerName = buyer_name,
-                BuyerPhone = buyer_phone,
-                ShippingAddress = shipping_address,
-                BillingAddress = billing_address,
-                PaymentHandler = payment_handler,
-                Notes = notes,
-            });
+            var request = CreateCheckoutRequest(arguments);
             ApplyCheckoutDefaults(request, await profileService.GetProfile(cancellationToken));
 
             return await checkoutService.CreateCheckout(request, cancellationToken);
@@ -319,11 +391,11 @@ public static class UcpMcpCommerceTools
 
     [SuppressMessage("Major Code Smell", "S107:Methods should not have too many parameters", Justification = FlatArgumentsJustification)]
     [McpServerTool(Name = ModuleConstants.McpTools.UpdateCheckout, ReadOnly = false, Destructive = false)]
-    [Description("Update checkout address or buyer data in this Virto Commerce storefront. For the user's account or organization, do not call this tool until link_buyer_identity succeeds.")]
+    [Description("Update checkout address or buyer data in this Virto Commerce storefront. For the user's account or organization, do not call this tool until link_buyer_identity succeeds." + StandardCallNote)]
     public static Task<object> UpdateCheckout(
         IUcpProfileService profileService,
         IUcpCheckoutService checkoutService,
-        string checkout_id,
+        [Description("Checkout id. Required unless the standard id is given.")] string checkout_id = null,
         string cart_id = null,
         string store_id = null,
         string currency = null,
@@ -337,33 +409,46 @@ public static class UcpMcpCommerceTools
         [McpSensitive] UcpCheckoutAddress billing_address = null,
         string payment_handler = null,
         string notes = null,
+        [Description("Standard UCP checkout id; given instead of checkout_id, the call is a standard UCP call.")] string id = null,
+        [Description("Standard UCP checkout: line_items (the complete desired lines), buyer, and fulfillment.methods[].destinations[] (the shipping address).")] UcpStandardCheckoutRequest checkout = null,
+        [Description(StandardMetaDescription)] UcpStandardMeta meta = null,
+        IUcpCartService cartService = null,
+        UcpStandardMapper standardMapper = null,
         CancellationToken cancellationToken = default)
     {
+        var arguments = new CheckoutToolArguments
+        {
+            CartId = FirstNotEmpty(cart_id, checkout_id, id),
+            StoreId = store_id,
+            Currency = currency,
+            Language = language,
+            BuyerId = buyer_id,
+            Buyer = buyer,
+            BuyerEmail = buyer_email,
+            BuyerName = buyer_name,
+            BuyerPhone = buyer_phone,
+            ShippingAddress = shipping_address,
+            BillingAddress = billing_address,
+            PaymentHandler = payment_handler,
+            Notes = notes,
+        };
+        if (UcpMcpStandardTools.IsStandardCall(checkout, meta, id, checkout_id, cart_id))
+        {
+            return UcpMcpStandardTools.UpdateCheckout(
+                new UcpMcpStandardCall(profileService, standardMapper, cancellationToken), cartService, checkoutService, FirstNotEmpty(id, checkout_id, cart_id), arguments, checkout);
+        }
+
         return Execute(async () =>
         {
-            var request = CreateCheckoutRequest(new CheckoutToolArguments
-            {
-                CartId = FirstNotEmpty(cart_id, checkout_id),
-                StoreId = store_id,
-                Currency = currency,
-                Language = language,
-                BuyerId = buyer_id,
-                Buyer = buyer,
-                BuyerEmail = buyer_email,
-                BuyerName = buyer_name,
-                BuyerPhone = buyer_phone,
-                ShippingAddress = shipping_address,
-                BillingAddress = billing_address,
-                PaymentHandler = payment_handler,
-                Notes = notes,
-            });
+            RequireArgument(checkout_id, "checkout_id");
+            var request = CreateCheckoutRequest(arguments);
             ApplyCheckoutDefaults(request, await profileService.GetProfile(cancellationToken));
 
-            var checkout = await checkoutService.UpdateCheckout(checkout_id, request, cancellationToken);
+            var checkoutResponse = await checkoutService.UpdateCheckout(checkout_id, request, cancellationToken);
 
             return new UcpMcpUpdateCheckoutResult
             {
-                Result = checkout,
+                Result = checkoutResponse,
                 NextStep = new UcpMcpNextToolStep
                 {
                     Tool = ModuleConstants.McpTools.HandoffCheckout,
@@ -587,7 +672,15 @@ public static class UcpMcpCommerceTools
         return await action();
     }
 
-    private static UcpCartRequest CreateCartRequest(CartToolArguments arguments)
+    private static void RequireArgument(string value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new UcpException(ModuleConstants.ErrorCodes.InvalidRequest, $"{name} is required.");
+        }
+    }
+
+    internal static UcpCartRequest CreateCartRequest(CartToolArguments arguments)
     {
         return new UcpCartRequest
         {
@@ -610,7 +703,7 @@ public static class UcpMcpCommerceTools
         };
     }
 
-    private static UcpCheckoutRequest CreateCheckoutRequest(CheckoutToolArguments arguments)
+    internal static UcpCheckoutRequest CreateCheckoutRequest(CheckoutToolArguments arguments)
     {
         var buyer = MergeBuyerHints(
             arguments.Buyer,
@@ -752,7 +845,7 @@ public static class UcpMcpCommerceTools
         }
     }
 
-    private static UcpCartContext CreateCartContext(
+    internal static UcpCartContext CreateCartContext(
         string storeId,
         string currency,
         string language,
@@ -771,7 +864,7 @@ public static class UcpMcpCommerceTools
         };
     }
 
-    private static void ApplyCatalogDefaults(UcpCatalogSearchRequest request, UcpProfile profile)
+    internal static void ApplyCatalogDefaults(UcpCatalogSearchRequest request, UcpProfile profile)
     {
         request.Context ??= new UcpCatalogContext();
         var requestedStoreId = FirstNotEmpty(request.Context.StoreId, request.StoreId);
@@ -784,7 +877,7 @@ public static class UcpMcpCommerceTools
         request.Language = FirstNotEmpty(request.Language, request.Context.Language);
     }
 
-    private static void ApplyCartDefaults(UcpCartRequest request, UcpProfile profile)
+    internal static void ApplyCartDefaults(UcpCartRequest request, UcpProfile profile)
     {
         request.Context ??= new UcpCartContext();
         ApplyCartContextDefaults(request.Context, profile);
@@ -797,7 +890,7 @@ public static class UcpMcpCommerceTools
         request.CartType = FirstNotEmpty(request.CartType, request.Context.CartType);
     }
 
-    private static void ApplyCheckoutDefaults(UcpCheckoutRequest request, UcpProfile profile)
+    internal static void ApplyCheckoutDefaults(UcpCheckoutRequest request, UcpProfile profile)
     {
         request.Context ??= new UcpCartContext();
         ApplyCartContextDefaults(request.Context, profile);
@@ -808,7 +901,7 @@ public static class UcpMcpCommerceTools
         request.OrganizationId = FirstNotEmpty(request.OrganizationId, request.Context.OrganizationId);
     }
 
-    private static void ApplyCartContextDefaults(UcpCartContext context, UcpProfile profile)
+    internal static void ApplyCartContextDefaults(UcpCartContext context, UcpProfile profile)
     {
         var store = GetStore(profile, context.StoreId);
         context.StoreId = FirstNotEmpty(context.StoreId, store?.Id);
@@ -816,7 +909,7 @@ public static class UcpMcpCommerceTools
         context.Language = FirstNotEmpty(context.Language, store?.DefaultLanguage);
     }
 
-    private static UcpStoreProfile GetStore(UcpProfile profile, string storeId)
+    internal static UcpStoreProfile GetStore(UcpProfile profile, string storeId)
     {
         if (profile == null)
         {
@@ -868,7 +961,7 @@ public static class UcpMcpCommerceTools
         return stores?.Count == 1 ? stores[0] : null;
     }
 
-    private static string FirstNotEmpty(params string[] values)
+    internal static string FirstNotEmpty(params string[] values)
     {
         return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
     }

@@ -84,6 +84,7 @@ public class UcpProfileServiceTests
             .Select(x => x.Name)
             .OrderBy(x => x, System.StringComparer.Ordinal)
             .ToList();
+        // Every registered tool, and nothing else, is listed.
         Assert.Equal(declaredTools, profile.McpTools.OrderBy(x => x, System.StringComparer.Ordinal).ToList());
     }
 
@@ -110,8 +111,20 @@ public class UcpProfileServiceTests
         Assert.Equal(ModuleConstants.DiscoveryVersion, serviceProfile.Version);
         Assert.Equal("mcp", serviceProfile.Transport);
         Assert.Equal("https://acme.example/ucp/mcp", serviceProfile.Endpoint);
-        Assert.Equal(ModuleConstants.DiscoveryVersion, profile.Ucp.Capabilities["com.virtocommerce.ucp.catalog"].Single().Version);
-        Assert.Equal(ModuleConstants.DiscoveryVersion, profile.Ucp.Capabilities["com.virtocommerce.ucp.checkout"].Single().Version);
+        var shoppingService = Assert.Single(profile.Ucp.Services[ModuleConstants.Discovery.ShoppingService]);
+        Assert.Equal("2026-08-25", shoppingService.Version);
+        Assert.Equal("mcp", shoppingService.Transport);
+        Assert.Equal("https://acme.example/ucp/mcp", shoppingService.Endpoint);
+        Assert.Equal("https://ucp.dev/2026-08-25/services/shopping/mcp.openrpc.json", shoppingService.Schema);
+        Assert.Equal(
+            ["dev.ucp.common.identity_linking", "dev.ucp.shopping.cart", "dev.ucp.shopping.catalog.lookup", "dev.ucp.shopping.catalog.search", "dev.ucp.shopping.checkout", "dev.ucp.shopping.order"],
+            profile.Ucp.Capabilities.Keys.Order());
+        Assert.All(profile.Ucp.Capabilities.Values.SelectMany(x => x), x =>
+        {
+            Assert.Equal("2026-08-25", x.Version);
+            Assert.StartsWith("https://ucp.dev/2026-08-25/specification/", x.Spec);
+            Assert.StartsWith("https://ucp.dev/2026-08-25/schemas/", x.Schema);
+        });
         Assert.Equal(ModuleConstants.UcpVersion, profile.UcpVersion);
         Assert.Equal(ModuleConstants.Platform, profile.Platform);
         Assert.Contains(ModuleConstants.ErrorCodes.OutOfStock, profile.Errors.Codes);
@@ -175,6 +188,11 @@ public class UcpProfileServiceTests
         Assert.Equal(JTokenType.Object, json["ucp"]?["services"]?.Type);
         Assert.Equal(JTokenType.Object, json["ucp"]?["capabilities"]?.Type);
         Assert.Equal(JTokenType.Object, json["ucp"]?["payment_handlers"]?.Type);
+        Assert.Equal(
+            ["dev.ucp.shopping.cart:manage", "dev.ucp.shopping.checkout:manage", "dev.ucp.shopping.order:read"],
+            ((JObject)json["ucp"]["capabilities"]["dev.ucp.common.identity_linking"][0]["config"]["scopes"]).Properties().Select(x => x.Name));
+        Assert.Null(json["ucp"]["capabilities"]["dev.ucp.shopping.cart"][0]["config"]);
+        Assert.Null(json["ucp"]["services"][ModuleConstants.Discovery.Service][0]["schema"]);
     }
 
     [Fact]
@@ -267,7 +285,8 @@ public class UcpProfileServiceTests
         var profile = await service.GetProfile(TestContext.Current.CancellationToken);
 
         Assert.Contains(ModuleConstants.McpTools.LogoutBuyer, profile.McpTools);
-        Assert.Equal(18, profile.McpTools.Count);
+        Assert.Equal(25, profile.McpTools.Count);
+        Assert.Contains(ModuleConstants.McpTools.CompleteCheckout, profile.McpTools);
         Assert.Contains(ModuleConstants.ErrorCodes.HandoffInProgress, profile.Errors.Codes);
     }
 

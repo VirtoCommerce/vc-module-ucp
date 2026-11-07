@@ -92,6 +92,33 @@ public class UcpCheckoutServiceTests
         Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, replay.Code);
     }
 
+    [Theory]
+    [InlineData("  ")]
+    [InlineData("\n  ")]
+    [InlineData("\r\n\t")]
+    public async Task RestoreHandoff_ReadsATokenThatALineWrapBrokeWithWhitespace(string wrap)
+    {
+        // Arrange: a link copied from a wrapped line of a terminal or a chat
+        var cart = CreateCart();
+        cart.Addresses.Add(CreateShippingAddress());
+        var service = CreateService(new StubCartService(cart), new StubHandoffSessionStore(), new TestDistributedLock());
+        var handoff = await service.HandoffCheckout("cart-1", new UcpCheckoutRequest
+        {
+            Context = new UcpCartContext { StoreId = "store-acme", Currency = "USD", Language = "en-US" },
+            Buyer = new UcpCheckoutBuyer { Email = "buyer@example.com" },
+        }, TestContext.Current.CancellationToken);
+        var token = System.Uri.UnescapeDataString(handoff.Checkout.ContinueUrl.Split("ucp_session=").Last());
+
+        // Act
+        var restore = await service.RestoreHandoff(new UcpHandoffRestoreRequest
+        {
+            UcpSession = " " + token[..20] + wrap + token[20..] + "\n",
+        }, TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.Equal("cart-1", restore.Checkout.CartId);
+    }
+
     [Fact]
     public async Task HandoffCheckout_ReturnsIssuedAtOneTtlBeforeExpiresAtAndStoresTheSameInstant()
     {

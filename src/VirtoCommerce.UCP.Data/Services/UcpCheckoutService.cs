@@ -180,7 +180,9 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "ucp_session is required.");
         }
 
-        var cacheKey = GetHandoffSessionCacheKey(request.UcpSession);
+        // A token is base64url and has no whitespace: a link copied from a wrapped line of text brings spaces and line
+        // breaks into it, which would otherwise make a valid session look expired.
+        var cacheKey = GetHandoffSessionCacheKey(RemoveWhitespace(request.UcpSession));
         await using var handle = await _distributedLock.TryAcquireAsync(cacheKey, HandoffRestoreLockTimeout, cancellationToken);
         if (handle is null)
         {
@@ -631,6 +633,11 @@ public class UcpCheckoutService : UcpServiceBase, IUcpCheckoutService
             .TrimEnd('=')
             .Replace('+', '-')
             .Replace('/', '_');
+    }
+
+    private static string RemoveWhitespace(string value)
+    {
+        return string.Concat(value.Where(x => !char.IsWhiteSpace(x)));
     }
 
     protected virtual string GetHandoffSessionCacheKey(string sessionToken)

@@ -97,6 +97,47 @@ internal sealed class UcpOperationInputCapture
         {
             CaptureMcpCheckoutAndLookup(operation, arguments);
         }
+
+        CaptureMcpStandard(arguments);
+    }
+
+    // The arguments of the standard UCP binding (meta, id, and the catalog, cart or checkout wrapper): identifiers,
+    // the search text and counts, never buyer data.
+    private void CaptureMcpStandard(IDictionary<string, JsonElement> arguments)
+    {
+        if (arguments.TryGetValue("meta", out var meta) && meta.ValueKind == JsonValueKind.Object)
+        {
+            _input["meta_present"] = true;
+            _input["idempotency_key_present"] = IsJsonPropertyPresent(meta, "idempotency-key");
+        }
+
+        AddMcpIdentifier(arguments, _input, "id", "id");
+        if (arguments.TryGetValue("catalog", out var catalog) && catalog.ValueKind == JsonValueKind.Object)
+        {
+            AddQuery(GetJsonString(catalog, "query"));
+            AddIdentifier(_input, "catalog_id", GetJsonString(catalog, "id"), "catalog_id");
+            if (catalog.TryGetProperty("ids", out var ids) && ids.ValueKind == JsonValueKind.Array)
+            {
+                _input["catalog_id_count"] = ids.GetArrayLength();
+            }
+        }
+
+        foreach (var name in new[] { "cart", "checkout" })
+        {
+            if (!arguments.TryGetValue(name, out var wrapper) || wrapper.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            if (wrapper.TryGetProperty("line_items", out var lineItems) && lineItems.ValueKind == JsonValueKind.Array)
+            {
+                _input[$"{name}_line_item_count"] = lineItems.GetArrayLength();
+            }
+
+            AddIdentifier(_input, $"{name}_cart_id", GetJsonString(wrapper, "cart_id"), $"{name}_cart_id");
+            _input[$"{name}_buyer_present"] = IsJsonPropertyPresent(wrapper, "buyer");
+            _input[$"{name}_fulfillment_present"] = IsJsonPropertyPresent(wrapper, "fulfillment");
+        }
     }
 
     private bool CaptureMcpCatalogAndCart(string operation, IDictionary<string, JsonElement> arguments)
@@ -178,6 +219,16 @@ internal sealed class UcpOperationInputCapture
                 break;
             case ModuleConstants.Operations.ListRegions:
                 AddMcpIdentifier(arguments, _input, "country_id", "country_id");
+                break;
+            case ModuleConstants.Operations.SearchCatalog:
+            case ModuleConstants.Operations.LookupCatalog:
+            case ModuleConstants.Operations.CancelCart:
+            case ModuleConstants.Operations.GetCheckout:
+            case ModuleConstants.Operations.CompleteCheckout:
+            case ModuleConstants.Operations.CancelCheckout:
+            case ModuleConstants.Operations.GetOrder:
+                // The standard arguments are captured for every tool; these add store_id and the buyer_id presence.
+                AddMcpCartContext(arguments);
                 break;
         }
     }

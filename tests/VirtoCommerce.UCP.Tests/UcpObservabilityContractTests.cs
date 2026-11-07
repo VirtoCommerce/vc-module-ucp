@@ -701,8 +701,10 @@ public class UcpObservabilityContractTests
         return context;
     }
 
+    // create_cart and the other tools whose name the standard UCP binding shares take either argument shape, so they
+    // declare no required argument and check it themselves (UcpMcpStandardToolsTests).
     [Theory]
-    [InlineData(nameof(UcpMcpCommerceTools.CreateCart), "line_items")]
+    [InlineData(nameof(UcpMcpCommerceTools.ResolveCountry), "query")]
     [InlineData(nameof(UcpMcpCommerceTools.GetPaymentHandlers), "checkout_id")]
     [InlineData(nameof(UcpMcpCommerceTools.ListRegions), "country_id")]
     public void McpRequiredArgument_IsDeclaredInTheInputSchema(string methodName, string requiredArgument)

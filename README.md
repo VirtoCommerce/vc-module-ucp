@@ -5,7 +5,7 @@
 The UCP module lets AI assistants such as Claude and ChatGPT shop a Virto Commerce store for a buyer: find products, build a cart, and hand the buyer over to the store's own checkout. It implements the Universal Commerce Protocol (UCP) on top of the platform's commerce modules, with two entry points:
 
 * the UCP REST API: discovery at `/.well-known/ucp`, and catalog, cart, checkout handoff, geography and order tracking at `/ucp/v1/*`;
-* the buyer MCP endpoint `/ucp/mcp`, the `ucp` scope of the [MCP module](https://github.com/VirtoCommerce/vc-module-mcp): the MCP module serves the endpoint, signs buyers in with the platform's OAuth, audits every call and exports the telemetry, and UCP provides the 18 shopping tools.
+* the buyer MCP endpoint `/ucp/mcp`, the `ucp` scope of the [MCP module](https://github.com/VirtoCommerce/vc-module-mcp): the MCP module serves the endpoint, signs buyers in with the platform's OAuth, audits every call and exports the telemetry, and UCP provides the 25 shopping tools: its own, and the tools of the standard UCP MCP binding (see [UCP standard tools](#ucp-standard-tools)).
 
 `VirtoCommerce.UCP` is a protocol adapter. It does not replace the Catalog, Cart, Orders, Experience API (XAPI), Store or Marketing modules: a request becomes in-process XAPI and platform service calls, without an extra HTTP hop. Public UCP endpoints have no `/api` prefix.
 
@@ -211,6 +211,8 @@ Each AI assistant signs buyers in through a registered OAuth client. As an admin
 
 Select **Save**, and give the client ID to whoever sets up the assistant. What the screen shows after saving is what is stored, as `rsrc:` permissions for the resources.
 
+An assistant that follows the store's UCP profile can ask for the identity linking scopes `dev.ucp.shopping.cart:manage`, `dev.ucp.shopping.checkout:manage` and `dev.ucp.shopping.order:read`. The platform lets a client ask only for the scopes its application allows: add them to the client's scopes (stored as `scp:` permissions), or the sign-in fails with `invalid_scope`. An assistant that signs in through the MCP challenge asks for `openid profile offline_access` and needs nothing more.
+
 ![A shopping assistant client for /ucp/mcp in Security → OAuth applications of the Admin Shell](docs/media/oauth-app-shopping-assistant.png)
 
 ### 6. Connect the AI assistant
@@ -296,6 +298,7 @@ sequenceDiagram
 - Logging out does not cancel checkout links issued before logout, and an issued link cannot be revoked early. It stops working after it is used or expires.
 - For a signed-in buyer, creating a cart adds items to the buyer's existing default cart instead of starting a new, empty cart.
 - A shipping address given to the assistant can update the matching address saved on the buyer's account.
+- Gifts that a promotion adds to the cart (a cart line with `isGift`, at zero price) are not returned in the cart, checkout or handoff responses, so the assistant does not mention them; the buyer sees them in the storefront cart and in the order.
 
 ## Manage shopping assistants in the back office
 
@@ -580,7 +583,7 @@ The writer, the resolver and the filter are declared with the scope, so they ser
 The MCP module serves the endpoint: the transport, sign-in and token checks, tool switches, argument validation, the audit log and the tool call span ([Scopes](https://github.com/VirtoCommerce/vc-module-mcp#scopes), [Tool call flow](https://github.com/VirtoCommerce/vc-module-mcp#tool-call-flow)). UCP adds:
 
 * the tools in the table below, which call the same UCP services as the REST API;
-* `UcpMcpCallToolFilter`: for the 16 commerce tools, the `store_id` checks, UCP and XAPI error envelopes, the `UCP {operation}` span, and the trace id in `_meta.trace_id` and in the text of the result;
+* `UcpMcpCallToolFilter`: for the 23 commerce tools (16 of ours and the 7 standard-only ones), the `store_id` checks, UCP and XAPI error envelopes, the `UCP {operation}` span, and the trace id in `_meta.trace_id` and in the text of the result;
 * `UcpMcpChallengeWriter`: UCP's `identity_required` body of the HTTP 401 and 403 responses;
 * `UcpMcpPublicOriginResolver`: the public origin of the scope, from `MCP:Scopes:ucp:PublicOrigin` or the request's store (see [Multiple instances and the public origin](#multiple-instances-and-the-public-origin)); the MCP module's global `MCP:PublicOrigin` does not apply to this scope. Either origin counts as configured for the MCP module's token check, so a signed-in buyer's token is accepted outside Development with only the store's URL set; the request's own origin, the last fallback, does not.
 
@@ -595,8 +598,47 @@ To serve the scope also at `https://store.example.com/mcp`, set `MCP:Scopes:ucp:
 | Orders | `track_order` |
 | Geography | `list_countries`, `resolve_country`, `list_regions` |
 | Buyer identity | `link_buyer_identity`, `logout_buyer` |
+| UCP standard (`dev.ucp.shopping`) | `search_catalog`, `lookup_catalog`, `cancel_cart`, `get_checkout`, `complete_checkout`, `cancel_checkout`, `get_order`, and the standard shape of `get_product`, `create_cart`, `get_cart`, `update_cart`, `create_checkout`, `update_checkout` |
 
 The tools take no storefront URL: the endpoint is the store, and the tools run UCP's services in the platform process.
+
+### UCP standard tools
+
+The scope also serves the standard UCP MCP binding, version `2026-08-25` (service `dev.ucp.shopping`, [`mcp.openrpc.json`](https://ucp.dev/2026-08-25/services/shopping/mcp.openrpc.json)), on the same endpoint and next to the module's own tools:
+
+| Capability | Tools |
+| --- | --- |
+| `dev.ucp.shopping.catalog.search` | `search_catalog` |
+| `dev.ucp.shopping.catalog.lookup` | `lookup_catalog`, `get_product` |
+| `dev.ucp.shopping.cart` | `create_cart`, `get_cart`, `update_cart`, `cancel_cart` |
+| `dev.ucp.shopping.checkout` | `create_checkout`, `get_checkout`, `update_checkout`, `complete_checkout`, `cancel_checkout` |
+| `dev.ucp.shopping.order` | `get_order` |
+
+A standard call returns the UCP payload in `structuredContent` and the same JSON as text in `content`. Its `ucp` block has `version` `2026-08-25`, the capability of the tool, and for a checkout an empty `payment_handlers`; amounts are integer minor units. A UCP error returns the standard `error_response` (`ucp.status` `error`, one `error` message) with `isError: true`. The message code is ours, except `product_not_found`, `cart_not_found` and `order_not_found`, which become the standard `not_found` (severity `unrecoverable`); `_meta.error_code` keeps our code.
+
+**One tool for both shapes.** `get_product`, `create_cart`, `get_cart`, `update_cart`, `create_checkout` and `update_checkout` are each one tool that accepts our flat arguments and the standard ones. A call is standard when it has the standard wrapper argument (`catalog`, `cart` or `checkout`) or `meta`, or, for `get_cart`, `update_cart` and `update_checkout`, `id` without `cart_id` or `checkout_id`. Any other call is a call of our tool and returns what it returned before. Arguments our tools required (`line_items`, `cart_id`, `checkout_id`) are optional in the schema and checked by the tool, which returns `invalid_request` without them; `update_cart` without `line_items` is refused rather than emptying the cart.
+
+**Buyer identity** is resolved as for our tools: a signed-in buyer from the Platform token, an anonymous buyer by the `buyer_id` the standard cart or checkout returns at its root (an additional member, which the schemas allow). The standard-only tools take `buyer_id` and `store_id` as additional arguments.
+
+**Mapping.**
+
+- Catalog: `catalog.query`, `filters.price` (minor units), `filters.categories`, `pagination` and `context` (currency, language, country, region, intent) map to the catalog search. A product's variants are the product itself, when it has no variations or is buyable itself, and its variations. `lookup_catalog` takes up to 20 ids and returns, for each product, the variants the ids resolved to with `inputs` (`exact` or `featured`), and an info message `not_found` for each unknown id.
+- Cart: `line_items[].item.id` is the product id; `update_cart` replaces the lines, and a line keeps its `id`. Totals are subtotal, discount (negative), fulfillment, tax, fee and total. Inventory errors become `error` messages with the `path` of the line. `continue_url` is the storefront cart page.
+- Checkout: the checkout id is the cart id. `create_checkout` with `checkout.cart_id` uses that cart, whose contents win; with `checkout.line_items` it creates a cart first. The shipping address is the first shipping destination of `checkout.fulfillment.methods[].destinations[]` (or our `shipping_address`), the buyer is `checkout.buyer`. `update_checkout` with `line_items` replaces the cart's lines first. `status` is `ready_for_complete` when the hosted checkout has what it needs (no inventory error, and a shipping address with the recipient's name and postal code unless the store assigns addresses), otherwise `incomplete` with a `recoverable` error message.
+- `complete_checkout` does not take payment. It creates the checkout link, as `handoff_checkout` does, and returns `status` `requires_escalation` with `continue_url` (the link), `expires_at`, and the error message `hosted_checkout_required` with severity `requires_buyer_input`. The buyer pays and places the order in the storefront.
+- `get_order` reads an order by id or number with the buyer checks of `track_order`. `checkout_id` is the cart id, and `permalink_url` is `{storefront}/account/orders/{id}`.
+
+**Gaps and limitations.**
+
+- `meta` is accepted and not validated: the agent profile in `meta["ucp-agent"].profile` is not fetched, there is no capability negotiation, and a call without `meta` is served. `idempotency-key` is not stored, so a retried `complete_checkout` creates another checkout link.
+- `cancel_cart` removes every line of an anonymous buyer's cart and returns the cart as it was. The cart itself remains, so a later `get_cart` returns it empty rather than `not_found`. A signed-in buyer's cart, their storefront cart, is not cleared: the call returns an error.
+- `cancel_checkout` is not supported, because the checkout is the cart and a checkout link expires by itself: it returns an error.
+- A checkout never reaches `complete_in_progress` or `completed` here, since payment and the order happen in the storefront; `get_checkout` after a handoff reports `ready_for_complete` again, since the server keeps no checkout state.
+- `links` is empty: the store profile has no terms or privacy URLs.
+- A product's `description` is its name, since the catalog response has no description text; `url` is not returned; `lookup_catalog` ignores `filters`, and `get_product` ignores `selected` and `preferences`.
+- The `dev.ucp.shopping.fulfillment` extension is not advertised: only the first shipping destination is read, and checkouts have no `fulfillment`. An order's `fulfillment.events` is empty, and `expectations` is filled only for an order with one shipment.
+- `permalink_url` assumes the Virto Commerce frontend route `/account/orders/{id}`, and is missing when no storefront URL is known. A line's status comes from the order status: `Completed` is fulfilled, `Cancelled` is removed, any other is processing.
+- With `line_items`, a signed-in buyer's `create_checkout` adds them to their storefront cart, which may hold other lines.
 
 ## Web API
 
@@ -606,7 +648,7 @@ The tools take no storefront URL: the endpoint is the store, and the tools run U
 GET /.well-known/ucp
 ```
 
-Returns the UCP manifest: the version, the MCP service endpoint under `services["com.virtocommerce.ucp"]`, and the capability versions. The full store profile, with the default store, endpoints and `endpoints.operations`, headers, the auth shape, agent guidance and the error codes, is the result of the MCP tool `get_store_capabilities`.
+Returns the UCP business profile, release `2026-08-25`: the standard service `dev.ucp.shopping` and our own `com.virtocommerce.ucp`, both with the `/ucp/mcp` endpoint, the standard capabilities `dev.ucp.shopping.catalog.search`, `catalog.lookup`, `cart`, `checkout` and `order` with their `spec` and `schema`, and `dev.ucp.common.identity_linking` with the scopes `dev.ucp.shopping.cart:manage`, `dev.ucp.shopping.checkout:manage` and `dev.ucp.shopping.order:read`. The module's own capabilities (`com.virtocommerce.ucp.*`) are no longer listed: a 2026-08-25 profile requires a schema, hosted on the vendor's domain, for each capability, and our tools beyond the standard (geography, handoff, order tracking) stay available on the same endpoint. It is served with `Cache-Control: public, max-age=300` and a weak `ETag`, and answers `304 Not Modified` to a matching `If-None-Match`, as the UCP hosting rules ask of a published profile. The full store profile, with the default store, endpoints and `endpoints.operations`, headers, the auth shape, agent guidance and the error codes, is the result of the MCP tool `get_store_capabilities`.
 
 ### Catalog search
 
@@ -711,7 +753,7 @@ The current checkout flow is hosted-only:
 - `storefront_restore` (`POST /ucp/v1/internal/handoff/restore` with `{ "ucp_session": "..." }`) validates the session, reads it from the handoff session store, checks expiration, and returns the cart and checkout context, with `anonymous_buyer_id` for an anonymous session, to the storefront. A session a signed-in buyer created can be restored only by that buyer (`403 buyer_context_mismatch`).
 - Shipping method and payment details are completed in storefront checkout.
 
-`ucp_session` is an opaque random session token. The checkout/cart context, address snapshot, payment hint, and expiration timestamp are stored server-side in the handoff session store with absolute expiration based on the store setting `UCP.CheckoutLinkLifetimeMinutes`. Without Redis, the store keeps sessions in process memory, so handoff works in local or single-node deployments. In production multi-node deployments, configure `ConnectionStrings:RedisConnectionString` so handoff restore works across nodes and sessions survive process restarts.
+`ucp_session` is an opaque random session token (base64url, without whitespace: restore ignores spaces and line breaks that a copied, wrapped link brings into it). The checkout/cart context, address snapshot, payment hint, and expiration timestamp are stored server-side in the handoff session store with absolute expiration based on the store setting `UCP.CheckoutLinkLifetimeMinutes`. Without Redis, the store keeps sessions in process memory, so handoff works in local or single-node deployments. In production multi-node deployments, configure `ConnectionStrings:RedisConnectionString` so handoff restore works across nodes and sessions survive process restarts.
 
 `shipping_address` and `billing_address` are applied to the cart through XCart `addOrUpdateCartAddress` and are also stored in the temporary handoff session payload. Before writing an address, UCP normalizes `country_code` through the platform `ICountriesService`. If the selected country has regions, `region` / `region_id` are normalized through `GetCountryRegionsAsync`.
 
@@ -861,6 +903,7 @@ The module has no database tables and no migrations.
 | `XApiInProcessExecutor` | `IXApiInProcessExecutor` | Runs XAPI GraphQL in the platform process |
 | `UcpOperationTelemetry` | `IUcpOperationTelemetry` | The `UCP {operation}` span, its log and metrics |
 | `UcpMcpCallToolFilter` | `IMcpCallToolFilter` | Store checks, UCP errors and telemetry of the commerce tools on `/ucp/mcp` |
+| `UcpStandardMapper` | | The payloads of the standard UCP tools: our requests from their arguments, and the standard catalog, cart, checkout, order and error payloads; register a subclass to change a mapping |
 | `UcpMcpChallengeWriter` | `McpChallengeWriter` | UCP's `identity_required` body of the HTTP 401 and 403 responses on `/ucp/mcp` |
 | `UcpMcpPublicOriginResolver` | `IMcpPublicOriginResolver` | The store-based public origin of the `ucp` scope |
 | `UcpStoreContextResolver` | | The store of a request: its host through XAPI's `IStoreDomainResolverService`, the platform's default store, the only open store |
@@ -923,9 +966,10 @@ After installing `VirtoCommerce.UCP` on a platform:
 12. `GET /ucp/v1/geography/countries/resolve?query=KZ` returns the platform country id for checkout address normalization.
 13. `GET /ucp/v1/geography/countries/{countryId}/regions` returns regions when they exist in the platform dictionary.
 14. After storefront checkout, `GET /ucp/v1/orders?cart_id={cartId}&placed_after={issuedAt}&buyer_id={buyerId}` returns the order tracking snapshot.
-15. `POST /ucp/mcp` with `initialize` reports the server `Virto Commerce UCP`, and `tools/list` returns the 18 UCP tools without a token.
-16. An anonymous `tools/call` of `link_buyer_identity` returns HTTP 401 with a `WWW-Authenticate` header that points to `/.well-known/oauth-protected-resource/ucp/mcp`.
-17. The calls appear in the back office under **Configuration → AI agents (MCP) → Agent audit log**, in the `ucp` scope.
+15. `POST /ucp/mcp` with `initialize` reports the server `Virto Commerce UCP`, and `tools/list` returns the 25 UCP tools without a token.
+16. A `tools/call` of `search_catalog` with `{"meta": {"ucp-agent": {"profile": "https://agent.example/profile.json"}}, "catalog": {"query": "printer"}}` returns `structuredContent` with `ucp.version` `2026-08-25` and `products`.
+17. An anonymous `tools/call` of `link_buyer_identity` returns HTTP 401 with a `WWW-Authenticate` header that points to `/.well-known/oauth-protected-resource/ucp/mcp`.
+18. The calls appear in the back office under **Configuration → AI agents (MCP) → Agent audit log**, in the `ucp` scope.
 
 ## Roadmap
 

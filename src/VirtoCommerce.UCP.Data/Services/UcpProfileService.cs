@@ -58,6 +58,14 @@ public class UcpProfileService : IUcpProfileService
         ModuleConstants.McpTools.ListCountries,
         ModuleConstants.McpTools.ResolveCountry,
         ModuleConstants.McpTools.ListRegions,
+        // The UCP standard tools that do not share a name with ours
+        ModuleConstants.McpTools.SearchCatalog,
+        ModuleConstants.McpTools.LookupCatalog,
+        ModuleConstants.McpTools.CancelCart,
+        ModuleConstants.McpTools.GetCheckout,
+        ModuleConstants.McpTools.CompleteCheckout,
+        ModuleConstants.McpTools.CancelCheckout,
+        ModuleConstants.McpTools.GetOrder,
     ];
 
     private static readonly string[] CheckoutGuidance =
@@ -253,41 +261,71 @@ public class UcpProfileService : IUcpProfileService
             Status = "success",
         };
 
-        AddDiscoveryService(result, "mcp", BuildMcpUrl(origin));
-
-        foreach (var capability in SupportedCapabilities)
+        var mcpUrl = BuildMcpUrl(origin);
+        AddDiscoveryService(result, ModuleConstants.Discovery.ShoppingService, new UcpDiscoveryServiceProfile
         {
-            result.Capabilities[$"{ModuleConstants.Discovery.Service}.{capability}"] =
-            [
-                new UcpCapabilityVersion
-                {
-                    Version = ModuleConstants.DiscoveryVersion,
-                },
-            ];
-        }
+            Version = ModuleConstants.DiscoveryVersion,
+            Spec = ModuleConstants.Discovery.SpecBaseUrl + "overview",
+            Transport = "mcp",
+            Schema = ModuleConstants.Discovery.ShoppingMcpSchemaUrl,
+            Endpoint = mcpUrl,
+        });
+        AddDiscoveryService(result, "mcp", mcpUrl);
+
+        // Only standard capabilities: a vendor capability needs a schema hosted on the vendor's own domain, and one
+        // without it makes a 2026-08-25 profile invalid. Our own tools stay on the same endpoint, under our service.
+        AddDiscoveryCapability(result, ModuleConstants.Discovery.CatalogSearch, "shopping/catalog/search", "shopping/catalog_search.json");
+        AddDiscoveryCapability(result, ModuleConstants.Discovery.CatalogLookup, "shopping/catalog/lookup", "shopping/catalog_lookup.json");
+        AddDiscoveryCapability(result, ModuleConstants.Discovery.Cart, "shopping/cart", "shopping/cart.json");
+        AddDiscoveryCapability(result, ModuleConstants.Discovery.Checkout, "shopping/checkout", "shopping/checkout.json");
+        AddDiscoveryCapability(result, ModuleConstants.Discovery.Order, "shopping/order", "shopping/order.json");
+        AddDiscoveryCapability(result, ModuleConstants.Discovery.IdentityLinking, "common/identity-linking/", "common/identity_linking.json", new
+        {
+            scopes = ModuleConstants.Discovery.IdentityLinkingScopes.ToDictionary(x => x, _ => new { }),
+        });
 
         return result;
     }
 
+    protected virtual void AddDiscoveryCapability(UcpDiscoveryProfile profile, string name, string specPath, string schemaPath, object config = null)
+    {
+        profile.Capabilities[name] =
+        [
+            new UcpCapabilityVersion
+            {
+                Version = ModuleConstants.DiscoveryVersion,
+                Spec = ModuleConstants.Discovery.SpecBaseUrl + specPath,
+                Schema = ModuleConstants.Discovery.SchemaBaseUrl + schemaPath,
+                Config = config,
+            },
+        ];
+    }
+
+    // Adds an entry of our own service; kept for subclasses that add a transport of it.
     protected virtual void AddDiscoveryService(UcpDiscoveryProfile profile, string transport, string endpoint)
     {
-        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out _))
-        {
-            return;
-        }
-
-        if (!profile.Services.TryGetValue(ModuleConstants.Discovery.Service, out var services))
-        {
-            services = new List<UcpDiscoveryServiceProfile>();
-            profile.Services[ModuleConstants.Discovery.Service] = services;
-        }
-
-        services.Add(new UcpDiscoveryServiceProfile
+        AddDiscoveryService(profile, ModuleConstants.Discovery.Service, new UcpDiscoveryServiceProfile
         {
             Version = ModuleConstants.DiscoveryVersion,
             Transport = transport,
             Endpoint = endpoint,
         });
+    }
+
+    protected virtual void AddDiscoveryService(UcpDiscoveryProfile profile, string name, UcpDiscoveryServiceProfile service)
+    {
+        if (!Uri.TryCreate(service.Endpoint, UriKind.Absolute, out _))
+        {
+            return;
+        }
+
+        if (!profile.Services.TryGetValue(name, out var services))
+        {
+            services = new List<UcpDiscoveryServiceProfile>();
+            profile.Services[name] = services;
+        }
+
+        services.Add(service);
     }
 
     protected virtual void AddEndpointOperations(UcpEndpointProfile endpoints)

@@ -70,6 +70,8 @@ public class Module : IModule, IHasConfiguration
             // UCP's errors and telemetry for the calls, inside the MCP module's checks and audit
             .WithCallToolFilter<UcpMcpCallToolFilter>());
         serviceCollection.AddMcpToolsFromAssembly(typeof(UcpMcpCommerceTools).Assembly, UcpMcpSerialization.Options);
+        // The payloads of the standard UCP MCP tools; a module replaces it with a subclass to change a mapping.
+        serviceCollection.AddSingleton<UcpStandardMapper>();
 
         // The gate of the ucp scope switch, the store of the request and the sign-in rule of a closed catalog run in the
         // platform pipeline from UcpStartup (module.manifest startupType).

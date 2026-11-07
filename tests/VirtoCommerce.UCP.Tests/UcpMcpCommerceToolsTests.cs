@@ -32,7 +32,7 @@ public class UcpMcpCommerceToolsTests
     public void UcpMcpTools_DeclareWhoMayUseThem()
     {
         // Arrange
-        var methods = new[] { typeof(UcpMcpCommerceTools), typeof(UcpMcpIdentityTools) }
+        var methods = new[] { typeof(UcpMcpCommerceTools), typeof(UcpMcpStandardTools), typeof(UcpMcpIdentityTools) }
             .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
             .Where(method => method.GetCustomAttribute<McpServerToolAttribute>() != null)
             .ToList();
@@ -43,7 +43,7 @@ public class UcpMcpCommerceToolsTests
             .ToDictionary(tool => tool.ProtocolTool.Name, tool => tool.Metadata);
 
         // Assert
-        Assert.Equal(18, tools.Count);
+        Assert.Equal(25, tools.Count);
         foreach (var (name, metadata) in tools)
         {
             var allowsAnonymous = metadata.OfType<IAllowAnonymous>().Any();
@@ -109,7 +109,7 @@ public class UcpMcpCommerceToolsTests
     [Fact]
     public void UcpMcpTools_AreServedInUcpScopeAndOnlyIdentityLinkingRequiresUser()
     {
-        var tools = new[] { typeof(UcpMcpCommerceTools), typeof(UcpMcpIdentityTools) }
+        var tools = new[] { typeof(UcpMcpCommerceTools), typeof(UcpMcpStandardTools), typeof(UcpMcpIdentityTools) }
             .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
             .Where(method => method.GetCustomAttribute<McpServerToolAttribute>() != null)
             .ToArray();
@@ -130,7 +130,10 @@ public class UcpMcpCommerceToolsTests
     {
         var paths = McpSensitiveArguments.GetPaths(typeof(UcpMcpCommerceTools).GetMethod(methodName));
 
-        Assert.Equal(["buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address"], paths);
+        // create_checkout and update_checkout also take the standard checkout, whose buyer data is masked by its own paths.
+        Assert.Equal(
+            ["buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address"],
+            paths.Where(path => !path.StartsWith("checkout.", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -347,22 +350,25 @@ public class UcpMcpCommerceToolsTests
             .AddSingleton<IUcpCartService>(_ => null)
             .AddSingleton<IUcpCheckoutService>(_ => null)
             .AddSingleton<IUcpOrderService>(_ => null)
+            .AddSingleton<UcpStandardMapper>()
             .BuildServiceProvider();
         var options = new McpServerToolCreateOptions
         {
             Services = services,
             SerializerOptions = CreateMcpToolSerializerOptions(),
         };
+        // The six tools whose name the standard UCP binding shares also take its arguments (meta, and catalog, cart,
+        // checkout or id); their flat arguments are unchanged.
         var expectedSchemas = new Dictionary<string, string[]>
         {
             [nameof(UcpMcpCommerceTools.SearchProducts)] = ["query", "store_id", "currency", "language", "price_min", "price_max", "limit"],
-            [nameof(UcpMcpCommerceTools.GetProduct)] = ["id", "product_id", "store_id", "currency", "language"],
-            [nameof(UcpMcpCommerceTools.CreateCart)] = ["line_items", "store_id", "currency", "language", "buyer_id", "cart_name", "cart_type", "coupons"],
+            [nameof(UcpMcpCommerceTools.GetProduct)] = ["id", "product_id", "store_id", "currency", "language", "catalog", "meta"],
+            [nameof(UcpMcpCommerceTools.CreateCart)] = ["line_items", "store_id", "currency", "language", "buyer_id", "cart_name", "cart_type", "coupons", "cart", "meta"],
             [nameof(UcpMcpCommerceTools.ListCarts)] = ["store_id", "currency", "language", "buyer_id", "cart_name", "cart_type", "cursor", "limit", "sort"],
-            [nameof(UcpMcpCommerceTools.GetCart)] = ["cart_id", "store_id", "currency", "language", "buyer_id"],
-            [nameof(UcpMcpCommerceTools.UpdateCart)] = ["cart_id", "line_items", "store_id", "currency", "language", "buyer_id", "cart_name", "cart_type", "coupons"],
-            [nameof(UcpMcpCommerceTools.CreateCheckout)] = ["cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
-            [nameof(UcpMcpCommerceTools.UpdateCheckout)] = ["checkout_id", "cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
+            [nameof(UcpMcpCommerceTools.GetCart)] = ["cart_id", "store_id", "currency", "language", "buyer_id", "id", "meta"],
+            [nameof(UcpMcpCommerceTools.UpdateCart)] = ["cart_id", "line_items", "store_id", "currency", "language", "buyer_id", "cart_name", "cart_type", "coupons", "id", "cart", "meta"],
+            [nameof(UcpMcpCommerceTools.CreateCheckout)] = ["cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes", "checkout", "meta"],
+            [nameof(UcpMcpCommerceTools.UpdateCheckout)] = ["checkout_id", "cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes", "id", "checkout", "meta"],
             [nameof(UcpMcpCommerceTools.CheckoutAndHandoff)] = ["cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
             [nameof(UcpMcpCommerceTools.HandoffCheckout)] = ["checkout_id", "cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
             [nameof(UcpMcpCommerceTools.TrackOrder)] = ["order_id", "order_number", "cart_id", "placed_after", "store_id", "currency", "language", "buyer_id"],

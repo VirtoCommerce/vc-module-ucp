@@ -32,6 +32,12 @@ internal static partial class UcpMcpErrorResultFactory
 
     public static CallToolResult FromUcp(UcpException exception)
     {
+        // A standard UCP tool call answers with the standard error_response, built where the call knew its capability.
+        if (exception is UcpMcpStandardException { Result: not null } standardException)
+        {
+            return standardException.Result;
+        }
+
         var safeCode = SafeErrorCodePattern().IsMatch(exception.Code ?? string.Empty) ? exception.Code : "ucp_error";
         var error = new UcpMcpToolError
         {
@@ -84,6 +90,12 @@ internal static partial class UcpMcpErrorResultFactory
                 ["status_code"] = error.StatusCode,
             },
         };
+    }
+
+    // An error code the result may carry: one of ours, never text of an exception.
+    internal static string GetSafeErrorCode(string code)
+    {
+        return SafeErrorCodePattern().IsMatch(code ?? string.Empty) ? code : "ucp_error";
     }
 
     [GeneratedRegex("^[a-z0-9_-]{1,64}$", RegexOptions.CultureInvariant)]
