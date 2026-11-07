@@ -23,17 +23,23 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
 
     private readonly IXApiInProcessExecutor _xApiExecutor;
     private readonly UcpOptions _options;
+    private readonly IUcpRequestOptions _requestOptions;
 
     public UcpCatalogService(
         IXApiInProcessExecutor xApiExecutor,
         IHttpContextAccessor httpContextAccessor,
         IOptions<UcpOptions> options,
-        IUcpBuyerContextAccessor buyerContextAccessor = null)
+        IUcpBuyerContextAccessor buyerContextAccessor = null,
+        IUcpRequestOptions requestOptions = null)
         : base(httpContextAccessor, buyerContextAccessor)
     {
         _xApiExecutor = xApiExecutor;
         _options = options.Value;
+        _requestOptions = requestOptions;
     }
+
+    // The options of the request's store, with the configuration as the fallback.
+    protected UcpOptions Options => _requestOptions?.Current ?? _options;
 
     public virtual async Task<UcpCatalogSearchResponse> SearchProducts(UcpCatalogSearchRequest request, CancellationToken cancellationToken = default)
     {
@@ -209,17 +215,17 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
 
     private string ResolveStoreId(UcpCatalogSearchRequest request)
     {
-        return FirstNotEmpty(request.StoreId, request.Context?.StoreId, _options.DefaultStoreId);
+        return FirstNotEmpty(request.StoreId, request.Context?.StoreId, Options.DefaultStoreId);
     }
 
     private string ResolveCurrency(UcpCatalogSearchRequest request)
     {
-        return FirstNotEmpty(request.Currency, request.Context?.Currency, _options.DefaultCurrency);
+        return FirstNotEmpty(request.Currency, request.Context?.Currency, Options.DefaultCurrency);
     }
 
     private string ResolveCultureName(UcpCatalogSearchRequest request)
     {
-        return FirstNotEmpty(request.Language, request.Context?.Language, _options.DefaultCultureName);
+        return FirstNotEmpty(request.Language, request.Context?.Language, Options.DefaultCultureName);
     }
 
     private static int ResolveLimit(UcpCatalogSearchRequest request)

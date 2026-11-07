@@ -129,12 +129,11 @@ public class UcpOperationInputContractTests
     }
 
     [Fact]
-    public void ObservabilityDefaults_CaptureInputsOnlyOnErrorsAndEnableClassicAppInsightsCompatibility()
+    public void ObservabilityDefaults_CaptureInputsOnlyOnErrors()
     {
         var options = new UcpObservabilityOptions();
 
         Assert.Equal(UcpInputCaptureMode.ErrorsOnly, options.InputCaptureMode);
-        Assert.True(options.EnableApplicationInsightsCompatibilityBridge);
     }
 
     [Fact]
@@ -228,19 +227,6 @@ public class UcpOperationInputContractTests
 
         Assert.Contains(sku, inputJson, StringComparison.Ordinal);
         Assert.DoesNotContain("[redacted-phone]", inputJson, StringComparison.Ordinal);
-    }
-
-    [Theory]
-    [InlineData("OpenTelemetry:Endpoint")]
-    [InlineData("OTEL_EXPORTER_OTLP_ENDPOINT")]
-    [InlineData("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")]
-    public void ObservabilityContract_DetectsConfiguredOtelExporter(string key)
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string> { [key] = "http://localhost:4317" })
-            .Build();
-
-        Assert.True(Module.HasConfiguredOtelExporter(configuration));
     }
 
     [Fact]

@@ -19,7 +19,6 @@ namespace VirtoCommerce.UCP.Data.Services;
 public class UcpCartService : UcpServiceBase, IUcpCartService
 {
     private const string DefaultCartName = "default";
-    private const string DefaultCartType = "cart";
     private const int DefaultListLimit = 10;
     private const int MaxListLimit = 50;
     private const int BillingAddressType = 1;
@@ -43,19 +42,25 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
     private readonly IXApiInProcessExecutor _xApiExecutor;
     private readonly ICountriesService _countriesService;
     private readonly UcpOptions _options;
+    private readonly IUcpRequestOptions _requestOptions;
 
     public UcpCartService(
         IXApiInProcessExecutor xApiExecutor,
         IHttpContextAccessor httpContextAccessor,
         IOptions<UcpOptions> options,
         ICountriesService countriesService = null,
-        IUcpBuyerContextAccessor buyerContextAccessor = null)
+        IUcpBuyerContextAccessor buyerContextAccessor = null,
+        IUcpRequestOptions requestOptions = null)
         : base(httpContextAccessor, buyerContextAccessor)
     {
         _xApiExecutor = xApiExecutor;
         _countriesService = countriesService;
         _options = options.Value;
+        _requestOptions = requestOptions;
     }
+
+    // The options of the request's store, with the configuration as the fallback.
+    protected UcpOptions Options => _requestOptions?.Current ?? _options;
 
     public virtual async Task<UcpCartResponse> CreateCart(UcpCartRequest request, CancellationToken cancellationToken = default)
     {
@@ -111,17 +116,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "buyer_id is required for anonymous cart listing; authenticated mode uses the Platform token.");
         }
 
-        var variables = new Dictionary<string, object>
-        {
-            ["storeId"] = cartRequest.StoreId,
-            ["userId"] = cartRequest.UserId,
-            ["currencyCode"] = cartRequest.Currency,
-            ["cultureName"] = cartRequest.CultureName,
-            ["cartType"] = cartRequest.CartType,
-            ["first"] = Math.Clamp(request.Pagination?.Limit ?? DefaultListLimit, 1, MaxListLimit),
-            ["after"] = request.Pagination?.Cursor,
-            ["sort"] = request.Sort,
-        };
+        var variables = BuildListCartsVariables(cartRequest, request);
 
         var result = await _xApiExecutor.ExecuteCart(new XApiExecutionRequest
         {
@@ -135,6 +130,34 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         var cartsElement = document.RootElement.GetProperty("data").GetProperty("carts");
         EnsureCartListOwnership(cartsElement, cartRequest);
         var carts = ReadCarts(cartsElement);
+        var filterUntyped = string.IsNullOrWhiteSpace(cartRequest.CartType);
+        if (filterUntyped)
+        {
+            carts = carts.Where(x => IsListedCart(x.CartType, cartRequest.CartType)).ToList();
+        }
+
+        return CreateCartListResponse(cartsElement, carts, request, filterUntyped);
+    }
+
+    private static Dictionary<string, object> BuildListCartsVariables(CartExecutionRequest cartRequest, UcpCartListRequest request)
+    {
+        return new Dictionary<string, object>
+        {
+            ["storeId"] = cartRequest.StoreId,
+            ["userId"] = cartRequest.UserId,
+            ["currencyCode"] = cartRequest.Currency,
+            ["cultureName"] = cartRequest.CultureName,
+            ["cartType"] = cartRequest.CartType,
+            ["first"] = Math.Clamp(request.Pagination?.Limit ?? DefaultListLimit, 1, MaxListLimit),
+            ["after"] = request.Pagination?.Cursor,
+            ["sort"] = request.Sort,
+        };
+    }
+
+    private UcpCartListResponse CreateCartListResponse(JsonElement cartsElement, IList<UcpCart> carts, UcpCartListRequest request, bool filterUntyped)
+    {
+        var hasNextPage = cartsElement.TryGetProperty("pageInfo", out var pageInfo) && ReadBoolean(pageInfo, "hasNextPage");
+        var isSinglePage = !hasNextPage && string.IsNullOrEmpty(request.Pagination?.Cursor);
 
         return new UcpCartListResponse
         {
@@ -142,11 +165,28 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             Carts = carts,
             Pagination = new UcpPaginationResponse
             {
-                Cursor = cartsElement.TryGetProperty("pageInfo", out var pageInfo) ? ReadString(pageInfo, "endCursor") : null,
-                HasNextPage = cartsElement.TryGetProperty("pageInfo", out pageInfo) && ReadBoolean(pageInfo, "hasNextPage"),
-                TotalCount = ReadInt(cartsElement, "totalCount"),
+                Cursor = pageInfo.ValueKind == JsonValueKind.Object ? ReadString(pageInfo, "endCursor") : null,
+                HasNextPage = hasNextPage,
+                TotalCount = filterUntyped && isSinglePage ? carts.Count : ReadInt(cartsElement, "totalCount"),
             },
         };
+    }
+
+    private UcpCartResponse CreateStoreManagedAddressesResponse(JsonElement cartElement, UcpCheckoutRequest request)
+    {
+        var response = CreateMutationResponse(cartElement);
+        if (request.ShippingAddress != null || request.BillingAddress != null)
+        {
+            response.Messages.Add(new UcpMessage
+            {
+                Type = "info",
+                Code = ModuleConstants.MessageCodes.AddressesStoreManaged,
+                Content = ModuleConstants.StoreManagedAddressesMessage,
+                Severity = "info",
+            });
+        }
+
+        return response;
     }
 
     public virtual async Task<UcpCartResponse> GetCart(string cartId, UcpCartRequest request, CancellationToken cancellationToken = default)
@@ -297,6 +337,12 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
 
         var currentCart = ReadCart(cartElement);
         UcpInventoryErrorNormalizer.ThrowIfInvalid(currentCart, GetCorrelationId());
+
+        if (Options.StoreManagedAddresses)
+        {
+            return CreateStoreManagedAddressesResponse(cartElement, request);
+        }
+
         var shippingAddress = await PrepareAddress(request.ShippingAddress, request.Buyer, cancellationToken);
         var billingAddress = await PrepareAddress(request.BillingAddress, request.Buyer, cancellationToken);
 
@@ -345,7 +391,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         return CreateMutationResponse(cartElement);
     }
 
-    private CartExecutionRequest BuildCartExecutionRequest(
+    protected virtual CartExecutionRequest BuildCartExecutionRequest(
         UcpCartRequest request,
         bool generateAnonymousBuyer = false,
         bool requireBuyer = false)
@@ -376,17 +422,17 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
 
     private string ResolveStoreId(UcpCartRequest request)
     {
-        return FirstNotEmpty(request.StoreId, request.Context?.StoreId, _options.DefaultStoreId);
+        return FirstNotEmpty(request.StoreId, request.Context?.StoreId, Options.DefaultStoreId);
     }
 
     private string ResolveCurrency(UcpCartRequest request)
     {
-        return FirstNotEmpty(request.Currency, request.Context?.Currency, _options.DefaultCurrency);
+        return FirstNotEmpty(request.Currency, request.Context?.Currency, Options.DefaultCurrency);
     }
 
     private string ResolveCultureName(UcpCartRequest request)
     {
-        return FirstNotEmpty(request.Language, request.Context?.Language, _options.DefaultCultureName);
+        return FirstNotEmpty(request.Language, request.Context?.Language, Options.DefaultCultureName);
     }
 
     private static string ResolveCartName(UcpCartRequest request)
@@ -396,7 +442,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
 
     private static string ResolveCartType(UcpCartRequest request)
     {
-        return FirstNotEmpty(request.CartType, request.Context?.CartType, DefaultCartType);
+        return FirstNotEmpty(request.CartType, request.Context?.CartType);
     }
 
     private void ValidateCartExecutionRequest(CartExecutionRequest request)
@@ -657,7 +703,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         return cart;
     }
 
-    private async Task<JsonElement> ExecuteCartMutation(string mutationName, string operationName, CartExecutionRequest cartRequest, IDictionary<string, object> command, CancellationToken cancellationToken)
+    protected virtual async Task<JsonElement> ExecuteCartMutation(string mutationName, string operationName, CartExecutionRequest cartRequest, IDictionary<string, object> command, CancellationToken cancellationToken)
     {
         var result = await _xApiExecutor.ExecuteCart(new XApiExecutionRequest
         {
@@ -711,8 +757,20 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
 
         foreach (var cart in items.EnumerateArray())
         {
+            if (!IsListedCart(ReadString(cart, "type"), request.CartType))
+            {
+                continue;
+            }
+
             EnsureCartOwnership(cart, request);
         }
+    }
+
+    // x-cart treats a null cartType in a list query as "no type filter", so Wishlist and SavedForLater lists
+    // come back too. The storefront cart is the one whose type is null ("" is a distinct value, as in x-cart).
+    private static bool IsListedCart(string cartType, string requestedCartType)
+    {
+        return !string.IsNullOrWhiteSpace(requestedCartType) || cartType is null;
     }
 
     private static Dictionary<string, object> BuildAddItemCommand(CartExecutionRequest request, string cartId, UcpCartLineItemRequest lineItem)
@@ -1254,10 +1312,10 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
 
     protected virtual string BuildContinueUrl(string cartId)
     {
-        var origin = _options.StorefrontOrigin?.TrimEnd('/');
+        var origin = Options.StorefrontOrigin?.TrimEnd('/');
         return string.IsNullOrWhiteSpace(origin) || string.IsNullOrWhiteSpace(cartId)
             ? null
-            : $"{origin}/cart?cart_id={Uri.EscapeDataString(cartId)}";
+            : $"{origin}/cart/{Uri.EscapeDataString(cartId)}";
     }
 
     protected static bool HasDesiredMatch(UcpCartLineItem current, IEnumerable<UcpCartLineItemRequest> desiredItems)
@@ -1296,10 +1354,10 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
         };
     }
 
-    protected static string BuildCartMutation(string mutationName, string operationName)
+    protected virtual string BuildCartMutation(string mutationName, string operationName)
     {
         return $$"""
-            mutation {{operationName}}($command: Input{{GetMutationInputName(mutationName)}}Type!) {
+            mutation {{operationName}}($command: {{GetMutationInputTypeName(mutationName)}}!) {
               {{mutationName}}(command: $command) {
             {{CartFields}}
               }
@@ -1307,7 +1365,16 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
             """;
     }
 
-    protected static string GetMutationInputName(string mutationName)
+    // The type of the mutation's command in the executing XCart schema: an installation that replaces an XCart input
+    // type has its own type there, with its own name. XCart's own name (InputAddItemType) when the schema does not tell.
+    protected virtual string GetMutationInputTypeName(string mutationName)
+    {
+        var xCartTypeName = $"Input{GetMutationInputName(mutationName)}Type";
+
+        return _xApiExecutor.GetCartMutationArgumentTypeName(mutationName, "command") ?? xCartTypeName;
+    }
+
+    protected virtual string GetMutationInputName(string mutationName)
     {
         if (MutationInputNames.TryGetValue(mutationName, out var inputName))
         {

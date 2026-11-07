@@ -39,6 +39,9 @@ public class UcpCheckout
     [JsonProperty("payment_handler")]
     public string PaymentHandler { get; set; }
 
+    [JsonProperty("issued_at")]
+    public DateTimeOffset? IssuedAt { get; set; }
+
     [JsonProperty("expires_at")]
     public DateTimeOffset? ExpiresAt { get; set; }
 

@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Options;
 using VirtoCommerce.Platform.Core.Common;
+using VirtoCommerce.Platform.Core.Settings;
 using VirtoCommerce.StoreModule.Core.Model;
 using VirtoCommerce.StoreModule.Core.Model.Search;
 using VirtoCommerce.StoreModule.Core.Services;
@@ -13,6 +14,7 @@ using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Core.Services;
+using StoreSetting = VirtoCommerce.StoreModule.Core.ModuleConstants.Settings.General;
 
 namespace VirtoCommerce.UCP.Data.Services;
 
@@ -39,6 +41,7 @@ public class UcpProfileService : IUcpProfileService
     private static readonly string[] SupportedMcpTools =
     [
         ModuleConstants.McpTools.LinkBuyerIdentity,
+        ModuleConstants.McpTools.LogoutBuyer,
         ModuleConstants.McpTools.GetStoreCapabilities,
         ModuleConstants.McpTools.SearchProducts,
         ModuleConstants.McpTools.GetProduct,
@@ -59,10 +62,10 @@ public class UcpProfileService : IUcpProfileService
 
     private static readonly string[] CheckoutGuidance =
     [
-        "For physical goods, shipping_address is required before hosted handoff when it is not already present on the cart.",
+        "For physical goods, shipping_address is required before hosted handoff when it is not already present on the cart, unless store_managed_addresses is true.",
         "create_checkout and handoff_checkout accept shipping_address; billing_address can mirror shipping_address unless a separate billing address is supplied.",
         "Delivery and shipping addresses belong in shipping_address, not notes. Notes are order comments only.",
-        "shipping_address and billing_address require recipient first_name and last_name.",
+        "shipping_address requires recipient first_name, last_name, and postal_code; billing_address requires first_name and last_name.",
         "Hosted checkout address editing works best with recipient first_name, last_name, email, and postal_code.",
         "Country names should be resolved with resolve_country or list_countries before checkout; list_regions resolves province or region ids when the selected country defines regions.",
         "country_code may be ISO2 in tool input, but UCP normalizes it with Virto Commerce platform ICountriesService before writing XCart. region/region_id are normalized with platform country regions when the selected country has regions; city remains a free-text field.",
@@ -70,9 +73,8 @@ public class UcpProfileService : IUcpProfileService
         "default_store_id or store.id from discovery is the default store_id for catalog, cart, and checkout tools. Multiple stores without default_store_id require an explicit store selection.",
         "Address changes after checkout or handoff require update_checkout followed by a new handoff_checkout URL.",
         "When the buyer is ready to pay or continue to hosted checkout, prefer checkout_and_handoff so the response includes the final continue_url.",
-        "After hosted checkout, track_order can use the original cart_id before an order_id is available.",
+        "After hosted checkout, track_order can use the original cart_id with placed_after set to the handoff issued_at before an order_id is available.",
         "requires_escalation means the buyer must continue in hosted checkout; it does not mean an order approval rule was triggered. Approval rules and payment terms are enforced by the existing storefront checkout.",
-        "For ordinary shopping, call commerce tools directly without linking an account.",
         "When the user explicitly asks to act on their behalf or use their account, organization, personalized prices, saved data, or orders, call link_buyer_identity before buyer-sensitive commerce tools.",
         "Authenticated buyer and organization identity come only from the validated Platform OAuth token. Never send user or organization identity headers.",
         "To upgrade an anonymous cart, call link_buyer_identity and then update_cart with the saved anonymous buyer_id; UCP verifies ownership and delegates merging to XCart.",
@@ -81,20 +83,23 @@ public class UcpProfileService : IUcpProfileService
     private static readonly (string Name, string Method, string Path, string Capability, string Status, string Description)[] EndpointOperations =
     [
         (ModuleConstants.McpTools.LinkBuyerIdentity, "MCP", ModuleConstants.Endpoints.Mcp, "identity_linking", "available", "Trigger Platform OAuth account linking before buyer-sensitive commerce operations."),
+        (ModuleConstants.McpTools.LogoutBuyer, "MCP", ModuleConstants.Endpoints.Mcp, "identity_linking", "available", "Sign out the current buyer by revoking the MCP OAuth authorization; stop using saved buyer, organization, cart, and checkout identifiers afterwards."),
         (ModuleConstants.McpTools.GetStoreCapabilities, "GET", ModuleConstants.Endpoints.Discovery, "profile", "available", "Read UCP capabilities, callable MCP tools, endpoint metadata, auth hints, headers, and integration guidance."),
         (ModuleConstants.McpTools.SearchProducts, "POST", ModuleConstants.Endpoints.CatalogSearch, ModuleConstants.Capabilities.Catalog, "available", "Search buyer-aware catalog products."),
         (ModuleConstants.McpTools.GetProduct, "GET", ModuleConstants.Endpoints.CatalogProduct, ModuleConstants.Capabilities.Catalog, "available", "Get one buyer-aware product by stable product id."),
         (ModuleConstants.McpTools.CreateCart, "POST", ModuleConstants.Endpoints.CartCreate, ModuleConstants.Capabilities.Cart, "available", "Create a cart and optionally add the first item."),
         (ModuleConstants.McpTools.ListCarts, "GET", ModuleConstants.Endpoints.CartList, ModuleConstants.Capabilities.Cart, "available", "List recent buyer-scoped carts."),
         (ModuleConstants.McpTools.GetCart, "GET", ModuleConstants.Endpoints.CartGet, ModuleConstants.Capabilities.Cart, "available", "Read cart lines, totals, coupons, addresses, shipments, payments, and continue_url."),
-        (ModuleConstants.McpTools.UpdateCart, "PUT", ModuleConstants.Endpoints.CartUpdate, ModuleConstants.Capabilities.Cart, "available", "Update cart items and coupons. With a linked Platform identity it can safely merge the saved anonymous cart through XCart."),
+        (ModuleConstants.McpTools.UpdateCart, "PUT", ModuleConstants.Endpoints.CartUpdate, ModuleConstants.Capabilities.Cart, "available",
+            "Replace the cart's line items with the complete desired state (lines not listed are removed) and apply coupons. " +
+            "With a linked Platform identity it can also merge the saved anonymous cart into the buyer's cart through XCart."),
         (
             ModuleConstants.McpTools.CreateCheckout,
             "POST",
             ModuleConstants.Endpoints.CheckoutCreate,
             ModuleConstants.Capabilities.Checkout,
             "available",
-            "Create checkout snapshot. Delivery addresses belong in structured shipping_address fields; country and region are normalized through platform dictionaries before XCart is updated."
+            "Create checkout snapshot. Delivery addresses belong in structured shipping_address fields; country and region are normalized through platform dictionaries before XCart is updated. Supplied addresses are ignored when store_managed_addresses is true."
         ),
         (
             ModuleConstants.McpTools.UpdateCheckout,
@@ -102,7 +107,7 @@ public class UcpProfileService : IUcpProfileService
             ModuleConstants.Endpoints.CheckoutUpdate,
             ModuleConstants.Capabilities.Checkout,
             "available",
-            "Update checkout address data before payment. A new handoff URL is required after shipping_address or billing_address changes."
+            "Update checkout address data before payment; supplied addresses are ignored when store_managed_addresses is true. A new handoff URL is required after shipping_address or billing_address changes."
         ),
         (
             ModuleConstants.McpTools.CheckoutAndHandoff,
@@ -119,10 +124,10 @@ public class UcpProfileService : IUcpProfileService
             ModuleConstants.Endpoints.CheckoutHandoff,
             ModuleConstants.Capabilities.Checkout,
             "available",
-            "Create hosted checkout handoff URL. For physical goods, shipping_address is expected before handoff; billing_address defaults to shipping_address when no separate billing address is provided."
+            "Create hosted checkout handoff URL. For physical goods, shipping_address is expected before handoff unless store_managed_addresses is true; billing_address defaults to shipping_address when no separate billing address is provided."
         ),
         (ModuleConstants.McpTools.TrackOrder, "GET", ModuleConstants.Endpoints.OrderTrack, ModuleConstants.Capabilities.Order, "available", "Track an order by order id or number when the user provides one."),
-        (ModuleConstants.McpTools.TrackOrder, "GET", ModuleConstants.Endpoints.OrderTrackByCart, ModuleConstants.Capabilities.Order, "available", "After hosted checkout, track the created order by the original cart_id."),
+        (ModuleConstants.McpTools.TrackOrder, "GET", ModuleConstants.Endpoints.OrderTrackByCart, ModuleConstants.Capabilities.Order, "available", "After hosted checkout, track the created order by the original cart_id and placed_after (the handoff issued_at)."),
         (ModuleConstants.McpTools.ListCountries, "GET", ModuleConstants.Endpoints.GeographyCountries, ModuleConstants.Capabilities.Geography, "available", "List or search Virto Commerce platform countries before checkout country normalization."),
         (ModuleConstants.McpTools.ResolveCountry, "GET", ModuleConstants.Endpoints.GeographyCountryResolve, ModuleConstants.Capabilities.Geography, "available", "Resolve a country query such as ISO2, ISO3, or platform country name to the Virto Commerce platform country id."),
         (ModuleConstants.McpTools.ListRegions, "GET", ModuleConstants.Endpoints.GeographyRegions, ModuleConstants.Capabilities.Geography, "available", "List platform regions/provinces for a resolved country id. City remains free text."),
@@ -130,6 +135,7 @@ public class UcpProfileService : IUcpProfileService
     ];
 
     private readonly UcpOptions _options;
+    private readonly IUcpRequestOptions _requestOptions;
     private readonly IUcpPublicOriginResolver _publicOriginResolver;
     private readonly IStoreService _storeService;
     private readonly IStoreSearchService _storeSearchService;
@@ -138,20 +144,26 @@ public class UcpProfileService : IUcpProfileService
         IOptions<UcpOptions> options,
         IUcpPublicOriginResolver publicOriginResolver,
         IStoreService storeService = null,
-        IStoreSearchService storeSearchService = null)
+        IStoreSearchService storeSearchService = null,
+        IUcpRequestOptions requestOptions = null)
     {
         _options = options.Value;
+        _requestOptions = requestOptions;
         _publicOriginResolver = publicOriginResolver;
         _storeService = storeService;
         _storeSearchService = storeSearchService;
     }
+
+    // The options of the request's store, with the configuration as the fallback.
+    protected UcpOptions Options => _requestOptions?.Current ?? _options;
 
     public virtual async Task<UcpProfile> GetProfile(CancellationToken cancellationToken = default)
     {
         var publicOrigin = await _publicOriginResolver.GetOriginAsync();
         var storeProfiles = await GetStoreProfiles();
         var storeProfile = storeProfiles.FirstOrDefault(x => x.IsDefault);
-        var origin = !string.IsNullOrWhiteSpace(_options.PublicOrigin)
+        var defaultStore = await GetDefaultStore(storeProfile);
+        var origin = !string.IsNullOrWhiteSpace(Options.PublicOrigin)
             ? publicOrigin
             : GetConfiguredStorefrontOrigin(storeProfile) ?? publicOrigin;
 
@@ -166,12 +178,12 @@ public class UcpProfileService : IUcpProfileService
             Endpoints = new UcpEndpointProfile
             {
                 UcpBaseUrl = BuildUcpBaseUrl(publicOrigin),
-                HandoffUrlTemplate = GetHandoffTemplate(origin),
+                HandoffUrlTemplate = GetHandoffTemplate(storeProfile, origin),
             },
             Auth = new UcpProfileAuth
             {
                 Agent = "mcp_transport",
-                AnonymousCatalog = _options.AnonymousCatalog,
+                AnonymousCatalog = Options.AnonymousCatalog && StoreAllowsAnonymousUsers(defaultStore),
                 BuyerDelegation = "platform_oauth_bearer",
                 BuyerIdentitySource = "platform_claims_principal",
                 AuthorizationServer = publicOrigin == null ? null : publicOrigin + "/",
@@ -184,6 +196,7 @@ public class UcpProfileService : IUcpProfileService
                 TraceId = ModuleConstants.Headers.TraceId,
                 IdempotencyKey = ModuleConstants.Headers.IdempotencyKey,
             },
+            StoreManagedAddresses = Options.StoreManagedAddresses,
             Errors = new UcpErrorProfile
             {
                 Schema = "ucp_error",
@@ -192,6 +205,7 @@ public class UcpProfileService : IUcpProfileService
                     ModuleConstants.ErrorCodes.InvalidRequest,
                     ModuleConstants.ErrorCodes.IdentityRequired,
                     ModuleConstants.ErrorCodes.BuyerContextMismatch,
+                    ModuleConstants.ErrorCodes.HandoffInProgress,
                     ModuleConstants.ErrorCodes.MissingStoreId,
                     ModuleConstants.ErrorCodes.ProductNotFound,
                     ModuleConstants.ErrorCodes.CartNotFound,
@@ -311,6 +325,15 @@ public class UcpProfileService : IUcpProfileService
         {
             profile.AgentGuidance.Add(guidance);
         }
+
+        profile.AgentGuidance.Add(profile.Auth?.AnonymousCatalog == true
+            ? ModuleConstants.AnonymousCatalogGuidance
+            : ModuleConstants.SignInRequiredCatalogGuidance);
+
+        if (Options.StoreManagedAddresses)
+        {
+            profile.AgentGuidance.Add(ModuleConstants.StoreManagedAddressesInstruction);
+        }
     }
 
     protected virtual async Task<IList<UcpStoreProfile>> GetStoreProfiles()
@@ -324,9 +347,33 @@ public class UcpProfileService : IUcpProfileService
         return await GetDiscoveredStoreProfiles();
     }
 
+    protected virtual async Task<Store> GetDefaultStore(UcpStoreProfile storeProfile)
+    {
+        if (storeProfile == null)
+        {
+            return null;
+        }
+
+        var configuredStore = await GetConfiguredDefaultStore();
+        if (HasConfiguredDefaultStore(configuredStore))
+        {
+            return configuredStore;
+        }
+
+        return await GetStoreById(storeProfile.Id);
+    }
+
+    protected virtual bool StoreAllowsAnonymousUsers(Store store)
+    {
+        // Settings that were not loaded count as the setting's default, as an empty list does.
+        return store?.Settings is null
+            ? store is null || StoreSetting.AllowAnonymousUsers.DefaultValue is true
+            : store.Settings.GetValue<bool>(StoreSetting.AllowAnonymousUsers);
+    }
+
     protected virtual bool HasConfiguredDefaultStore(Store configuredStore)
     {
-        return configuredStore != null || !string.IsNullOrWhiteSpace(_options.DefaultStoreId);
+        return configuredStore != null || !string.IsNullOrWhiteSpace(Options.DefaultStoreId);
     }
 
     protected virtual IList<UcpStoreProfile> CreateConfiguredStoreProfiles(Store configuredStore)
@@ -349,9 +396,14 @@ public class UcpProfileService : IUcpProfileService
             .ToList();
     }
 
-    protected virtual async Task<Store> GetConfiguredDefaultStore()
+    protected virtual Task<Store> GetConfiguredDefaultStore()
     {
-        if (_storeService == null || string.IsNullOrWhiteSpace(_options.DefaultStoreId))
+        return GetStoreById(Options.DefaultStoreId);
+    }
+
+    protected virtual async Task<Store> GetStoreById(string storeId)
+    {
+        if (_storeService == null || string.IsNullOrWhiteSpace(storeId))
         {
             return null;
         }
@@ -359,7 +411,7 @@ public class UcpProfileService : IUcpProfileService
         return await UcpDiagnostics.ExecuteDependency(
             "stores",
             "GetStore",
-            () => _storeService.GetNoCloneAsync(_options.DefaultStoreId));
+            () => _storeService.GetNoCloneAsync(storeId));
     }
 
     protected virtual async Task<IList<Store>> SearchOpenStores()
@@ -385,7 +437,7 @@ public class UcpProfileService : IUcpProfileService
 
     protected virtual UcpStoreProfile CreateStoreProfile(Store store, bool isDefault, string source)
     {
-        if (store == null && string.IsNullOrWhiteSpace(_options.DefaultStoreId))
+        if (store == null && string.IsNullOrWhiteSpace(Options.DefaultStoreId))
         {
             return null;
         }
@@ -405,24 +457,24 @@ public class UcpProfileService : IUcpProfileService
 
     protected virtual string ResolveStoreId(Store store)
     {
-        return store?.Id ?? _options.DefaultStoreId;
+        return store?.Id ?? Options.DefaultStoreId;
     }
 
     protected virtual string ResolveStoreCurrency(Store store)
     {
-        return store?.DefaultCurrency ?? _options.DefaultCurrency;
+        return store?.DefaultCurrency ?? Options.DefaultCurrency;
     }
 
     protected virtual string ResolveStoreLanguage(Store store)
     {
-        return store?.DefaultLanguage ?? _options.DefaultCultureName;
+        return store?.DefaultLanguage ?? Options.DefaultCultureName;
     }
 
     protected virtual string GetConfiguredStorefrontOrigin(UcpStoreProfile store)
     {
-        if (!string.IsNullOrWhiteSpace(_options.StorefrontOrigin))
+        if (!string.IsNullOrWhiteSpace(Options.StorefrontOrigin))
         {
-            return _options.StorefrontOrigin.TrimEnd('/');
+            return Options.StorefrontOrigin.TrimEnd('/');
         }
 
         var storeUrl = FirstNotEmpty(store?.SecureUrl, store?.Url);
@@ -436,9 +488,9 @@ public class UcpProfileService : IUcpProfileService
 
     protected virtual string BuildUcpBaseUrl(string origin)
     {
-        if (string.IsNullOrWhiteSpace(_options.PublicOrigin) && !string.IsNullOrWhiteSpace(_options.UcpBaseUrl))
+        if (string.IsNullOrWhiteSpace(Options.PublicOrigin) && !string.IsNullOrWhiteSpace(Options.UcpBaseUrl))
         {
-            return _options.UcpBaseUrl.TrimEnd('/');
+            return Options.UcpBaseUrl.TrimEnd('/');
         }
 
         return origin + "/ucp/v1";
@@ -446,7 +498,7 @@ public class UcpProfileService : IUcpProfileService
 
     protected virtual string BuildMcpUrl(string origin)
     {
-        if (string.IsNullOrWhiteSpace(origin) && Uri.TryCreate(_options.UcpBaseUrl, UriKind.Absolute, out var ucpBaseUri))
+        if (string.IsNullOrWhiteSpace(origin) && Uri.TryCreate(Options.UcpBaseUrl, UriKind.Absolute, out var ucpBaseUri))
         {
             origin = ucpBaseUri.GetLeftPart(UriPartial.Authority);
         }
@@ -463,12 +515,16 @@ public class UcpProfileService : IUcpProfileService
             : origin + ModuleConstants.Endpoints.McpProtectedResourceMetadata;
     }
 
-    protected virtual string GetHandoffTemplate(string origin)
+    // The template of the links UcpCheckoutService.BuildContinueUrl creates: the configured template, then the store's URL,
+    // then UCP:StorefrontOrigin; the profile's origin only when none of them is set.
+    protected virtual string GetHandoffTemplate(UcpStoreProfile store, string origin)
     {
-        if (!string.IsNullOrWhiteSpace(_options.HandoffUrlTemplate))
+        if (!string.IsNullOrWhiteSpace(Options.HandoffUrlTemplate))
         {
-            return _options.HandoffUrlTemplate;
+            return Options.HandoffUrlTemplate;
         }
+
+        origin = FirstNotEmpty(store?.SecureUrl, store?.Url, Options.StorefrontOrigin, origin)?.TrimEnd('/');
 
         return string.IsNullOrWhiteSpace(origin)
             ? "/checkout?ucp_session={token}"

@@ -6,9 +6,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ApiExplorer;
 using Microsoft.OpenApi;
 using Swashbuckle.AspNetCore.SwaggerGen;
+using VirtoCommerce.UCP.Core.Attributes;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Web.Controllers.Api;
-using VirtoCommerce.UCP.Web.Filters;
 using VirtoCommerce.UCP.Web.Swagger;
 using Xunit;
 

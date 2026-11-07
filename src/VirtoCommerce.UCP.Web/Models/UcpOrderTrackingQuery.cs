@@ -1,3 +1,4 @@
+using System;
 using Microsoft.AspNetCore.Mvc;
 using VirtoCommerce.UCP.Core.Models;
 
@@ -13,6 +14,9 @@ public sealed class UcpOrderTrackingQuery
 
     [FromQuery(Name = "cart_id")]
     public string CartId { get; set; }
+
+    [FromQuery(Name = "placed_after")]
+    public DateTimeOffset? PlacedAfter { get; set; }
 
     [FromQuery(Name = "buyer_id")]
     public string BuyerId { get; set; }
@@ -30,6 +34,7 @@ public sealed class UcpOrderTrackingQuery
             OrderId = OrderId,
             OrderNumber = OrderNumber,
             CartId = CartId,
+            PlacedAfter = PlacedAfter,
             Context = new UcpCartContext
             {
                 BuyerId = BuyerId,

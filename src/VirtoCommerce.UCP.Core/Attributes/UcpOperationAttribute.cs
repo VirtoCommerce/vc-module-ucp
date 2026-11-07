@@ -1,6 +1,6 @@
 using System;
 
-namespace VirtoCommerce.UCP.Web.Filters;
+namespace VirtoCommerce.UCP.Core.Attributes;
 
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = true)]
 public sealed class UcpOperationAttribute : Attribute
