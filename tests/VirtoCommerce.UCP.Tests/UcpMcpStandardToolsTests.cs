@@ -17,6 +17,7 @@ using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Diagnostics;
 using VirtoCommerce.UCP.Web.Mcp;
+using VirtoCommerce.UCP.Web.Services;
 using VirtoCommerce.UCP.Web.Mcp.Models;
 using Xunit;
 using McpSensitiveArguments = VirtoCommerce.MCP.Core.McpSensitiveArguments;
@@ -503,6 +504,69 @@ public class UcpMcpStandardToolsTests
         var result = await Call(typeof(UcpMcpStandardTools), nameof(UcpMcpStandardTools.GetOrder), """{"id": "missing"}""", CreateServices());
 
         AssertStandardError(result, ModuleConstants.Discovery.Order, "not_found", "unrecoverable");
+    }
+
+    // MCP Inspector refuses a bare `true` where a schema object is expected: clients that map tool schemas onto a
+    // stricter dialect (Gemini's OpenAPI subset) reject such a tool.
+    [Fact]
+    public void UcpTools_DeclareNoBareTrueSchema()
+    {
+        var methods = new[] { typeof(UcpMcpCommerceTools), typeof(UcpMcpStandardTools), typeof(UcpMcpIdentityTools) }
+            .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Static))
+            .Where(method => method.GetCustomAttribute<McpServerToolAttribute>() != null);
+        var bare = new List<string>();
+        // The services the tools take from DI, so the SDK leaves them out of the input schemas, as on the platform.
+        var services = new ServiceCollection();
+        foreach (var serviceType in new[]
+                 {
+                     typeof(IUcpProfileService), typeof(IUcpCatalogService), typeof(IUcpCartService), typeof(IUcpCheckoutService),
+                     typeof(IUcpOrderService), typeof(IUcpGeographyService), typeof(IUcpBuyerContextAccessor), typeof(UcpBuyerIdentityService),
+                     typeof(UcpStandardMapper), typeof(Microsoft.AspNetCore.Http.IHttpContextAccessor), typeof(VirtoCommerce.MCP.Core.Services.IMcpSessionService),
+                 })
+        {
+            services.AddTransient(serviceType, _ => null);
+        }
+
+        using var serviceProvider = services.BuildServiceProvider();
+
+        foreach (var method in methods)
+        {
+            var tool = McpServerTool.Create(method, target: null, new McpServerToolCreateOptions { Services = serviceProvider, SerializerOptions = UcpMcpSerialization.Options });
+            CollectBareTrueSchemas(tool.ProtocolTool.InputSchema, $"{tool.ProtocolTool.Name}.inputSchema", bare);
+        }
+
+        Assert.Empty(bare);
+    }
+
+    private static void CollectBareTrueSchemas(JsonElement schema, string path, List<string> bare)
+    {
+        if (schema.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        if (schema.TryGetProperty("properties", out var properties))
+        {
+            foreach (var property in properties.EnumerateObject())
+            {
+                if (property.Value.ValueKind == JsonValueKind.True)
+                {
+                    bare.Add($"{path}.properties.{property.Name}");
+                }
+
+                CollectBareTrueSchemas(property.Value, $"{path}.properties.{property.Name}", bare);
+            }
+        }
+
+        if (schema.TryGetProperty("items", out var items))
+        {
+            if (items.ValueKind == JsonValueKind.True)
+            {
+                bare.Add($"{path}.items");
+            }
+
+            CollectBareTrueSchemas(items, $"{path}.items", bare);
+        }
     }
 
     private static async Task<CallToolResult> Call(Type toolType, string methodName, string argumentsJson, ServiceProvider services)

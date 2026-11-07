@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using VirtoCommerce.MCP.Core.Attributes;
 
@@ -237,8 +238,9 @@ public sealed class UcpStandardCheckoutRequest
     [JsonPropertyName("fulfillment")]
     public UcpStandardFulfillmentRequest Fulfillment { get; set; }
 
-    // Payment is not taken through this API; the member is declared so the audit masks it.
+    // Payment is not taken through this API; the member is declared so the audit masks it. An object, not any JSON
+    // value: a bare `true` schema is not portable to the clients that map tool schemas onto a stricter dialect.
     [McpSensitive]
     [JsonPropertyName("payment")]
-    public JsonElement? Payment { get; set; }
+    public JsonObject Payment { get; set; }
 }
