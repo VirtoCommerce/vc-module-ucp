@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,6 +11,7 @@ using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Services;
+using VirtoCommerce.UCP.Web.Services;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
 
@@ -27,12 +29,14 @@ public static class UcpMcpIdentityTools
         "cart, checkout, or order tools whenever the user says 'my account', 'my cart', 'on my behalf', 'from my name', " +
         "'for my organization', or asks for personalized prices, saved data, or orders. Without a valid bearer token, the MCP client " +
         "starts standard Virto Commerce Platform OAuth and retries this call. With a valid token, this tool returns its current buyer " +
-        "and organization; it does not sign out, switch accounts, or force a new browser login. To switch buyers, reconnect the MCP " +
+        "and organization, with their names, the user name and, when the email scope was granted, the email: tell the user which " +
+        "account and organization you act for. It does not sign out, switch accounts, or force a new browser login. To switch buyers, reconnect the MCP " +
         "client with a new OAuth authorization, then verify the returned identity before continuing. Signing out of the storefront " +
         "does not switch this MCP connection. After it succeeds, repeat the requested commerce operation. " +
         "Do not call it when the user explicitly requests anonymous shopping.")]
-    public static Task<object> LinkBuyerIdentity(
+    public static async Task<object> LinkBuyerIdentity(
         IUcpBuyerContextAccessor buyerContextAccessor,
+        UcpBuyerIdentityService buyerIdentityService,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -41,14 +45,30 @@ public static class UcpMcpIdentityTools
             RequireBuyer = true,
             RequireAuthenticatedBuyer = true,
         });
+        var identity = await buyerIdentityService.GetIdentityAsync(context);
 
-        return Task.FromResult<object>(new
+        // A name the buyer did not consent to share is left out, not returned empty.
+        var result = new Dictionary<string, object>
         {
-            linked = true,
-            buyer_id = context.PublicBuyerId,
-            organization_id = context.OrganizationId,
-            identity_source = "platform_oauth",
-        });
+            ["linked"] = true,
+            ["buyer_id"] = identity.BuyerId,
+            ["organization_id"] = identity.OrganizationId,
+        };
+        AddIfNotEmpty(result, "user_name", identity.UserName);
+        AddIfNotEmpty(result, "buyer_name", identity.BuyerName);
+        AddIfNotEmpty(result, "organization_name", identity.OrganizationName);
+        AddIfNotEmpty(result, "email", identity.Email);
+        result["identity_source"] = "platform_oauth";
+
+        return result;
+    }
+
+    private static void AddIfNotEmpty(Dictionary<string, object> result, string name, string value)
+    {
+        if (!string.IsNullOrEmpty(value))
+        {
+            result[name] = value;
+        }
     }
 
     // Callable without a token, so an assistant that has none can still finish a sign-out.

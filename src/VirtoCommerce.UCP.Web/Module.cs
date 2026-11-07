@@ -80,6 +80,7 @@ public class Module : IModule, IHasConfiguration
         serviceCollection.AddTransient<IUcpPublicOriginResolver, UcpPublicOriginResolver>();
         serviceCollection.AddTransient<IUcpProfileService, UcpProfileService>();
         serviceCollection.AddScoped<IUcpBuyerContextAccessor, UcpBuyerContextAccessor>();
+        serviceCollection.AddTransient<UcpBuyerIdentityService>();
         serviceCollection.AddTransient<IUcpCatalogService, UcpCatalogService>();
         serviceCollection.AddTransient<IUcpCartService, UcpCartService>();
         serviceCollection.AddUcpHandoffSessionStore();

@@ -225,7 +225,7 @@ Use one connector for both anonymous and signed-in shopping. Do not add a second
 
 1. Open `https://store.example.com/.well-known/ucp`, and the same path on the Platform host. Both must report the same MCP endpoint, `https://store.example.com/ucp/mcp`.
 2. Open `https://store.example.com/.well-known/oauth-protected-resource/ucp/mcp`. `resource` must be `https://store.example.com/ucp/mcp`, and `authorization_servers` must be `["https://store.example.com/"]`.
-3. In a new conversation, ask the assistant to use your account. It must call `link_buyer_identity`, open the Storefront sign-in page, and then report `linked: true` with your buyer and organization.
+3. In a new conversation, ask the assistant to use your account. It must call `link_buyer_identity`, open the Storefront sign-in page, and then report `linked: true` with your name, user name and organization by name, not only by id.
 4. Ask it to add a product to your cart and prepare checkout. Open the checkout link: the Storefront must show your cart, prices and organization.
 
 ### 8. Keep checkout links out of analytics
@@ -539,7 +539,7 @@ The MCP module signs buyers in: it publishes the protected-resource metadata at 
 
 When `UCP:AnonymousCatalog` is `false`, or the default store does not allow anonymous users, the MCP endpoint asks for a sign-in from the first request: an anonymous request, `initialize` and `tools/list` included, gets the HTTP 401 challenge, so the client starts OAuth when it connects. `logout_buyer` is never challenged. UCP answers these requests itself, in the platform pipeline before authentication, with the scope's challenge. This makes MCP clients ask for the sign-in early; it is not an access boundary: the REST API and a store that an operation names with `store_id` are not covered by it.
 
-* An assistant calls `link_buyer_identity` when the buyer asks to use their account. Without a token, the call gets the challenge and the client signs the buyer in; with a valid token, it returns the buyer and organization without another sign-in. The commerce tools are then called unchanged.
+* An assistant calls `link_buyer_identity` when the buyer asks to use their account. Without a token, the call gets the challenge and the client signs the buyer in; with a valid token, it returns the buyer and organization without another sign-in: their ids, and, with the `profile` scope the buyer consented to, the buyer's name, user name and organization name, so the assistant can tell the buyer which account it acts for. The email is returned only with the `email` scope. The commerce tools are then called unchanged.
 * To keep an anonymous cart, the assistant calls `update_cart` with the saved anonymous `buyer_id`, the `cart_id` and the complete line state. UCP checks the anonymous owner and calls XCart `mergeCart`.
 * Signing in or out of the storefront does not change the assistant's account. To switch buyers, reconnect the assistant, then call `link_buyer_identity` and check the identity it returns.
 * `logout_buyer` revokes the current authorization and its tokens, which also signs out other connections that share it; other OAuth applications and storefront cookies are not affected. Without a token, it succeeds and does nothing. A token that names neither an authorization nor a token id cannot be revoked: the result is `logged_out: false`, with the instruction to disconnect the client. Afterwards the assistant discards the buyer, organization, cart and checkout ids, and does not sign in again until the buyer asks.
