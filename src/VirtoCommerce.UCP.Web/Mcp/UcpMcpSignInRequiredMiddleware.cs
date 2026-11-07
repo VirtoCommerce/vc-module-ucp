@@ -33,37 +33,14 @@ internal sealed class UcpMcpSignInRequiredMiddleware
         HttpContext context,
         IUcpProfileService profileService)
     {
-        if (HasBearerHeader(context.Request))
+        if (!await RequiresSignInAsync(context, profileService))
         {
             await _next(context);
             return;
         }
 
-        if ((await profileService.GetProfile(context.RequestAborted)).Auth?.AnonymousCatalog != false)
-        {
-            await _next(context);
-            return;
-        }
-
-        // The request as the MCP module read it ahead of authentication (UseMcpScopeRequests). A request that names its
-        // tool more than once, in properties that differ only in case, goes on only when every name is logout_buyer: the
-        // MCP server may bind any of them. A request the MCP module did not read is challenged as any other call.
         var request = context.GetMcpRequest();
-        if (request?.IsToolCall == true && request.ToolNames.Count > 0 && request.ToolNames.All(IsLogoutBuyer))
-        {
-            await _next(context);
-            return;
-        }
-
-        // A browser request from an origin the scope does not allow goes on to the MCP module, which refuses it with 403
-        // as the MCP transport requires, rather than being asked to sign in.
         var scope = context.GetMcpScope();
-        if (await IsRefusedOriginAsync(context, scope))
-        {
-            await _next(context);
-            return;
-        }
-
         var toolName = request?.IsToolCall == true ? request.ToolNames.FirstOrDefault(x => !IsLogoutBuyer(x)) : null;
 
         // The scope's own challenge writer and origin, as the MCP module challenges its requests.
@@ -77,6 +54,30 @@ internal sealed class UcpMcpSignInRequiredMiddleware
             ToolName = toolName,
             ErrorDescription = SignInRequiredMessage,
         });
+    }
+
+    // False when the request goes on to the MCP module: it carries a token, the catalog is open, it only logs the buyer
+    // out, or it comes from an origin the scope refuses.
+    private static async Task<bool> RequiresSignInAsync(HttpContext context, IUcpProfileService profileService)
+    {
+        if (HasBearerHeader(context.Request) ||
+            (await profileService.GetProfile(context.RequestAborted)).Auth?.AnonymousCatalog != false)
+        {
+            return false;
+        }
+
+        // The request as the MCP module read it ahead of authentication (UseMcpScopeRequests). A request that names its
+        // tool more than once, in properties that differ only in case, goes on only when every name is logout_buyer: the
+        // MCP server may bind any of them. A request the MCP module did not read is challenged as any other call.
+        var request = context.GetMcpRequest();
+        if (request?.IsToolCall == true && request.ToolNames.Count > 0 && request.ToolNames.All(IsLogoutBuyer))
+        {
+            return false;
+        }
+
+        // A browser request from an origin the scope does not allow goes on to the MCP module, which refuses it with 403
+        // as the MCP transport requires, rather than being asked to sign in.
+        return !await IsRefusedOriginAsync(context, context.GetMcpScope());
     }
 
     // As the MCP module's Origin check decides: a request without an Origin header is not checked, more than one is refused.
