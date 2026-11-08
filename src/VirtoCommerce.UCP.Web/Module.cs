@@ -69,7 +69,7 @@ public class Module : IModule, IHasConfiguration
             .WithPublicOriginResolver<UcpMcpPublicOriginResolver>()
             // UCP's errors and telemetry for the calls, inside the MCP module's checks and audit
             .WithCallToolFilter<UcpMcpCallToolFilter>());
-        serviceCollection.AddMcpToolsFromAssembly(typeof(UcpMcpCommerceTools).Assembly, UcpMcpSerialization.Options);
+        serviceCollection.AddMcpCapabilities<McpAssemblyMarker>();
         // The payloads of the standard UCP MCP tools; a module replaces it with a subclass to change a mapping.
         serviceCollection.AddSingleton<UcpStandardMapper>();
 

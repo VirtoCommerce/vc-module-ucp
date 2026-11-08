@@ -35,6 +35,7 @@ using VirtoCommerce.UCP.Web.Diagnostics;
 using VirtoCommerce.UCP.Web.Filters;
 using VirtoCommerce.UCP.Web.Mcp;
 using Xunit;
+using McpSerialization = VirtoCommerce.MCP.Core.McpSerialization;
 
 namespace VirtoCommerce.UCP.Tests;
 
@@ -717,7 +718,7 @@ public class UcpObservabilityContractTests
             .AddSingleton<IUcpGeographyService>(_ => null)
             .BuildServiceProvider();
         var tool = McpServerTool.Create(typeof(UcpMcpCommerceTools).GetMethod(methodName), target: null,
-            new McpServerToolCreateOptions { Services = services, SerializerOptions = UcpMcpSerialization.Options });
+            new McpServerToolCreateOptions { Services = services, SerializerOptions = McpSerialization.Options });
 
         Assert.True(tool.ProtocolTool.InputSchema.TryGetProperty("required", out var required));
         Assert.Contains(required.EnumerateArray(), x => x.GetString() == requiredArgument);

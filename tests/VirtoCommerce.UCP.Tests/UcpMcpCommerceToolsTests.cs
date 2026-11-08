@@ -581,10 +581,10 @@ public class UcpMcpCommerceToolsTests
             : [type.GetString()];
     }
 
-    // The options Module passes to AddMcpToolsFromAssembly.
+    // The options the MCP module registers every tool with (AddMcpCapabilities).
     private static JsonSerializerOptions CreateMcpToolSerializerOptions()
     {
-        return UcpMcpSerialization.Options;
+        return VirtoCommerce.MCP.Core.McpSerialization.Options;
     }
 
     private sealed class StubProfileService : IUcpProfileService

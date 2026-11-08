@@ -575,8 +575,10 @@ serviceCollection.AddMcpScope(new McpScope
     .WithChallengeWriter<UcpMcpChallengeWriter>()
     .WithPublicOriginResolver<UcpMcpPublicOriginResolver>()
     .WithCallToolFilter<UcpMcpCallToolFilter>());
-serviceCollection.AddMcpToolsFromAssembly(typeof(UcpMcpCommerceTools).Assembly, UcpMcpSerialization.Options);
+serviceCollection.AddMcpCapabilities<McpAssemblyMarker>(); // the tools of VirtoCommerce.UCP.Web.Mcp
 ```
+
+`McpAssemblyMarker` is an empty class next to the UCP tools; `AddMcpCapabilities` registers every tool of its assembly. The tools are serialized with the MCP module's shared `McpSerialization.Options` (snake_case names, nulls left out), and so are the payloads UCP builds itself, the standard results and the errors (`UcpMcpSerialization`).
 
 The writer, the resolver and the filter are declared with the scope, so they serve `/ucp/mcp` only and other scopes keep the MCP module's ones; none of them checks which scope it serves.
 
@@ -925,7 +927,7 @@ The module manifest declares these runtime dependencies:
 
 | Module | Version |
 | --- | --- |
-| `VirtoCommerce.MCP` | `3.1000.0-alpha.48-vcst-6155-core-mcp-module` |
+| `VirtoCommerce.MCP` | `3.1000.0-alpha.51-vcst-6155-core-mcp-module` |
 | `VirtoCommerce.Xapi` | `3.1030.0` |
 | `VirtoCommerce.XCatalog` | `3.1023.0` |
 | `VirtoCommerce.XCart` | `3.1044.0` |

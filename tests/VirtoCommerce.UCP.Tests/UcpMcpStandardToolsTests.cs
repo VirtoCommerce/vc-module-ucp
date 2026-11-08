@@ -20,6 +20,7 @@ using VirtoCommerce.UCP.Web.Mcp;
 using VirtoCommerce.UCP.Web.Services;
 using VirtoCommerce.UCP.Web.Mcp.Models;
 using Xunit;
+using McpSerialization = VirtoCommerce.MCP.Core.McpSerialization;
 using McpSensitiveArguments = VirtoCommerce.MCP.Core.McpSensitiveArguments;
 
 namespace VirtoCommerce.UCP.Tests;
@@ -531,7 +532,7 @@ public class UcpMcpStandardToolsTests
 
         foreach (var method in methods)
         {
-            var tool = McpServerTool.Create(method, target: null, new McpServerToolCreateOptions { Services = serviceProvider, SerializerOptions = UcpMcpSerialization.Options });
+            var tool = McpServerTool.Create(method, target: null, new McpServerToolCreateOptions { Services = serviceProvider, SerializerOptions = McpSerialization.Options });
             CollectBareTrueSchemas(tool.ProtocolTool.InputSchema, $"{tool.ProtocolTool.Name}.inputSchema", bare);
         }
 
@@ -574,7 +575,7 @@ public class UcpMcpStandardToolsTests
         var tool = McpServerTool.Create(
             toolType.GetMethod(methodName),
             target: null,
-            new McpServerToolCreateOptions { Services = services, SerializerOptions = UcpMcpSerialization.Options });
+            new McpServerToolCreateOptions { Services = services, SerializerOptions = McpSerialization.Options });
         var arguments = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(argumentsJson);
         await using var server = McpServer.Create(new StreamServerTransport(new MemoryStream(), new MemoryStream()), new McpServerOptions(), null, services);
         var context = new RequestContext<CallToolRequestParams>(
