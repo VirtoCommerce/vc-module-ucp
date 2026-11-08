@@ -198,7 +198,7 @@ Deploy the updated environment.
 
 ### 5. Register an OAuth client for the AI assistant
 
-Each AI assistant signs buyers in through a registered OAuth client. As an administrator, open **Security → OAuth applications** in the Admin Shell (3.1094.0 or later) or the classic Manager (`VirtoCommerce.AdminAngularJs` 3.1096.0 or later), on platform 3.1095.0 or later, select **Add** and fill in:
+Each AI assistant signs buyers in through a registered OAuth client. As an administrator, open **Security → OAuth applications** in the Admin Shell (3.1094.0 or later) or the classic Manager (`VirtoCommerce.AdminAngularJs` 3.1096.0 or later), select **Add** and fill in:
 
 | Field | Value |
 | --- | --- |
@@ -869,7 +869,7 @@ Earlier versions mapped `/ucp/mcp` themselves. This version moves the endpoint t
 - **Breaking: a buyer's token needs a known origin outside Development.** The audience of a token is checked against the public origin: `MCP:Scopes:ucp:PublicOrigin` (or the obsolete `UCP:PublicOrigin`), or the URL of the request's store. A deployment with none of them, which earlier versions served from the request's host, answers `401 invalid_token` to every Bearer on `/ucp/mcp` and `/ucp/v1/*`; anonymous requests are not affected. Set the store's URL or the scope's origin before upgrading.
 - `UCP:AnonymousCatalog` now also follows the default store's `AllowAnonymousUsers`; when either is off, the MCP endpoint asks for a sign-in from the first request.
 - Cart tools work with the buyer's storefront cart when no `cart_type` is given, a cart's `continue_url` is `{storefront}/cart/{id}`, and `track_order` takes `placed_after` (the handoff's `issued_at`) and returns `orders`.
-- The minimum platform version is `3.1091.0` (was `3.1076.0`), with the latest Xapi, XCart, XOrder, Store, Orders and Marketing modules.
+- The minimum platform version is `3.1096.0` (was `3.1076.0`), with the latest Xapi, XCart, XOrder, Store, Orders and Marketing modules.
 - `UCP:Observability:EnableApplicationInsightsCompatibilityBridge` is removed, with the optional dependency on the `VirtoCommerce.ApplicationInsights` module. To send traces to Application Insights, set `OpenTelemetry:AzureMonitor:ConnectionString` in the OpenTelemetry module (see [Observability](#observability)).
 - Code that referenced `UcpDiagnostics.McpActivitySourceName` uses `McpDiagnostics.SdkActivitySourceName` from `VirtoCommerce.MCP.Core`.
 - `UcpOperationAttribute` moved from `VirtoCommerce.UCP.Web.Filters` to `VirtoCommerce.UCP.Core.Attributes`.
@@ -941,7 +941,7 @@ UCP builds against the `VirtoCommerce.MCP.Core` package of the same version as t
 
 Target framework: `.NET 10`.
 
-Minimum Virto Commerce Platform version: `3.1091.0`.
+Minimum Virto Commerce Platform version: `3.1096.0`.
 
 ### Build and test
 
