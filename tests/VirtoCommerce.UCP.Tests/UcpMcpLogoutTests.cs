@@ -4,10 +4,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using OpenIddict.Abstractions;
-using VirtoCommerce.Platform.Core.Security;
-using VirtoCommerce.UCP.Core.Services;
+using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.UCP.Web.Mcp;
-using VirtoCommerce.UCP.Web.Services;
 using Xunit;
 
 namespace VirtoCommerce.UCP.Tests;
@@ -15,66 +13,75 @@ namespace VirtoCommerce.UCP.Tests;
 [Trait("Category", "Unit")]
 public class UcpMcpLogoutTests
 {
-    [Fact]
-    public async Task Logout_RevokesOnlyTheAuthorizationFromTheValidatedPrincipal()
+    [Theory]
+    [InlineData(OpenIddictConstants.Claims.Private.AuthorizationId)]
+    [InlineData(OpenIddictConstants.Claims.Private.TokenId)]
+    public async Task LogoutBuyer_SignsOutTheValidatedPrincipal(string revocableClaimType)
     {
-        var sessions = new RecordingSessionsService();
-        var service = new UcpMcpSessionService(null, sessions);
-        var principal = new ClaimsPrincipal(new ClaimsIdentity("Bearer"));
-        principal.SetAuthorizationId("current-authorization");
+        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim(revocableClaimType, "id-1")], "Bearer"));
+        var context = new HttpContextAccessor { HttpContext = new DefaultHttpContext { User = principal } };
+        var sessions = new RecordingSessionService();
 
-        await service.Logout(principal, TestContext.Current.CancellationToken);
+        var result = await UcpMcpIdentityTools.LogoutBuyer(context, sessions, TestContext.Current.CancellationToken);
 
-        Assert.Equal("current-authorization", sessions.RevokedGroupId);
+        Assert.Same(principal, sessions.SignedOut);
+        Assert.True((bool)result.GetType().GetProperty("logged_out").GetValue(result));
     }
 
+    // A token with neither an authorization id nor a token id cannot be revoked: the buyer is told so, not that the
+    // sign-out succeeded.
     [Fact]
-    public async Task Logout_WithoutAuthorizationDoesNotRevokeAllUserSessions()
+    public async Task LogoutBuyer_TokenWithNothingToRevoke_IsNotLoggedOut()
     {
-        var sessions = new RecordingSessionsService();
-        var service = new UcpMcpSessionService(null, sessions);
+        // Arrange
+        var principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", "user-1")], "Bearer"));
+        var context = new HttpContextAccessor { HttpContext = new DefaultHttpContext { User = principal } };
+        var sessions = new RecordingSessionService();
 
-        await Assert.ThrowsAsync<UcpException>(() => service.Logout(
-            new ClaimsPrincipal(new ClaimsIdentity("Bearer")), TestContext.Current.CancellationToken));
+        // Act
+        var result = await UcpMcpIdentityTools.LogoutBuyer(context, sessions, TestContext.Current.CancellationToken);
 
-        Assert.Null(sessions.RevokedGroupId);
-    }
-
-    [Fact]
-    public async Task Logout_CanceledRequestDoesNotRevokeAuthorization()
-    {
-        var sessions = new RecordingSessionsService();
-        var service = new UcpMcpSessionService(null, sessions);
-        var principal = new ClaimsPrincipal(new ClaimsIdentity("Bearer"));
-        principal.SetAuthorizationId("current-authorization");
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.Logout(principal, new CancellationToken(true)));
-
-        Assert.Null(sessions.RevokedGroupId);
+        // Assert
+        Assert.Null(sessions.SignedOut);
+        Assert.False((bool)result.GetType().GetProperty("logged_out").GetValue(result));
+        Assert.Contains("disconnect the MCP client", (string)result.GetType().GetProperty("instructions").GetValue(result), StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task LogoutBuyer_AlreadyAnonymousDoesNotRequireAuthorization()
     {
         var context = new HttpContextAccessor { HttpContext = new DefaultHttpContext() };
+        var sessions = new RecordingSessionService();
 
-        var result = await UcpMcpIdentityTools.LogoutBuyer(context, null, TestContext.Current.CancellationToken);
+        var result = await UcpMcpIdentityTools.LogoutBuyer(context, sessions, TestContext.Current.CancellationToken);
 
+        Assert.Null(sessions.SignedOut);
         Assert.True((bool)result.GetType().GetProperty("logged_out").GetValue(result));
     }
 
-    private sealed class RecordingSessionsService : IUserSessionsService
+    [Fact]
+    public async Task LogoutBuyer_CanceledRequestDoesNotSignOut()
     {
-        public string RevokedGroupId { get; private set; }
+        var principal = new ClaimsPrincipal(new ClaimsIdentity("Bearer"));
+        var context = new HttpContextAccessor { HttpContext = new DefaultHttpContext { User = principal } };
+        var sessions = new RecordingSessionService();
 
-        public Task TerminateUserSessionGroup(string sessionGroupId)
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            UcpMcpIdentityTools.LogoutBuyer(context, sessions, new CancellationToken(true)));
+
+        Assert.Null(sessions.SignedOut);
+    }
+
+    private sealed class RecordingSessionService : IMcpSessionService
+    {
+        public ClaimsPrincipal SignedOut { get; private set; }
+
+        public Task<bool> IsActiveAsync(ClaimsPrincipal principal, CancellationToken cancellationToken = default) => Task.FromResult(true);
+
+        public Task SignOutAsync(ClaimsPrincipal principal, CancellationToken cancellationToken = default)
         {
-            RevokedGroupId = sessionGroupId;
+            SignedOut = principal;
             return Task.CompletedTask;
         }
-
-        public Task TerminateUserSession(string sessionId) => throw new NotSupportedException();
-        public Task TerminateAllUserSessions(string userId) => throw new NotSupportedException();
-        public Task TerminateUserSessions(TerminateUserSessionsRequest request) => throw new NotSupportedException();
     }
 }

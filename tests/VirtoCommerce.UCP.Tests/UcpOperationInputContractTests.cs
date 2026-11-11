@@ -24,6 +24,7 @@ public class UcpOperationInputContractTests
     private const string SecretNotes = "private checkout note";
     private const string SecretCoupon = "SAVE50-SECRET";
     private const string SecretSession = "SESSION-TOKEN-SECRET";
+    private static readonly string[] LookupIds = ["lookup-marker"];
 
     private static IEnumerable<McpInputCase> McpCases()
     {
@@ -43,6 +44,13 @@ public class UcpOperationInputContractTests
         yield return Mcp(ModuleConstants.Operations.ListCountries, Args(("query", "country-marker"), ("limit", 10)), "country-marker");
         yield return Mcp(ModuleConstants.Operations.ResolveCountry, Args(("query", "resolve-marker")), "resolve-marker");
         yield return Mcp(ModuleConstants.Operations.ListRegions, Args(("country_id", "country-marker")), "country-marker");
+        yield return Mcp(ModuleConstants.Operations.SearchCatalog, Args(("catalog", new { query = "search-marker", context = new { postal_code = SecretAddress } })), "search-marker");
+        yield return Mcp(ModuleConstants.Operations.LookupCatalog, Args(("catalog", new { ids = LookupIds })), "catalog_id_count");
+        yield return Mcp(ModuleConstants.Operations.CancelCart, Args(("id", "cart-marker"), ("meta", new { idempotency_key = "key" })), "cart-marker");
+        yield return Mcp(ModuleConstants.Operations.GetCheckout, Args(("id", "checkout-marker"), ("buyer_id", "buyer-marker")), "checkout-marker");
+        yield return Mcp(ModuleConstants.Operations.CompleteCheckout, Args(("id", "checkout-marker"), ("checkout", new { payment = new { instruments = new[] { new { token = SecretSession } } } })), "checkout-marker");
+        yield return Mcp(ModuleConstants.Operations.CancelCheckout, Args(("id", "checkout-marker")), "checkout-marker");
+        yield return Mcp(ModuleConstants.Operations.GetOrder, Args(("id", "order-marker")), "order-marker");
     }
 
     private static IEnumerable<RestInputCase> RestCases()
@@ -101,8 +109,9 @@ public class UcpOperationInputContractTests
         var actualMcpOperations = McpCases().Select(x => x.Operation).OrderBy(x => x, StringComparer.Ordinal);
         Assert.Equal(expectedMcpOperations, actualMcpOperations);
 
+        // The standard-only UCP tools are MCP tools only.
         var expectedRestOperations = ModuleConstants.McpTools.UcpToolNames
-            .Where(x => x != ModuleConstants.Operations.CheckoutAndHandoff)
+            .Where(x => x != ModuleConstants.Operations.CheckoutAndHandoff && !ModuleConstants.McpTools.StandardOnlyToolNames.Contains(x))
             .Append(ModuleConstants.Operations.RestoreHandoff)
             .OrderBy(x => x, StringComparer.Ordinal);
         var actualRestOperations = RestCases().Select(x => x.Operation).OrderBy(x => x, StringComparer.Ordinal);
@@ -129,12 +138,11 @@ public class UcpOperationInputContractTests
     }
 
     [Fact]
-    public void ObservabilityDefaults_CaptureInputsOnlyOnErrorsAndEnableClassicAppInsightsCompatibility()
+    public void ObservabilityDefaults_CaptureInputsOnlyOnErrors()
     {
         var options = new UcpObservabilityOptions();
 
         Assert.Equal(UcpInputCaptureMode.ErrorsOnly, options.InputCaptureMode);
-        Assert.True(options.EnableApplicationInsightsCompatibilityBridge);
     }
 
     [Fact]
@@ -228,19 +236,6 @@ public class UcpOperationInputContractTests
 
         Assert.Contains(sku, inputJson, StringComparison.Ordinal);
         Assert.DoesNotContain("[redacted-phone]", inputJson, StringComparison.Ordinal);
-    }
-
-    [Theory]
-    [InlineData("OpenTelemetry:Endpoint")]
-    [InlineData("OTEL_EXPORTER_OTLP_ENDPOINT")]
-    [InlineData("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")]
-    public void ObservabilityContract_DetectsConfiguredOtelExporter(string key)
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string> { [key] = "http://localhost:4317" })
-            .Build();
-
-        Assert.True(Module.HasConfiguredOtelExporter(configuration));
     }
 
     [Fact]

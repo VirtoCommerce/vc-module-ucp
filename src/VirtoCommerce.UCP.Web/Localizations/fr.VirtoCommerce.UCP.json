@@ -1,0 +1,18 @@
+{
+  "settings": {
+    "UCP": {
+      "StoreManagedAddresses": {
+        "title": "Adresses gérées par le magasin",
+        "description": "La vitrine attribue elle-même les adresses du panier. Les adresses qu'un assistant IA envoie avec un paiement sont ignorées, et l'acheteur choisit l'adresse sur la page de paiement de la vitrine."
+      },
+      "CheckoutLinkLifetimeMinutes": {
+        "title": "Durée de validité du lien de paiement (minutes)",
+        "description": "Durée pendant laquelle un lien de paiement qu'un assistant IA remet à l'acheteur reste valide. Par défaut : 15."
+      },
+      "CheckoutUrlTemplate": {
+        "title": "Modèle d'URL de paiement",
+        "description": "La page de la vitrine qui ouvre un lien de paiement, avec {token} pour le jeton du lien, pour une page de paiement qui ne se trouve pas à /checkout. Laissez vide pour utiliser {store URL}/checkout?ucp_session={token}."
+      }
+    }
+  }
+}

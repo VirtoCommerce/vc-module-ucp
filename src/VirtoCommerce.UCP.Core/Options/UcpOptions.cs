@@ -1,3 +1,5 @@
+using VirtoCommerce.UCP.Core;
+
 namespace VirtoCommerce.UCP.Core.Options;
 
 public class UcpOptions
@@ -9,7 +11,8 @@ public class UcpOptions
     public string UcpBaseUrl { get; set; }
     public string PublicOrigin { get; set; }
     public string HandoffUrlTemplate { get; set; }
-    public int HandoffTokenTtlMinutes { get; set; } = 15;
+    public int HandoffTokenTtlMinutes { get; set; } = ModuleConstants.Settings.Store.DefaultCheckoutLinkLifetimeMinutes;
     public bool AnonymousCatalog { get; set; } = true;
+    public bool StoreManagedAddresses { get; set; }
     public UcpObservabilityOptions Observability { get; set; } = new();
 }

@@ -1,0 +1,18 @@
+{
+  "settings": {
+    "UCP": {
+      "StoreManagedAddresses": {
+        "title": "ストア管理の住所",
+        "description": "カートの住所はストアフロントが自動で設定します。AI アシスタントがチェックアウトと一緒に送信した住所は無視され、購入者はストアフロントのチェックアウトページで住所を選択します。"
+      },
+      "CheckoutLinkLifetimeMinutes": {
+        "title": "チェックアウトリンクの有効期間（分）",
+        "description": "AI アシスタントが購入者に渡すチェックアウトリンクが有効な期間。既定：15。"
+      },
+      "CheckoutUrlTemplate": {
+        "title": "チェックアウト URL テンプレート",
+        "description": "チェックアウトリンクを開くストアフロントのページ。{token} はリンクのトークンで、/checkout にないチェックアウトページ用です。空の場合は {store URL}/checkout?ucp_session={token} が使用されます。"
+      }
+    }
+  }
+}

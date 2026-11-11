@@ -2,8 +2,8 @@ using System.Collections.Generic;
 using System.Reflection;
 using Microsoft.OpenApi;
 using Swashbuckle.AspNetCore.SwaggerGen;
+using VirtoCommerce.UCP.Core.Attributes;
 using VirtoCommerce.UCP.Core.Models;
-using VirtoCommerce.UCP.Web.Filters;
 
 namespace VirtoCommerce.UCP.Web.Swagger;
 

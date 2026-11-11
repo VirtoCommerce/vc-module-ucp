@@ -21,7 +21,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\VirtoCommerce.UCP.Core\VirtoCommerce.UCP.Core.csproj" />
     <ProjectReference Include="..\..\src\VirtoCommerce.UCP.Data\VirtoCommerce.UCP.Data.csproj" />
-    <ProjectReference Include="..\..\src\VirtoCommerce.UCP.ExperienceApi\VirtoCommerce.UCP.ExperienceApi.csproj" />
     <ProjectReference Include="..\..\src\VirtoCommerce.UCP.Web\VirtoCommerce.UCP.Web.csproj" />
   </ItemGroup>
 </Project>

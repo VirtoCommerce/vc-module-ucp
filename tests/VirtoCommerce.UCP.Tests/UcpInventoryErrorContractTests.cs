@@ -13,6 +13,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using VirtoCommerce.UCP.Core;
+using VirtoCommerce.UCP.Core.Attributes;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Diagnostics;

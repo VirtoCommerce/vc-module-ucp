@@ -1,16 +1,21 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
+using ModelContextProtocol.Server;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using VirtoCommerce.Platform.Core.Settings;
 using VirtoCommerce.StoreModule.Core.Model;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Data.Services;
+using VirtoCommerce.UCP.Web.Mcp;
 using Xunit;
+using StoreSetting = VirtoCommerce.StoreModule.Core.ModuleConstants.Settings.General;
 
 namespace VirtoCommerce.UCP.Tests;
 
@@ -41,9 +46,46 @@ public class UcpProfileServiceTests
         Assert.Equal("https://shop.example/ucp/mcp", Assert.Single(profile.Ucp.Services[ModuleConstants.Discovery.Service]).Endpoint);
         Assert.Equal("https://shop.example/ucp/v1", profile.Endpoints.UcpBaseUrl);
         Assert.Equal("https://shop.example", profile.StorefrontOrigin);
-        Assert.Equal("https://shop.example/checkout?ucp_session={token}", profile.Endpoints.HandoffUrlTemplate);
+        // Checkout links follow the store, then UCP:StorefrontOrigin, as UcpCheckoutService builds them; PublicOrigin does not change them.
+        Assert.Equal(publicOverride ? "https://other.example/checkout?ucp_session={token}" : "https://shop.example/checkout?ucp_session={token}",
+            profile.Endpoints.HandoffUrlTemplate);
         Assert.Equal("https://shop.example/", profile.Auth.AuthorizationServer);
         Assert.Equal("https://shop.example/.well-known/oauth-protected-resource/ucp/mcp", profile.Auth.ProtectedResourceMetadata);
+    }
+
+    [Fact]
+    public async Task GetProfile_McpTools_MatchesToolsRegisteredByTheWebAssembly()
+    {
+        var httpContextAccessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext(),
+        };
+        httpContextAccessor.HttpContext.Request.Scheme = "https";
+        httpContextAccessor.HttpContext.Request.Host = new HostString("acme.example");
+        var service = new UcpProfileService(
+            Options.Create(new UcpOptions()),
+            UcpPublicOriginResolverTests.CreateResolver(httpContextAccessor));
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        // Mirrors WithToolsFromAssembly in Module.cs: only [McpServerToolType] types, and every
+        // public or non-public, static or instance method of them (ModelContextProtocol 1.4.0).
+        var registeredToolAttributes = typeof(UcpMcpCommerceTools).Assembly
+            .GetTypes()
+            .Where(x => x.GetCustomAttribute<McpServerToolTypeAttribute>() is not null)
+            .SelectMany(x => x.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance))
+            .Select(x => x.GetCustomAttribute<McpServerToolAttribute>())
+            .Where(x => x is not null)
+            .ToList();
+        Assert.NotEmpty(registeredToolAttributes);
+        Assert.All(registeredToolAttributes, x => Assert.False(string.IsNullOrWhiteSpace(x.Name)));
+
+        var declaredTools = registeredToolAttributes
+            .Select(x => x.Name)
+            .OrderBy(x => x, System.StringComparer.Ordinal)
+            .ToList();
+        // Every registered tool, and nothing else, is listed.
+        Assert.Equal(declaredTools, profile.McpTools.OrderBy(x => x, System.StringComparer.Ordinal).ToList());
     }
 
     [Fact]
@@ -69,8 +111,20 @@ public class UcpProfileServiceTests
         Assert.Equal(ModuleConstants.DiscoveryVersion, serviceProfile.Version);
         Assert.Equal("mcp", serviceProfile.Transport);
         Assert.Equal("https://acme.example/ucp/mcp", serviceProfile.Endpoint);
-        Assert.Equal(ModuleConstants.DiscoveryVersion, profile.Ucp.Capabilities["com.virtocommerce.ucp.catalog"].Single().Version);
-        Assert.Equal(ModuleConstants.DiscoveryVersion, profile.Ucp.Capabilities["com.virtocommerce.ucp.checkout"].Single().Version);
+        var shoppingService = Assert.Single(profile.Ucp.Services[ModuleConstants.Discovery.ShoppingService]);
+        Assert.Equal("2026-08-25", shoppingService.Version);
+        Assert.Equal("mcp", shoppingService.Transport);
+        Assert.Equal("https://acme.example/ucp/mcp", shoppingService.Endpoint);
+        Assert.Equal("https://ucp.dev/2026-08-25/services/shopping/mcp.openrpc.json", shoppingService.Schema);
+        Assert.Equal(
+            ["dev.ucp.common.identity_linking", "dev.ucp.shopping.cart", "dev.ucp.shopping.catalog.lookup", "dev.ucp.shopping.catalog.search", "dev.ucp.shopping.checkout", "dev.ucp.shopping.order"],
+            profile.Ucp.Capabilities.Keys.Order());
+        Assert.All(profile.Ucp.Capabilities.Values.SelectMany(x => x), x =>
+        {
+            Assert.Equal("2026-08-25", x.Version);
+            Assert.StartsWith("https://ucp.dev/2026-08-25/specification/", x.Spec);
+            Assert.StartsWith("https://ucp.dev/2026-08-25/schemas/", x.Schema);
+        });
         Assert.Equal(ModuleConstants.UcpVersion, profile.UcpVersion);
         Assert.Equal(ModuleConstants.Platform, profile.Platform);
         Assert.Contains(ModuleConstants.ErrorCodes.OutOfStock, profile.Errors.Codes);
@@ -134,6 +188,11 @@ public class UcpProfileServiceTests
         Assert.Equal(JTokenType.Object, json["ucp"]?["services"]?.Type);
         Assert.Equal(JTokenType.Object, json["ucp"]?["capabilities"]?.Type);
         Assert.Equal(JTokenType.Object, json["ucp"]?["payment_handlers"]?.Type);
+        Assert.Equal(
+            ["dev.ucp.shopping.cart:manage", "dev.ucp.shopping.checkout:manage", "dev.ucp.shopping.order:read"],
+            ((JObject)json["ucp"]["capabilities"]["dev.ucp.common.identity_linking"][0]["config"]["scopes"]).Properties().Select(x => x.Name));
+        Assert.Null(json["ucp"]["capabilities"]["dev.ucp.shopping.cart"][0]["config"]);
+        Assert.Null(json["ucp"]["services"][ModuleConstants.Discovery.Service][0]["schema"]);
     }
 
     [Fact]
@@ -195,6 +254,40 @@ public class UcpProfileServiceTests
         Assert.Single(profile.Stores);
         Assert.Equal("https://localhost:3000", profile.StorefrontOrigin);
         Assert.Equal("https://localhost:3000/checkout?ucp_session={token}", profile.Endpoints.HandoffUrlTemplate);
+    }
+
+    [Fact]
+    public async Task GetProfile_AdvertisesTheCheckoutLinkOfTheStore_When_PublicAndStorefrontOriginsDiffer()
+    {
+        var httpContextAccessor = new HttpContextAccessor { HttpContext = new DefaultHttpContext() };
+        var service = new TestUcpProfileService(
+            Options.Create(new UcpOptions
+            {
+                DefaultStoreId = "store-acme",
+                PublicOrigin = "https://agents.example",
+                StorefrontOrigin = "https://fallback.example",
+            }),
+            httpContextAccessor,
+            new Store { Id = "store-acme", Name = "ACME", SecureUrl = "https://shop.example/" });
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Equal("https://shop.example/checkout?ucp_session={token}", profile.Endpoints.HandoffUrlTemplate);
+    }
+
+    [Fact]
+    public async Task GetProfile_ListsEveryMcpTool_And_EveryErrorCode()
+    {
+        var service = new UcpProfileService(
+            Options.Create(new UcpOptions()),
+            UcpPublicOriginResolverTests.CreateResolver(new HttpContextAccessor()));
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Contains(ModuleConstants.McpTools.LogoutBuyer, profile.McpTools);
+        Assert.Equal(25, profile.McpTools.Count);
+        Assert.Contains(ModuleConstants.McpTools.CompleteCheckout, profile.McpTools);
+        Assert.Contains(ModuleConstants.ErrorCodes.HandoffInProgress, profile.Errors.Codes);
     }
 
     [Fact]
@@ -279,6 +372,145 @@ public class UcpProfileServiceTests
         Assert.Equal("https://platform.example", profile.StorefrontOrigin);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetProfile_StoreManagedAddresses_ExposesFlagAndGuidanceOnlyWhenOptionIsTrue(bool storeManaged)
+    {
+        var httpContextAccessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext(),
+        };
+        httpContextAccessor.HttpContext.Request.Scheme = "https";
+        httpContextAccessor.HttpContext.Request.Host = new HostString("acme.example");
+        var service = new UcpProfileService(
+            Options.Create(new UcpOptions { StoreManagedAddresses = storeManaged }),
+            UcpPublicOriginResolverTests.CreateResolver(httpContextAccessor));
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Equal(storeManaged, profile.StoreManagedAddresses);
+        Assert.Equal(storeManaged, profile.AgentGuidance.Contains(ModuleConstants.StoreManagedAddressesInstruction));
+        Assert.Equal(storeManaged, JObject.Parse(JsonConvert.SerializeObject(profile)).Value<bool>("store_managed_addresses"));
+    }
+
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    public async Task GetProfile_AnonymousCatalog_RequiresOptionAndDefaultStoreAllowingAnonymousUsers(bool option, bool storeAllows, bool expected)
+    {
+        var httpContextAccessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext(),
+        };
+        httpContextAccessor.HttpContext.Request.Scheme = "https";
+        httpContextAccessor.HttpContext.Request.Host = new HostString("platform.example");
+        var service = new TestUcpProfileService(
+            Options.Create(new UcpOptions { DefaultStoreId = "store-acme", AnonymousCatalog = option }),
+            httpContextAccessor,
+            store: new Store
+            {
+                Id = "store-acme",
+                Settings =
+                [
+                    new ObjectSettingEntry { Name = StoreSetting.AllowAnonymousUsers.Name, Value = storeAllows },
+                ],
+            });
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Equal(expected, profile.Auth.AnonymousCatalog);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetProfile_AnonymousCatalog_WhenDefaultStoreCannotBeLoaded_KeepsOptionValue(bool option)
+    {
+        var service = CreateAnonymousCatalogService(new UcpOptions { DefaultStoreId = "store-acme", AnonymousCatalog = option });
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Equal(option, profile.Auth.AnonymousCatalog);
+    }
+
+    [Fact]
+    public async Task GetProfile_AnonymousCatalog_WhenStoreHasNoAllowAnonymousUsersSetting_UsesDescriptorDefault()
+    {
+        var service = CreateAnonymousCatalogService(
+            new UcpOptions { DefaultStoreId = "store-acme" },
+            store: new Store { Id = "store-acme", Settings = [] });
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.True(profile.Auth.AnonymousCatalog);
+    }
+
+    [Fact]
+    public async Task GetProfile_AnonymousCatalog_WhenStoreSettingsAreNotLoaded_UsesDescriptorDefault()
+    {
+        var service = CreateAnonymousCatalogService(
+            new UcpOptions { DefaultStoreId = "store-acme" },
+            store: new Store { Id = "store-acme", Settings = null });
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.True(profile.Auth.AnonymousCatalog);
+    }
+
+    [Fact]
+    public async Task GetProfile_AnonymousCatalog_WhenDiscoveredDefaultStoreDeniesAnonymousUsers_IsFalse()
+    {
+        var service = CreateAnonymousCatalogService(
+            new UcpOptions(),
+            stores:
+            [
+                new Store
+                {
+                    Id = "store-acme",
+                    Settings = [new ObjectSettingEntry { Name = StoreSetting.AllowAnonymousUsers.Name, Value = false }],
+                },
+            ]);
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Equal("store-acme", profile.DefaultStoreId);
+        Assert.False(profile.Auth.AnonymousCatalog);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GetProfile_CatalogAccessGuidance_MatchesAnonymousCatalog(bool storeAllows)
+    {
+        var service = CreateAnonymousCatalogService(
+            new UcpOptions { DefaultStoreId = "store-acme" },
+            store: new Store
+            {
+                Id = "store-acme",
+                Settings = [new ObjectSettingEntry { Name = StoreSetting.AllowAnonymousUsers.Name, Value = storeAllows }],
+            });
+
+        var profile = await service.GetProfile(TestContext.Current.CancellationToken);
+
+        Assert.Equal(storeAllows, profile.Auth.AnonymousCatalog);
+        Assert.Equal(storeAllows, profile.AgentGuidance.Contains(ModuleConstants.AnonymousCatalogGuidance));
+        Assert.Equal(!storeAllows, profile.AgentGuidance.Contains(ModuleConstants.SignInRequiredCatalogGuidance));
+    }
+
+    private static TestUcpProfileService CreateAnonymousCatalogService(UcpOptions options, Store store = null, IEnumerable<Store> stores = null)
+    {
+        var httpContextAccessor = new HttpContextAccessor
+        {
+            HttpContext = new DefaultHttpContext(),
+        };
+        httpContextAccessor.HttpContext.Request.Scheme = "https";
+        httpContextAccessor.HttpContext.Request.Host = new HostString("platform.example");
+
+        return new TestUcpProfileService(Options.Create(options), httpContextAccessor, store, stores);
+    }
+
     private sealed class TestUcpProfileService : UcpProfileService
     {
         private readonly Store _store;
@@ -294,6 +526,11 @@ public class UcpProfileServiceTests
         protected override Task<Store> GetConfiguredDefaultStore()
         {
             return Task.FromResult(_store);
+        }
+
+        protected override Task<Store> GetStoreById(string storeId)
+        {
+            return Task.FromResult(_stores.FirstOrDefault(x => x.Id == storeId));
         }
 
         protected override Task<IList<Store>> SearchOpenStores()

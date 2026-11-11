@@ -2,7 +2,7 @@ using System.Security.Claims;
 
 namespace VirtoCommerce.UCP.Data.Models;
 
-internal sealed class CartExecutionRequest
+public class CartExecutionRequest
 {
     public string CartId { get; set; }
     public string StoreId { get; set; }

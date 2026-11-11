@@ -12,12 +12,14 @@ using GraphQLParser;
 using GraphQLParser.AST;
 using GraphQLParser.Exceptions;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Diagnostics;
 using VirtoCommerce.Xapi.Core.Infrastructure;
+using XCartDataAssemblyMarker = VirtoCommerce.XCart.Data.DataAssemblyMarker;
 
 namespace VirtoCommerce.UCP.Web.Services;
 
@@ -73,6 +75,31 @@ public class XApiInProcessExecutor : IXApiInProcessExecutor
     public virtual Task<XApiExecutionResult> ExecuteOrder(XApiExecutionRequest request, CancellationToken cancellationToken = default)
     {
         return Execute(_documentExecuters.Order, "XOrder", request, cancellationToken);
+    }
+
+    public virtual string GetCartMutationArgumentTypeName(string mutationName, string argumentName)
+    {
+        // The schema the cart document executer runs, as it resolves it.
+        return GetMutationArgumentTypeName(_serviceProvider?.GetService<ScopedSchemaFactory<XCartDataAssemblyMarker>>(), mutationName, argumentName);
+    }
+
+    // The name of the named type of a mutation argument: InputAddItemType for addItem(command: InputAddItemType!), or
+    // the name of the type an installation replaced it with.
+    protected virtual string GetMutationArgumentTypeName(ISchema schema, string mutationName, string argumentName)
+    {
+        if (schema == null)
+        {
+            return null;
+        }
+
+        if (!schema.Initialized)
+        {
+            schema.Initialize();
+        }
+
+        var argument = schema.Mutation?.GetField(mutationName)?.Arguments?.Find(argumentName);
+
+        return argument?.ResolvedType?.GetNamedType().Name;
     }
 
     protected virtual Task<XApiExecutionResult> Execute<TSchemaFactory>(
@@ -167,6 +194,8 @@ public class XApiInProcessExecutor : IXApiInProcessExecutor
             options.Query = request.Query;
             options.OperationName = request.OperationName;
             options.UserContext = new GraphQLUserContext(request.User);
+            // The validation rules that key on the caller read ValidationContext.User, which comes from here.
+            options.User = request.User;
             options.Variables = new Inputs(request.Variables ?? new Dictionary<string, object>());
             options.RequestServices = _serviceProvider;
             options.CancellationToken = cancellationToken;

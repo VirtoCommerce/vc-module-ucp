@@ -1,0 +1,18 @@
+{
+  "settings": {
+    "UCP": {
+      "StoreManagedAddresses": {
+        "title": "Vom Shop verwaltete Adressen",
+        "description": "Der Storefront legt die Adressen des Warenkorbs selbst fest. Adressen, die ein KI-Assistent beim Checkout sendet, werden ignoriert, und der Käufer wählt die Adresse auf der Checkout-Seite des Storefronts."
+      },
+      "CheckoutLinkLifetimeMinutes": {
+        "title": "Gültigkeitsdauer des Checkout-Links (Minuten)",
+        "description": "Wie lange ein Checkout-Link, den ein KI-Assistent dem Käufer gibt, gültig bleibt. Standard: 15."
+      },
+      "CheckoutUrlTemplate": {
+        "title": "Vorlage für die Checkout-URL",
+        "description": "Die Storefront-Seite, die einen Checkout-Link öffnet, mit {token} für das Token des Links, für eine Checkout-Seite, die nicht unter /checkout liegt. Leer lassen, um {store URL}/checkout?ucp_session={token} zu verwenden."
+      }
+    }
+  }
+}

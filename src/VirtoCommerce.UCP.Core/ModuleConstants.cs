@@ -6,19 +6,32 @@ namespace VirtoCommerce.UCP.Core;
 public static class ModuleConstants
 {
     public const string UcpVersion = "1.0";
-    public const string DiscoveryVersion = "2026-04-08";
+    // The UCP release the business profile (/.well-known/ucp) declares, and the version of its dev.ucp.* entries.
+    public const string DiscoveryVersion = "2026-08-25";
     public const string Source = "UCP";
     public const string Platform = "VirtoCommerce";
+    // The MCP scope of the buyer tools, served by the MCP module at /ucp/mcp.
+    public const string McpScopeName = "ucp";
     public const string McpInstructions = """
         This MCP endpoint exposes Virto Commerce UCP tools for the storefront/platform where this MCP server is installed.
         Use typed MCP tools for commerce operations.
-        Available tools: get_store_capabilities, search_products, get_product, create_cart, list_carts, get_cart, update_cart, create_checkout, update_checkout, checkout_and_handoff, get_payment_handlers, handoff_checkout, list_countries, resolve_country, list_regions, and track_order.
+        Available tools: link_buyer_identity, logout_buyer, get_store_capabilities, search_products, get_product, create_cart, list_carts,
+        get_cart, update_cart, create_checkout, update_checkout, checkout_and_handoff, get_payment_handlers, handoff_checkout, list_countries,
+        resolve_country, list_regions, track_order, search_catalog, lookup_catalog, cancel_cart, get_checkout, complete_checkout,
+        cancel_checkout, and get_order.
+        The standard UCP shopping tools (service dev.ucp.shopping, version 2026-08-25) are search_catalog, lookup_catalog, get_product,
+        create_cart, get_cart, update_cart, cancel_cart, create_checkout, get_checkout, update_checkout, complete_checkout, cancel_checkout, and get_order.
+        They take the standard arguments (meta, catalog, cart, checkout, id) and return the standard payload in structuredContent.
+        get_product, create_cart, get_cart, update_cart, create_checkout, and update_checkout also accept this server's flat arguments:
+        a call with catalog, cart, checkout, or meta (or with id instead of cart_id or checkout_id) gets the standard response; a flat call gets this server's response.
+        Standard calls of an anonymous buyer pass the buyer_id the standard cart or checkout returned, and may pass store_id.
+        complete_checkout does not take payment: it answers status requires_escalation with continue_url, where the buyer completes payment in the storefront.
         Do not pass storefront URLs to MCP tools. This MCP server already represents the target Virto Commerce UCP installation.
         Do not infer another target storefront from the MCP transport URL or user-provided links.
         Commerce tools execute local UCP services directly in this platform process.
         Do not use browser/web/search tools to execute UCP operations when MCP tools are available.
         MCP tool calls are stateless. Arguments from earlier calls are never carried automatically.
-        For ordinary public shopping requests, call commerce tools directly without linking an account.
+        When get_store_capabilities reports auth.anonymous_catalog true, call commerce tools directly for ordinary public shopping without linking an account; when it is false, the store requires buyer sign-in for catalog access, so call link_buyer_identity before search_products or get_product.
         When the user explicitly asks to act on their behalf, use their account, personalized prices, organization,
         saved data, or orders, you MUST call link_buyer_identity before any buyer-sensitive commerce tool.
         Do not call search_products, get_product, create_cart, list_carts, get_cart, update_cart, checkout, or order tools
@@ -49,11 +62,12 @@ public static class ModuleConstants
         For shopping flows, use MCP tools directly: search products, create or update cart, resolve country/regions, then use checkout_and_handoff when the buyer is ready for hosted checkout.
         Delivery addresses belong in structured shipping_address fields, not notes.
         Before create_checkout or checkout_and_handoff, require the saved cart_id, store_id, and buyer_id when available. Before update_checkout, get_payment_handlers, or handoff_checkout, require the saved checkout_id.
+        When get_store_capabilities reports store_managed_addresses true, the store assigns cart addresses itself: follow its agent_guidance, do not ask for an address, and skip the address rules below.
         Before create_checkout, update_checkout, checkout_and_handoff, or handoff_checkout for physical goods, require shipping_address.first_name, shipping_address.last_name, and shipping_address.postal_code.
         Never send a partial shipping_address.
         Ask for every missing value and do not call a checkout or handoff tool yet; never invent address data.
         Resolve country with resolve_country and, when the country defines regions, resolve region_id with list_regions before checkout. City remains free text.
-        Before resolve_country, require query. Before list_regions, require country_id. Before track_order, require at least one of order_id, order_number, or the saved cart_id.
+        Before resolve_country, require query. Before list_regions, require country_id. Before track_order, require at least one of order_id, order_number, or the saved cart_id (with the placed_after from the handoff next step).
         Treat price.amount as the current sell price and list_price.amount as the pre-discount reference price.
         list_carts requires buyer_id for anonymous continuation. In authenticated mode, buyer identity and organization come only from the Platform token; never invent or request identity fields from the user.
         update_cart accepts the complete desired line_items state, not a delta. Reuse the existing cart_id and buyer_id; never call create_cart as a fallback for changing an existing cart.
@@ -64,8 +78,13 @@ public static class ModuleConstants
         XAPI GraphQL errors are returned unchanged in MCP structuredContent. Inspect their codes, paths, locations, extensions, and partial data before deciding what to do.
         Every MCP tool result includes a model-visible "Trace ID: ..." content block and _meta.trace_id when an active trace exists. Preserve that id with any reported result or failure so operators can open the exact MCP -> UCP -> XAPI trace.
         A read-only XAPI failure from search_products or get_product may be transient; retry the same read-only tool at most once. Do not automatically retry mutating cart or checkout tools.
-        For hosted checkout, return checkout.continue_url to the buyer and keep cart_id for later track_order.
-        After hosted checkout, use the saved cart_id and buyer_id with track_order when the user asks about the order; do not require an order number when those saved identifiers are available.
+        For hosted checkout, return checkout.continue_url to the buyer and keep cart_id and the handoff issued_at (placed_after) for later track_order.
+        After hosted checkout, use the saved cart_id and buyer_id, plus placed_after (the handoff issued_at), with track_order when the user asks about the order; do not require an order number when those saved identifiers are available.
+        One hosted checkout can produce a main order plus child orders (each child carries parent_order_id).
+        Lookup by cart_id with placed_after returns all orders placed since the handoff in orders, oldest first (the main order before its child orders), child orders included; order is the newest top-level order; not found means the buyer has not placed the order yet.
+        Without placed_after, lookup by cart_id returns only the newest top-level order of the cart and its child orders;
+        a storefront cart keeps its id across checkouts, so for the cart's earlier orders pass an earlier placed_after (the date the user asks about, or 2000-01-01T00:00:00Z for the whole history).
+        Read orders, not only order, before answering about a checkout's orders.
         """;
 
     public static class Capabilities
@@ -79,7 +98,29 @@ public static class ModuleConstants
 
     public static class Discovery
     {
+        // Our own service: the same MCP endpoint, for the tools beyond the UCP standard (geography, handoff, order tracking).
         public const string Service = "com.virtocommerce.ucp";
+
+        // The standard UCP shopping service and capabilities, as an agent negotiates them.
+        public const string ShoppingService = "dev.ucp.shopping";
+        public const string SpecBaseUrl = "https://ucp.dev/" + DiscoveryVersion + "/specification/";
+        public const string SchemaBaseUrl = "https://ucp.dev/" + DiscoveryVersion + "/schemas/";
+        public const string ShoppingMcpSchemaUrl = "https://ucp.dev/" + DiscoveryVersion + "/services/shopping/mcp.openrpc.json";
+
+        public const string CatalogSearch = "dev.ucp.shopping.catalog.search";
+        public const string CatalogLookup = "dev.ucp.shopping.catalog.lookup";
+        public const string Cart = "dev.ucp.shopping.cart";
+        public const string Checkout = "dev.ucp.shopping.checkout";
+        public const string Order = "dev.ucp.shopping.order";
+        public const string IdentityLinking = "dev.ucp.common.identity_linking";
+
+        // The access a signed-in buyer grants an agent, in the identity linking scope format {capability}:{scope}.
+        public static readonly string[] IdentityLinkingScopes =
+        [
+            Cart + ":manage",
+            Checkout + ":manage",
+            Order + ":read",
+        ];
     }
 
     public static class Headers
@@ -97,6 +138,29 @@ public static class ModuleConstants
         public const string HostedCheckout = "hosted_checkout";
         public const string NativeCard = "native_card";
         public const string GooglePay = "google_pay";
+    }
+
+    public const string AnonymousCatalogGuidance = "For ordinary shopping, call commerce tools directly without linking an account.";
+
+    public const string SignInRequiredCatalogGuidance =
+        "This store requires buyer sign-in for catalog access: call link_buyer_identity before search_products or get_product.";
+
+    public const string StoreManagedAddressesInstruction =
+        "This store assigns cart addresses itself, so the shipping_address and billing_address requirements for checkout do not apply: " +
+        "do not ask the user for an address, do not resolve a country or region for checkout, and call checkout tools without shipping_address and billing_address.";
+
+    public const string StoreManagedAddressesMessage =
+        "This store assigns cart addresses from the buyer's saved delivery location; the supplied shipping and billing addresses were not applied.";
+
+    public const string CheckoutReadyMessage =
+        "Checkout is ready for hosted handoff. Provided shipping and billing addresses are already applied to the cart.";
+
+    public const string CheckoutReadyStoreManagedMessage =
+        "Checkout is ready for hosted handoff. The store assigns the cart's addresses.";
+
+    public static class MessageCodes
+    {
+        public const string AddressesStoreManaged = "addresses_store_managed";
     }
 
     public static class ErrorCodes
@@ -160,6 +224,15 @@ public static class ModuleConstants
         public const string ListRegions = "list_regions";
         public const string RestoreHandoff = "restore_handoff";
         public const string LinkBuyerIdentity = "link_buyer_identity";
+
+        // The tools of the standard UCP MCP binding (dev.ucp.shopping) that do not share a name with our own tools.
+        public const string SearchCatalog = "search_catalog";
+        public const string LookupCatalog = "lookup_catalog";
+        public const string CancelCart = "cancel_cart";
+        public const string GetCheckout = "get_checkout";
+        public const string CompleteCheckout = "complete_checkout";
+        public const string CancelCheckout = "cancel_checkout";
+        public const string GetOrder = "get_order";
     }
 
     public static class McpTools
@@ -182,6 +255,36 @@ public static class ModuleConstants
             ListCountries,
             ResolveCountry,
             ListRegions,
+            SearchCatalog,
+            LookupCatalog,
+            CancelCart,
+            GetCheckout,
+            CompleteCheckout,
+            CancelCheckout,
+            GetOrder,
+        };
+
+        // The tools only the standard UCP MCP binding has; they have no REST action of ours.
+        public static IReadOnlySet<string> StandardOnlyToolNames { get; } = new HashSet<string>(System.StringComparer.Ordinal)
+        {
+            SearchCatalog,
+            LookupCatalog,
+            CancelCart,
+            GetCheckout,
+            CompleteCheckout,
+            CancelCheckout,
+            GetOrder,
+        };
+
+        // Our tools whose name the standard binding shares: each accepts our flat arguments and the standard ones.
+        public static IReadOnlySet<string> SharedToolNames { get; } = new HashSet<string>(System.StringComparer.Ordinal)
+        {
+            GetProduct,
+            CreateCart,
+            GetCart,
+            UpdateCart,
+            CreateCheckout,
+            UpdateCheckout,
         };
 
         public const string GetStoreCapabilities = Operations.GetStoreCapabilities;
@@ -202,6 +305,13 @@ public static class ModuleConstants
         public const string ListRegions = Operations.ListRegions;
         public const string LinkBuyerIdentity = Operations.LinkBuyerIdentity;
         public const string LogoutBuyer = "logout_buyer";
+        public const string SearchCatalog = Operations.SearchCatalog;
+        public const string LookupCatalog = Operations.LookupCatalog;
+        public const string CancelCart = Operations.CancelCart;
+        public const string GetCheckout = Operations.GetCheckout;
+        public const string CompleteCheckout = Operations.CompleteCheckout;
+        public const string CancelCheckout = Operations.CancelCheckout;
+        public const string GetOrder = Operations.GetOrder;
 
         public static bool IsUcpTool(string name)
         {
@@ -209,54 +319,51 @@ public static class ModuleConstants
         }
     }
 
-    public static class Security
-    {
-        public static class Permissions
-        {
-            public const string Access = "ucp:access";
-            public const string Create = "ucp:create";
-            public const string Read = "ucp:read";
-            public const string Update = "ucp:update";
-            public const string Delete = "ucp:delete";
-
-            public static string[] AllPermissions { get; } =
-            [
-                Access,
-                Create,
-                Read,
-                Update,
-                Delete,
-            ];
-        }
-    }
-
+    // UCP settings of a store, edited in the store's settings in the back office. They replace the configuration keys of
+    // the same name, which stay a fallback for requests that no store is resolved for.
     public static class Settings
     {
-        public static class General
+        public static class Store
         {
-            public static SettingDescriptor UcpEnabled { get; } = new()
+            public const int DefaultCheckoutLinkLifetimeMinutes = 15;
+
+            public static SettingDescriptor StoreManagedAddresses { get; } = new()
             {
-                Name = "UCP.Enabled",
-                GroupName = "UCP|General",
+                Name = "UCP.StoreManagedAddresses",
+                GroupName = "UCP|Store",
                 ValueType = SettingValueType.Boolean,
                 DefaultValue = false,
             };
 
-            public static IEnumerable<SettingDescriptor> AllGeneralSettings
+            public static SettingDescriptor CheckoutLinkLifetimeMinutes { get; } = new()
+            {
+                Name = "UCP.CheckoutLinkLifetimeMinutes",
+                GroupName = "UCP|Store",
+                ValueType = SettingValueType.PositiveInteger,
+                DefaultValue = DefaultCheckoutLinkLifetimeMinutes,
+            };
+
+            public static SettingDescriptor CheckoutUrlTemplate { get; } = new()
+            {
+                Name = "UCP.CheckoutUrlTemplate",
+                GroupName = "UCP|Store",
+                ValueType = SettingValueType.ShortText,
+                DefaultValue = string.Empty,
+            };
+
+            public static IEnumerable<SettingDescriptor> AllSettings
             {
                 get
                 {
-                    yield return UcpEnabled;
+                    yield return StoreManagedAddresses;
+                    yield return CheckoutLinkLifetimeMinutes;
+                    yield return CheckoutUrlTemplate;
                 }
             }
         }
 
-        public static IEnumerable<SettingDescriptor> AllSettings
-        {
-            get
-            {
-                return General.AllGeneralSettings;
-            }
-        }
+        public static IEnumerable<SettingDescriptor> AllSettings => Store.AllSettings;
+
+        public static IEnumerable<SettingDescriptor> StoreLevelSettings => Store.AllSettings;
     }
 }

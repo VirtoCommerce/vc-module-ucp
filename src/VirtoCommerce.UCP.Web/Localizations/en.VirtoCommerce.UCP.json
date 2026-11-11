@@ -1,16 +1,17 @@
 {
-  "permissions": {
-    "ucp:access": "Open UCP menu",
-    "ucp:create": "Create UCP related data",
-    "ucp:read": "View UCP related data",
-    "ucp:update": "Update UCP related data",
-    "ucp:delete": "Delete UCP related data"
-  },
   "settings": {
     "UCP": {
-      "Enabled": {
-        "title": "UCP Enabled",
-        "description": "UCP Enabled setting"
+      "StoreManagedAddresses": {
+        "title": "Store-managed addresses",
+        "description": "The storefront assigns the cart's addresses itself. Addresses that an AI assistant sends with a checkout are ignored, and the buyer chooses the address on the storefront's checkout page."
+      },
+      "CheckoutLinkLifetimeMinutes": {
+        "title": "Checkout link lifetime (minutes)",
+        "description": "How long a checkout link that an AI assistant gives the buyer stays valid. Default: 15."
+      },
+      "CheckoutUrlTemplate": {
+        "title": "Checkout URL template",
+        "description": "The storefront page that opens a checkout link, with {token} for the link's token, for a checkout page that is not at /checkout. Leave empty to use {store URL}/checkout?ucp_session={token}."
       }
     }
   }

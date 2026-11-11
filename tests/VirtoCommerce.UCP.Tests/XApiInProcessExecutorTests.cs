@@ -2,30 +2,106 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Security.Claims;
 using System.Text.Json;
 using System.Threading.Tasks;
 using GraphQL;
 using GraphQL.Execution;
-using Microsoft.ApplicationInsights;
-using Microsoft.ApplicationInsights.Channel;
-using Microsoft.ApplicationInsights.DataContracts;
-using Microsoft.ApplicationInsights.Extensibility;
+using GraphQL.SystemTextJson;
+using GraphQL.Types;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
+using VirtoCommerce.UCP.Core.Models;
 using VirtoCommerce.UCP.Core.Options;
 using VirtoCommerce.UCP.Web.Diagnostics;
 using VirtoCommerce.UCP.Web.Services;
+using VirtoCommerce.Xapi.Core.Infrastructure;
 using Xunit;
+using XCartDataAssemblyMarker = VirtoCommerce.XCart.Data.DataAssemblyMarker;
 
 namespace VirtoCommerce.UCP.Tests;
 
 [Trait("Category", "Unit")]
 public class XApiInProcessExecutorTests
 {
+    // XAPI's validation rules that key on the caller read ValidationContext.User, which GraphQL takes from
+    // ExecutionOptions.User; GraphQLUserContext alone leaves it null.
+    [Fact]
+    public async Task ExecuteCart_PassesTheBuyerToValidationAsTheUser()
+    {
+        // Arrange
+        var cart = new CapturingDocumentExecuter<ScopedSchemaFactory<XCartDataAssemblyMarker>>();
+        var executor = new XApiInProcessExecutor(
+            new XApiDocumentExecuters(null, cart, null),
+            new GraphQLSerializer(),
+            new ServiceCollection().BuildServiceProvider(),
+            new HttpContextAccessor(),
+            new UcpOperationTelemetry(NullLogger<UcpOperationTelemetry>.Instance, Options.Create(new UcpOptions())),
+            NullLogger<XApiInProcessExecutor>.Instance);
+        var buyer = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", "buyer-1")], "Bearer"));
+
+        // Act
+        await executor.ExecuteCart(new XApiExecutionRequest
+        {
+            Query = "mutation UcpAddCartItem { addItem { id } }",
+            OperationName = "UcpAddCartItem",
+            User = buyer,
+        }, TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.Same(buyer, cart.Options.User);
+        Assert.Same(buyer, Assert.IsType<GraphQLUserContext>(cart.Options.UserContext).User);
+    }
+
+    // An installation that replaces an XCart input type has that type, with its own name, in the executing schema.
+    [Fact]
+    public void GetMutationArgumentTypeName_ReadsTheTypeNameFromTheSchema()
+    {
+        // Arrange
+        var mutation = new ObjectGraphType { Name = "Mutations" };
+        mutation.Field<StringGraphType>("addItem").Argument<NonNullGraphType<ExtendedInputAddItemType>>("command");
+        var query = new ObjectGraphType { Name = "Query" };
+        query.Field<StringGraphType>("version");
+        var schema = new Schema { Query = query, Mutation = mutation };
+        var executor = new TestableXApiInProcessExecutor(NullLogger<XApiInProcessExecutor>.Instance);
+
+        // Act
+        var typeName = executor.ReadMutationArgumentTypeName(schema, "addItem", "command");
+        var missingField = executor.ReadMutationArgumentTypeName(schema, "removeCartItem", "command");
+        var missingSchema = executor.ReadMutationArgumentTypeName(null, "addItem", "command");
+
+        // Assert
+        Assert.Equal("InputAddItemExtendedType", typeName);
+        Assert.Null(missingField);
+        Assert.Null(missingSchema);
+    }
+
+    private sealed class ExtendedInputAddItemType : InputObjectGraphType
+    {
+        public ExtendedInputAddItemType()
+        {
+            Name = "InputAddItemExtendedType";
+            Field<StringGraphType>("productId");
+        }
+    }
+
+    private sealed class CapturingDocumentExecuter<TSchema> : IDocumentExecuter<TSchema>
+        where TSchema : ISchema
+    {
+        public ExecutionOptions Options { get; private set; }
+
+        public Task<ExecutionResult> ExecuteAsync(ExecutionOptions options)
+        {
+            Options = options;
+            return Task.FromResult(new ExecutionResult { Executed = true });
+        }
+    }
+
     [Theory]
     [InlineData("{ viewer { id } }", "query")]
     [InlineData("query ReadViewer { viewer { id } }", "query")]
@@ -360,95 +436,6 @@ public class XApiInProcessExecutorTests
     }
 
     [Fact]
-    public async Task UnhandledExceptionHandler_ExportsOriginalExceptionThroughApplicationInsightsBridge()
-    {
-        var channel = new CapturingTelemetryChannel();
-        using var telemetryConfiguration = TelemetryConfiguration.CreateDefault();
-        telemetryConfiguration.TelemetryChannel = channel;
-        var telemetryClient = new TelemetryClient(telemetryConfiguration);
-        await using var serviceProvider = new ServiceCollection()
-            .AddSingleton(telemetryClient)
-            .BuildServiceProvider();
-        using var bridge = new UcpApplicationInsightsActivityBridge(
-            serviceProvider,
-            NullLogger<UcpApplicationInsightsActivityBridge>.Instance);
-        await bridge.StartAsync(TestContext.Current.CancellationToken);
-
-        var logger = new CapturingLogger();
-        var executor = new TestableXApiInProcessExecutor(logger);
-        var expected = CreateExceptionWithStackTrace();
-        var context = new UnhandledExceptionContext(new ExecutionOptions(), expected);
-        Activity activity;
-        using (activity = UcpDiagnostics.StartXApi("XCatalog", "UcpSearchProducts", "query", 1))
-        {
-            Assert.NotNull(activity);
-            await executor.HandleUnhandledException(context, activity, "XCatalog", "UcpSearchProducts", 1);
-            executor.RecordUnhandledExceptions(
-                new ExecutionResult
-                {
-                    Errors = new ExecutionErrors
-                    {
-                        new UnhandledError("Error trying to resolve field 'products'.", expected),
-                    },
-                },
-                activity,
-                "XCatalog",
-                "UcpSearchProducts",
-                1);
-            activity.SetTag("vc.xapi.error.codes", "NULL_REFERENCE");
-            activity.SetStatus(ActivityStatusCode.Error, "GraphQL errors");
-        }
-
-        await bridge.StopAsync(TestContext.Current.CancellationToken);
-
-        var dependency = Assert.Single(
-            channel.Items.OfType<DependencyTelemetry>(),
-            item => item.Id == activity.SpanId.ToString());
-        Assert.Equal(typeof(NullReferenceException).FullName, dependency.Properties["exception.type"]);
-        Assert.Equal(expected.Message, dependency.Properties["exception.message"]);
-        Assert.Contains(nameof(CreateExceptionWithStackTrace), dependency.Properties["exception.stacktrace"], StringComparison.Ordinal);
-
-        var exceptionTelemetry = Assert.Single(channel.Items.OfType<ExceptionTelemetry>());
-        Assert.Same(expected, exceptionTelemetry.Exception);
-        Assert.Equal(activity.TraceId.ToString(), exceptionTelemetry.Context.Operation.Id);
-        Assert.Equal(activity.SpanId.ToString(), exceptionTelemetry.Context.Operation.ParentId);
-    }
-
-    [Fact]
-    public async Task ApplicationInsightsBridge_DoesNotInventExceptionForExpectedGraphQlError()
-    {
-        var channel = new CapturingTelemetryChannel();
-        using var telemetryConfiguration = TelemetryConfiguration.CreateDefault();
-        telemetryConfiguration.TelemetryChannel = channel;
-        var telemetryClient = new TelemetryClient(telemetryConfiguration);
-        await using var serviceProvider = new ServiceCollection()
-            .AddSingleton(telemetryClient)
-            .BuildServiceProvider();
-        using var bridge = new UcpApplicationInsightsActivityBridge(
-            serviceProvider,
-            NullLogger<UcpApplicationInsightsActivityBridge>.Instance);
-        await bridge.StartAsync(TestContext.Current.CancellationToken);
-
-        Activity activity;
-        using (activity = UcpDiagnostics.StartXApi("XCatalog", "UcpSearchProducts", "query", 1))
-        {
-            Assert.NotNull(activity);
-            activity.SetTag("vc.xapi.error.codes", "VALIDATION_ERROR");
-            activity.SetStatus(ActivityStatusCode.Error, "GraphQL errors");
-        }
-
-        await bridge.StopAsync(TestContext.Current.CancellationToken);
-
-        var dependency = Assert.Single(
-            channel.Items.OfType<DependencyTelemetry>(),
-            item => item.Id == activity.SpanId.ToString());
-        Assert.DoesNotContain("exception.type", dependency.Properties.Keys);
-        Assert.DoesNotContain("exception.message", dependency.Properties.Keys);
-        Assert.DoesNotContain("exception.stacktrace", dependency.Properties.Keys);
-        Assert.Empty(channel.Items.OfType<ExceptionTelemetry>());
-    }
-
-    [Fact]
     public void ExecutionResultFallback_RecordsOriginalUnhandledExceptionWhenCallbackWasSkipped()
     {
         var logger = new CapturingLogger();
@@ -512,6 +499,11 @@ public class XApiInProcessExecutorTests
         public static string ClassifyOperation(string query, string operationName = null)
         {
             return GetOperationType(query, operationName);
+        }
+
+        public string ReadMutationArgumentTypeName(ISchema schema, string mutationName, string argumentName)
+        {
+            return GetMutationArgumentTypeName(schema, mutationName, argumentName);
         }
 
         public Task HandleUnhandledException(
@@ -600,28 +592,6 @@ public class XApiInProcessExecutorTests
     }
 
     private sealed record LogEntry(LogLevel Level, EventId EventId, Exception Exception, IReadOnlyDictionary<string, object> Properties);
-
-    private sealed class CapturingTelemetryChannel : ITelemetryChannel
-    {
-        public List<ITelemetry> Items { get; } = [];
-
-        public bool? DeveloperMode { get; set; }
-
-        public string EndpointAddress { get; set; }
-
-        public void Send(ITelemetry item)
-        {
-            Items.Add(item);
-        }
-
-        public void Flush()
-        {
-        }
-
-        public void Dispose()
-        {
-        }
-    }
 
     private sealed class NullScope : IDisposable
     {

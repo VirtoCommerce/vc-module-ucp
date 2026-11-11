@@ -6,9 +6,8 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="StackExchange.Redis" Version="3.3.1" />
-    <PackageReference Include="VirtoCommerce.OrdersModule.Core" Version="3.1018.0" />
-    <PackageReference Include="VirtoCommerce.Platform.Core" Version="3.1076.0" />
-    <PackageReference Include="VirtoCommerce.StoreModule.Core" Version="3.1009.0" />
+    <PackageReference Include="VirtoCommerce.OrdersModule.Core" Version="3.1019.0" />
+    <PackageReference Include="VirtoCommerce.StoreModule.Core" Version="3.1013.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\VirtoCommerce.UCP.Core\VirtoCommerce.UCP.Core.csproj" />

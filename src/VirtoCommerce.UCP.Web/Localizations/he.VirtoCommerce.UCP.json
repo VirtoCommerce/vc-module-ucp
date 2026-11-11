@@ -1,0 +1,18 @@
+{
+  "settings": {
+    "UCP": {
+      "StoreManagedAddresses": {
+        "title": "כתובות בניהול החנות",
+        "description": "חזית החנות קובעת בעצמה את כתובות העגלה. כתובות שעוזר AI שולח עם הקופה מתעלמים מהן, והקונה בוחר את הכתובת בדף הקופה של חזית החנות."
+      },
+      "CheckoutLinkLifetimeMinutes": {
+        "title": "תוקף קישור לקופה (בדקות)",
+        "description": "משך הזמן שבו קישור לקופה שעוזר AI נותן לקונה נשאר תקף. ברירת מחדל: 15."
+      },
+      "CheckoutUrlTemplate": {
+        "title": "תבנית כתובת URL לקופה",
+        "description": "דף חזית החנות שפותח קישור לקופה, כאשר {token} הוא האסימון של הקישור, עבור דף קופה שאינו ב-/checkout. ריק: {store URL}/checkout?ucp_session={token}."
+      }
+    }
+  }
+}

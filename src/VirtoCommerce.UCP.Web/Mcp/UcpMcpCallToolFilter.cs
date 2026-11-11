@@ -9,16 +9,17 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
+using VirtoCommerce.MCP.Core.Services;
 using VirtoCommerce.Platform.Core.Common;
-using VirtoCommerce.StoreModule.Core.Services;
 using VirtoCommerce.UCP.Core;
 using VirtoCommerce.UCP.Core.Diagnostics;
 using VirtoCommerce.UCP.Core.Services;
 using VirtoCommerce.UCP.Web.Diagnostics;
+using VirtoCommerce.UCP.Web.Services;
 
 namespace VirtoCommerce.UCP.Web.Mcp;
 
-public sealed class UcpMcpCallToolFilter
+public sealed class UcpMcpCallToolFilter : IMcpCallToolFilter
 {
     private static readonly EventId McpOperationExceptionEvent = new(2002, "UcpMcpOperationException");
 
@@ -53,9 +54,9 @@ public sealed class UcpMcpCallToolFilter
         string toolName,
         CancellationToken cancellationToken)
     {
-        var parentActivity = Activity.Current?.Source.Name == UcpDiagnostics.McpActivitySourceName
-            ? Activity.Current
-            : null;
+        // The MCP module's span of the call (or the SDK's, when only it is listened to): UCP's span runs inside it, and
+        // its trace is returned to the agent when UCP's spans are not exported.
+        var parentActivity = Activity.Current;
         var telemetryStarted = _operationTelemetry.TryBegin(toolName, "mcp", parentActivity?.Context);
         if (telemetryStarted)
         {
@@ -66,7 +67,6 @@ public sealed class UcpMcpCallToolFilter
             : parentActivity?.TraceId.ToString();
         try
         {
-            ValidateRequiredArguments(context);
             await ValidateStore(context);
             var result = await next(context, cancellationToken);
             MarkRejectedResult(result, telemetryStarted);
@@ -102,26 +102,6 @@ public sealed class UcpMcpCallToolFilter
         }
     }
 
-    private static void ValidateRequiredArguments(RequestContext<CallToolRequestParams> context)
-    {
-        if (context.MatchedPrimitive is not McpServerTool tool
-            || !tool.ProtocolTool.InputSchema.TryGetProperty("required", out var required))
-        {
-            return;
-        }
-
-        foreach (var property in required.EnumerateArray())
-        {
-            var name = property.GetString();
-            if (context.Params?.Arguments == null
-                || !context.Params.Arguments.TryGetValue(name, out var value)
-                || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
-            {
-                throw new UcpException(ModuleConstants.ErrorCodes.InvalidRequest, $"{name} is required.");
-            }
-        }
-    }
-
     private static async Task ValidateStore(RequestContext<CallToolRequestParams> context)
     {
         if (context.Params?.Arguments?.TryGetValue("store_id", out var storeId) != true
@@ -130,8 +110,10 @@ public sealed class UcpMcpCallToolFilter
             return;
         }
 
-        var storeService = context.Services.GetRequiredService<IStoreService>();
-        var store = await UcpDiagnostics.ExecuteDependency("stores", "GetStore", () => storeService.GetNoCloneAsync(storeId.GetString()));
+        // The call runs with the options of the store it names, not of the store of the host it came to.
+        var storeContextResolver = context.Services.GetRequiredService<UcpStoreContextResolver>();
+        var httpContext = context.Services.GetRequiredService<IHttpContextAccessor>().HttpContext;
+        var store = await storeContextResolver.UseOperationStoreAsync(httpContext, storeId.GetString());
         if (store == null)
         {
             throw new UcpException(ModuleConstants.ErrorCodes.InvalidRequest, "store_id does not identify an existing store.");

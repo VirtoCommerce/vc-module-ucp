@@ -1,0 +1,18 @@
+{
+  "settings": {
+    "UCP": {
+      "StoreManagedAddresses": {
+        "title": "Butikshanterade adresser",
+        "description": "Webbutiken tilldelar varukorgens adresser själv. Adresser som en AI-assistent skickar med en kassa ignoreras, och köparen väljer adress på webbutikens kassasida."
+      },
+      "CheckoutLinkLifetimeMinutes": {
+        "title": "Giltighetstid för kasselänk (minuter)",
+        "description": "Hur länge en kasselänk som en AI-assistent ger köparen förblir giltig. Standard: 15."
+      },
+      "CheckoutUrlTemplate": {
+        "title": "URL-mall för kassan",
+        "description": "Webbutikens sida som öppnar en kasselänk, med {token} för länkens token, för en kassasida som inte finns på /checkout. Lämna tomt för att använda {store URL}/checkout?ucp_session={token}."
+      }
+    }
+  }
+}

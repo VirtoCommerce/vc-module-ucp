@@ -18,6 +18,8 @@ internal sealed class UcpOperationInputCapture
     private const int MaxIdentifierLength = UcpTelemetryInputSanitizer.MaxIdentifierLength;
     private const int MaxTextLength = UcpTelemetryInputSanitizer.MaxTextLength;
 
+    private static readonly string[] _standardCommerceWrappers = ["cart", "checkout"];
+
     private readonly JsonObject _input = new();
     private readonly UcpTelemetryInputSanitizer _sanitizer = new();
     private readonly bool _captureInputValues;
@@ -93,10 +95,69 @@ internal sealed class UcpOperationInputCapture
             return;
         }
 
-        if (!CaptureMcpCatalogAndCart(operation, arguments))
+        if (ModuleConstants.McpTools.StandardOnlyToolNames.Contains(operation))
+        {
+            // The standard arguments are captured below; these add store_id and the buyer_id presence.
+            AddMcpCartContext(arguments);
+        }
+        else if (!CaptureMcpCatalogAndCart(operation, arguments))
         {
             CaptureMcpCheckoutAndLookup(operation, arguments);
         }
+
+        CaptureMcpStandard(arguments);
+    }
+
+    // The arguments of the standard UCP binding (meta, id, and the catalog, cart or checkout wrapper): identifiers,
+    // the search text and counts, never buyer data.
+    private void CaptureMcpStandard(IDictionary<string, JsonElement> arguments)
+    {
+        if (TryGetMcpObject(arguments, "meta", out var meta))
+        {
+            _input["meta_present"] = true;
+            _input["idempotency_key_present"] = IsJsonPropertyPresent(meta, "idempotency-key");
+        }
+
+        AddMcpIdentifier(arguments, _input, "id", "id");
+        if (TryGetMcpObject(arguments, "catalog", out var catalog))
+        {
+            CaptureMcpStandardCatalog(catalog);
+        }
+
+        foreach (var name in _standardCommerceWrappers)
+        {
+            if (TryGetMcpObject(arguments, name, out var wrapper))
+            {
+                CaptureMcpStandardCommerce(name, wrapper);
+            }
+        }
+    }
+
+    private void CaptureMcpStandardCatalog(JsonElement catalog)
+    {
+        AddQuery(GetJsonString(catalog, "query"));
+        AddIdentifier(_input, "catalog_id", GetJsonString(catalog, "id"), "catalog_id");
+        if (catalog.TryGetProperty("ids", out var ids) && ids.ValueKind == JsonValueKind.Array)
+        {
+            _input["catalog_id_count"] = ids.GetArrayLength();
+        }
+    }
+
+    private void CaptureMcpStandardCommerce(string name, JsonElement wrapper)
+    {
+        if (wrapper.TryGetProperty("line_items", out var lineItems) && lineItems.ValueKind == JsonValueKind.Array)
+        {
+            _input[$"{name}_line_item_count"] = lineItems.GetArrayLength();
+        }
+
+        AddIdentifier(_input, $"{name}_cart_id", GetJsonString(wrapper, "cart_id"), $"{name}_cart_id");
+        _input[$"{name}_buyer_present"] = IsJsonPropertyPresent(wrapper, "buyer");
+        _input[$"{name}_fulfillment_present"] = IsJsonPropertyPresent(wrapper, "fulfillment");
+    }
+
+    private static bool TryGetMcpObject(IDictionary<string, JsonElement> arguments, string name, out JsonElement value)
+    {
+        return arguments.TryGetValue(name, out value) && value.ValueKind == JsonValueKind.Object;
     }
 
     private bool CaptureMcpCatalogAndCart(string operation, IDictionary<string, JsonElement> arguments)
