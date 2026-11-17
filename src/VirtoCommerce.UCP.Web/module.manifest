@@ -4,13 +4,13 @@
   <version>3.1012.0</version>
   <version-tag></version-tag>
 
-  <platformVersion>3.1096.0</platformVersion>
+  <platformVersion>3.1097.0</platformVersion>
   <dependencies>
     <dependency id="VirtoCommerce.MCP" version="3.1000.0" />
     <dependency id="VirtoCommerce.Xapi" version="3.1030.0" />
-    <dependency id="VirtoCommerce.XCatalog" version="3.1023.0" />
-    <dependency id="VirtoCommerce.XCart" version="3.1044.0" />
-    <dependency id="VirtoCommerce.XOrder" version="3.1017.0" />
+    <dependency id="VirtoCommerce.XCatalog" version="3.1025.0" />
+    <dependency id="VirtoCommerce.XCart" version="3.1047.0" />
+    <dependency id="VirtoCommerce.XOrder" version="3.1018.0" />
     <dependency id="VirtoCommerce.Store" version="3.1013.0" />
     <dependency id="VirtoCommerce.Orders" version="3.1019.0" />
     <dependency id="VirtoCommerce.Marketing" version="3.1010.0" />
