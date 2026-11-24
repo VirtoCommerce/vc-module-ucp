@@ -474,6 +474,11 @@ internal sealed class UcpOperationInputCapture
             _input["unpaid_only"] = unpaidOnly.ValueKind == JsonValueKind.True ? "true" : "false";
         }
 
+        if (arguments.TryGetValue("paid_only", out var paidOnly) && paidOnly.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            _input["paid_only"] = paidOnly.ValueKind == JsonValueKind.True ? "true" : "false";
+        }
+
         AddMcpFingerprint(arguments, "cursor", "cursor");
         AddMcpNumber(arguments, _input, "limit", "limit");
     }
@@ -488,6 +493,7 @@ internal sealed class UcpOperationInputCapture
         AddCommerceContext(query.StoreId, null, null, null, query.CultureName, null);
         AddNumber(_input, "status_count", query.Statuses?.Length);
         _input["unpaid_only"] = query.UnpaidOnly ? "true" : "false";
+        _input["paid_only"] = query.PaidOnly ? "true" : "false";
         AddFingerprint(_input, "cursor", query.Cursor);
         AddNumber(_input, "limit", query.Limit);
     }

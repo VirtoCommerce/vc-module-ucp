@@ -675,7 +675,8 @@ public static class UcpMcpCommerceTools
     [Description(
         "List the signed-in buyer's own orders in this Virto Commerce storefront, newest first, with status, totals, line items, shipments and payments. " +
         "Use it for order history and for unpaid orders or invoices: unpaid_only keeps the orders that still have totals.amount_due above zero " +
-        "(not cancelled, and approved payments cover less than the total); totals.paid_total and payments[].amount show what was paid. " +
+        "(not cancelled, and approved payments cover less than the total); paid_only keeps the paid ones (not cancelled, approved payments cover the whole total); " +
+        "totals.paid_total and payments[].amount show what was paid. " +
         "Every amount is in minor units of its currency: amount 2100 with currency USD is $21.00; " +
         "formatted_amount gives the same amount in major units (\"21.00 USD\"), so quote formatted_amount to the user. " +
         "Requires a signed-in buyer: do not call this tool until link_buyer_identity succeeds. " +
@@ -685,6 +686,7 @@ public static class UcpMcpCommerceTools
         IUcpOrderService orderService,
         [Description("Order statuses to keep, as the store names them (for example New, Processing, Completed). Omit for all statuses.")] string[] statuses = null,
         [Description("true keeps only orders with an amount still due.")] bool unpaid_only = false,
+        [Description("true keeps only paid orders: approved payments cover the whole total. Not together with unpaid_only.")] bool paid_only = false,
         [Description("ISO 8601 timestamp; keeps orders created at or after it.")] DateTimeOffset? placed_after = null,
         [Description("ISO 8601 timestamp; keeps orders created at or before it.")] DateTimeOffset? placed_before = null,
         string store_id = null,
@@ -699,6 +701,7 @@ public static class UcpMcpCommerceTools
             {
                 Statuses = statuses ?? [],
                 UnpaidOnly = unpaid_only,
+                PaidOnly = paid_only,
                 PlacedAfter = placed_after,
                 PlacedBefore = placed_before,
                 Pagination = new UcpPaginationRequest { Cursor = cursor, Limit = limit },

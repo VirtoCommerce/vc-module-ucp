@@ -558,6 +558,44 @@ public class UcpOrderServiceTests
         Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, exception.Code);
     }
 
+    [Fact]
+    public async Task ListOrders_PaidOnly_KeepsFullyPaidOrdersAndLeavesOutCancelledAndPartlyPaidOnes()
+    {
+        var paid = CreateListedOrder("order-paid", "buyer-1", "2026-06-16T09:00:00Z", total: 100m, approvedPayment: 100m);
+        var partly = CreateListedOrder("order-partly", "buyer-1", "2026-06-17T09:00:00Z", total: 100m, approvedPayment: 40m);
+        var pending = CreateListedOrder("order-pending", "buyer-1", "2026-06-18T09:00:00Z", total: 100m, pendingPayment: 100m);
+        var cancelled = CreateListedOrder("order-cancelled", "buyer-1", "2026-06-19T09:00:00Z", total: 100m, approvedPayment: 100m);
+        cancelled.IsCancelled = true;
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(cancelled, pending, partly, paid));
+
+        var response = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+            PaidOnly = true,
+        }, TestContext.Current.CancellationToken);
+
+        var order = Assert.Single(response.Orders);
+        Assert.Equal("order-paid", order.Id);
+        Assert.Equal(0, order.Totals.AmountDue.Amount);
+        Assert.Equal("100.00 USD", order.Totals.PaidTotal.FormattedAmount);
+        Assert.Contains(response.Messages, x => x.Code == "total_count_before_payment_filter");
+    }
+
+    [Fact]
+    public async Task ListOrders_RejectsUnpaidOnlyTogetherWithPaidOnly()
+    {
+        var service = CreateService();
+
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+            UnpaidOnly = true,
+            PaidOnly = true,
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, exception.Code);
+    }
+
     private static CustomerOrder CreateListedOrder(string id, string buyerId, string createdAt, decimal total, decimal? approvedPayment = null, decimal? pendingPayment = null)
     {
         var order = CreateOrder(id, "cart-" + id, buyerId);

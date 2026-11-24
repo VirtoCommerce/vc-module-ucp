@@ -23,7 +23,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
     private const int _orderLookupPageSize = 50;
     private const int _defaultOrderListLimit = 10;
     private const int _maxOrderListLimit = 50;
-    // How many orders one list_orders call reads at most while unpaid_only filters them, so one call stays bounded.
+    // How many orders one list_orders call reads at most while unpaid_only or paid_only filters them, so one call stays bounded.
     private const int _maxOrderListScan = 500;
     private static readonly string _orderResponseGroup = CustomerOrderResponseGroup.Full.ToString();
 
@@ -90,6 +90,10 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
     public virtual async Task<UcpOrderListResponse> ListOrders(UcpOrderListRequest request, CancellationToken cancellationToken = default)
     {
         request ??= new UcpOrderListRequest();
+        if (request.UnpaidOnly && request.PaidOnly)
+        {
+            throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "Pass unpaid_only or paid_only, not both.");
+        }
 
         var scope = ResolveOrderListScope(request);
         var limit = Math.Clamp(request.Pagination?.Limit ?? _defaultOrderListLimit, 1, _maxOrderListLimit);
@@ -212,7 +216,12 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
 
         var order = MapOrder(orderModel);
 
-        return !request.UnpaidOnly || IsUnpaid(orderModel, order) ? order : null;
+        if (request.UnpaidOnly && !IsUnpaid(orderModel, order))
+        {
+            return null;
+        }
+
+        return !request.PaidOnly || IsPaid(orderModel, order) ? order : null;
     }
 
     private UcpOrderListResponse CreateOrderListResponse(UcpOrderListRequest request, OrderListPage page, int limit)
@@ -230,13 +239,13 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             },
         };
 
-        if (request.UnpaidOnly)
+        if (request.UnpaidOnly || request.PaidOnly)
         {
             response.Messages.Add(new UcpMessage
             {
                 Type = "info",
                 Code = "total_count_before_payment_filter",
-                Content = "pagination.total_count counts the buyer's orders that match the other filters, before unpaid_only is applied.",
+                Content = "pagination.total_count counts the buyer's orders that match the other filters, before unpaid_only or paid_only is applied.",
                 Severity = "info",
             });
         }
@@ -281,6 +290,11 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
     private static bool IsUnpaid(CustomerOrder orderModel, UcpOrder order)
     {
         return !IsCancelled(orderModel) && order.Totals.AmountDue.Amount > 0;
+    }
+
+    private static bool IsPaid(CustomerOrder orderModel, UcpOrder order)
+    {
+        return !IsCancelled(orderModel) && order.Totals.AmountDue.Amount == 0 && order.Totals.PaidTotal.Amount > 0;
     }
 
     private static bool IsCancelled(CustomerOrder orderModel)

@@ -829,13 +829,14 @@ The storefront's default cart survives checkout: after an order is placed the ca
 
 ```http
 GET /ucp/v1/orders/list?unpaid_only=true&limit=10
+GET /ucp/v1/orders/list?paid_only=true
 GET /ucp/v1/orders/list?status=New&status=Processing&placed_after=2026-01-01T00:00:00Z&cursor={cursor}
 ```
 
 - Scope: the token's user AND organization, the same rule as `track_order`; the store comes from `store_id` or the default store. An organization-wide list (every buyer of the company) is not offered.
-- Filters: `statuses` (order statuses as the store names them), `placed_after` / `placed_before`, and `unpaid_only`.
-- Every order carries `totals.paid_total` (approved, not cancelled payments) and `totals.amount_due` (total less paid, never below zero, zero for a cancelled order); every payment carries `amount`. `unpaid_only` keeps orders whose `amount_due` is above zero.
-- Paging: `limit` (1-50, default 10) and the returned `pagination.cursor`. `unpaid_only` filters after the database query, so one call reads at most 500 orders, and `pagination.total_count` counts orders before that filter (a `total_count_before_payment_filter` message says so).
+- Filters: `statuses` (order statuses as the store names them), `placed_after` / `placed_before`, and `unpaid_only` or `paid_only` (not both: `invalid_request`).
+- Every order carries `totals.paid_total` (approved, not cancelled payments) and `totals.amount_due` (total less paid, never below zero, zero for a cancelled order); every payment carries `amount`. `unpaid_only` keeps orders whose `amount_due` is above zero; `paid_only` keeps the orders that are not cancelled, have `amount_due` zero and a `paid_total` above zero (a free order is not "paid"). Every amount is in minor units, with `formatted_amount` in major units ("21.00 USD").
+- Paging: `limit` (1-50, default 10) and the returned `pagination.cursor`. `unpaid_only` and `paid_only` filter after the database query, so one call reads at most 500 orders, and `pagination.total_count` counts orders before that filter (a `total_count_before_payment_filter` message says so).
 
 If the order has not been created yet (with `placed_after`: the buyer has not placed the order since the handoff) or is not found within that buyer context, the endpoint returns the structured error `order_not_found`.
 

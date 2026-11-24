@@ -17,6 +17,10 @@ public class UcpOrderListRequest
     [JsonProperty("unpaid_only")]
     public bool UnpaidOnly { get; set; }
 
+    // Keeps only paid orders: not cancelled, approved payments cover the whole total, and something was paid.
+    [JsonProperty("paid_only")]
+    public bool PaidOnly { get; set; }
+
     [JsonProperty("placed_after")]
     public DateTimeOffset? PlacedAfter { get; set; }
 

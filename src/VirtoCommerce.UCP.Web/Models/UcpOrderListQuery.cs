@@ -18,6 +18,9 @@ public sealed class UcpOrderListQuery
     [FromQuery(Name = "unpaid_only")]
     public bool UnpaidOnly { get; set; }
 
+    [FromQuery(Name = "paid_only")]
+    public bool PaidOnly { get; set; }
+
     [FromQuery(Name = "placed_after")]
     public DateTimeOffset? PlacedAfter { get; set; }
 
@@ -41,6 +44,7 @@ public sealed class UcpOrderListQuery
             },
             Statuses = Statuses ?? [],
             UnpaidOnly = UnpaidOnly,
+            PaidOnly = PaidOnly,
             PlacedAfter = PlacedAfter,
             PlacedBefore = PlacedBefore,
             Pagination = new UcpPaginationRequest

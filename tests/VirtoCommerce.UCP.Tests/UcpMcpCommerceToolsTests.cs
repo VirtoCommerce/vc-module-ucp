@@ -385,7 +385,7 @@ public class UcpMcpCommerceToolsTests
             [nameof(UcpMcpCommerceTools.CheckoutAndHandoff)] = ["cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
             [nameof(UcpMcpCommerceTools.HandoffCheckout)] = ["checkout_id", "cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
             [nameof(UcpMcpCommerceTools.TrackOrder)] = ["order_id", "order_number", "cart_id", "placed_after", "store_id", "currency", "language", "buyer_id"],
-            [nameof(UcpMcpCommerceTools.ListOrders)] = ["statuses", "unpaid_only", "placed_after", "placed_before", "store_id", "language", "cursor", "limit"],
+            [nameof(UcpMcpCommerceTools.ListOrders)] = ["statuses", "unpaid_only", "paid_only", "placed_after", "placed_before", "store_id", "language", "cursor", "limit"],
         };
 
         foreach (var (methodName, expectedProperties) in expectedSchemas)

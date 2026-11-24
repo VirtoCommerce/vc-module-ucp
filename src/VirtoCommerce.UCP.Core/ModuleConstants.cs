@@ -86,7 +86,7 @@ public static class ModuleConstants
         a storefront cart keeps its id across checkouts, so for the cart's earlier orders pass an earlier placed_after (the date the user asks about, or 2000-01-01T00:00:00Z for the whole history).
         Read orders, not only order, before answering about a checkout's orders.
         To answer about the buyer's orders in general (order history, open orders, unpaid orders or invoices, amounts due), call list_orders after link_buyer_identity.
-        list_orders returns the signed-in buyer's own orders in this store, newest first; unpaid_only keeps the orders that still have totals.amount_due above zero.
+        list_orders returns the signed-in buyer's own orders in this store, newest first; unpaid_only keeps the orders that still have totals.amount_due above zero; paid_only keeps the paid ones.
         Read totals.amount_due and payments[].status before saying an order is paid or unpaid; pass pagination.cursor back as cursor for the next page.
         """;
 
