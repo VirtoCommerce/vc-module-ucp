@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,6 +21,10 @@ namespace VirtoCommerce.UCP.Data.Services;
 public class UcpOrderService : UcpServiceBase, IUcpOrderService
 {
     private const int _orderLookupPageSize = 50;
+    private const int _defaultOrderListLimit = 10;
+    private const int _maxOrderListLimit = 50;
+    // How many orders one list_orders call reads at most while unpaid_only filters them, so one call stays bounded.
+    private const int _maxOrderListScan = 500;
     private static readonly string _orderResponseGroup = CustomerOrderResponseGroup.Full.ToString();
 
     private readonly ICustomerOrderService _customerOrderService;
@@ -80,6 +85,152 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             Orders = orders,
             Messages = order.Messages,
         };
+    }
+
+    public virtual async Task<UcpOrderListResponse> ListOrders(UcpOrderListRequest request, CancellationToken cancellationToken = default)
+    {
+        request ??= new UcpOrderListRequest();
+
+        // Listing orders reads the buyer's history, so it needs a signed-in buyer; an anonymous buyer_id is not enough.
+        var buyerContext = ResolveBuyerContext(
+            requestedBuyerIds: [request.Context?.BuyerId],
+            requestedOrganizationIds: [request.Context?.OrganizationId],
+            requireBuyer: true,
+            requireAuthenticatedBuyer: true);
+        var scope = new OrderExecutionRequest
+        {
+            UserId = buyerContext.UserId,
+            OrganizationId = buyerContext.OrganizationId,
+        };
+        if (!HasOrderScope(scope))
+        {
+            throw CreateException(ModuleConstants.ErrorCodes.IdentityRequired, "A buyer is required to list orders.", StatusCodes.Status401Unauthorized);
+        }
+
+        var limit = Math.Clamp(request.Pagination?.Limit ?? _defaultOrderListLimit, 1, _maxOrderListLimit);
+        var position = ParseOrderListCursor(request.Pagination?.Cursor);
+        var statuses = (request.Statuses ?? []).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).ToList();
+        var storeId = request.Context?.StoreId;
+
+        var criteria = new CustomerOrderSearchCriteria
+        {
+            CustomerId = scope.UserId,
+            OrganizationId = scope.OrganizationId,
+            StoreIds = string.IsNullOrWhiteSpace(storeId) ? null : [storeId],
+            Statuses = statuses.Count > 0 ? statuses.ToArray() : null,
+            StartDate = request.PlacedAfter?.UtcDateTime,
+            EndDate = request.PlacedBefore?.UtcDateTime,
+            Sort = "CreatedDate:desc",
+            Skip = position,
+            Take = _orderLookupPageSize,
+            ResponseGroup = _orderResponseGroup,
+        };
+
+        var orders = new List<UcpOrder>();
+        var seenOrderIds = new HashSet<string>(StringComparer.Ordinal);
+        var totalCount = 0;
+        var scanned = 0;
+
+        while (orders.Count < limit && scanned < _maxOrderListScan)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = await UcpDiagnostics.ExecuteDependency(
+                "orders",
+                "SearchOrdersOfBuyer",
+                () => _customerOrderSearchService.SearchAsync(criteria, clone: false));
+            totalCount = result.TotalCount;
+            if (result.Results.Count == 0)
+            {
+                break;
+            }
+
+            foreach (var orderModel in result.Results)
+            {
+                position++;
+                scanned++;
+                if (IsOrderInScope(orderModel, scope) && seenOrderIds.Add(orderModel.Id))
+                {
+                    var order = MapOrder(orderModel);
+                    if (!request.UnpaidOnly || IsUnpaid(orderModel, order))
+                    {
+                        orders.Add(order);
+                    }
+                }
+
+                if (orders.Count >= limit || scanned >= _maxOrderListScan)
+                {
+                    break;
+                }
+            }
+
+            criteria.Skip = position;
+            if (position >= totalCount)
+            {
+                break;
+            }
+        }
+
+        var hasNextPage = position < totalCount;
+        var response = new UcpOrderListResponse
+        {
+            Ucp = CreateMetadata("success", "dev.ucp.shopping.order.list"),
+            Orders = orders,
+            Pagination = new UcpPaginationResponse
+            {
+                Cursor = hasNextPage ? position.ToString(CultureInfo.InvariantCulture) : null,
+                HasNextPage = hasNextPage,
+                TotalCount = totalCount,
+            },
+        };
+
+        if (request.UnpaidOnly)
+        {
+            response.Messages.Add(new UcpMessage
+            {
+                Type = "info",
+                Code = "total_count_before_payment_filter",
+                Content = "pagination.total_count counts the buyer's orders that match the other filters, before unpaid_only is applied.",
+                Severity = "info",
+            });
+        }
+
+        if (hasNextPage && orders.Count < limit)
+        {
+            response.Messages.Add(new UcpMessage
+            {
+                Type = "info",
+                Code = "scan_limit_reached",
+                Content = $"This call read {scanned} orders, the most one call reads; call list_orders again with the returned cursor to continue.",
+                Severity = "info",
+            });
+        }
+
+        return response;
+    }
+
+    private int ParseOrderListCursor(string cursor)
+    {
+        if (string.IsNullOrWhiteSpace(cursor))
+        {
+            return 0;
+        }
+
+        if (!int.TryParse(cursor, NumberStyles.None, CultureInfo.InvariantCulture, out var position))
+        {
+            throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "cursor must be the value list_orders returned in pagination.cursor.");
+        }
+
+        return position;
+    }
+
+    private static bool IsUnpaid(CustomerOrder orderModel, UcpOrder order)
+    {
+        return !IsCancelled(orderModel) && order.Totals.AmountDue.Amount > 0;
+    }
+
+    private static bool IsCancelled(CustomerOrder orderModel)
+    {
+        return orderModel.IsCancelled || string.Equals(orderModel.Status, "Cancelled", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string CreateOrderNotFoundMessage(OrderExecutionRequest request)
@@ -239,6 +390,10 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
     protected virtual UcpOrder MapOrder(CustomerOrder orderModel)
     {
         var currency = orderModel.Currency;
+        var paidTotal = (orderModel.InPayments ?? [])
+            .Where(payment => payment.IsApproved && !payment.IsCancelled)
+            .Sum(payment => payment.Sum);
+        var amountDue = IsCancelled(orderModel) ? 0m : Math.Max(0m, orderModel.Total - paidTotal);
         var order = new UcpOrder
         {
             Id = orderModel.Id,
@@ -260,6 +415,8 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
                 DiscountTotal = CreateMoney(orderModel.DiscountTotal, currency),
                 ShippingSubtotal = CreateMoney(orderModel.ShippingSubTotal, currency),
                 ShippingTotal = CreateMoney(orderModel.ShippingTotal, currency),
+                PaidTotal = CreateMoney(paidTotal, currency),
+                AmountDue = CreateMoney(amountDue, currency),
             },
             LineItems = MapLineItems(orderModel.Items, currency),
             Shipments = MapShipments(orderModel.Shipments, currency),
@@ -345,6 +502,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
                 GatewayCode = payment.GatewayCode,
                 Status = payment.Status,
                 Approved = payment.IsApproved,
+                Amount = CreateMoney(payment.Sum, FirstNotEmpty(payment.Currency, currency)),
                 MethodCode = payment.PaymentMethod?.Code,
                 MethodName = payment.PaymentMethod?.Name,
                 BillingAddress = MapAddress(payment.BillingAddress),

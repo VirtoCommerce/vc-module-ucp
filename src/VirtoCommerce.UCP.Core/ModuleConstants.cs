@@ -17,7 +17,7 @@ public static class ModuleConstants
         Use typed MCP tools for commerce operations.
         Available tools: link_buyer_identity, logout_buyer, get_store_capabilities, search_products, get_product, create_cart, list_carts,
         get_cart, update_cart, create_checkout, update_checkout, checkout_and_handoff, get_payment_handlers, handoff_checkout, list_countries,
-        resolve_country, list_regions, track_order, search_catalog, lookup_catalog, cancel_cart, get_checkout, complete_checkout,
+        resolve_country, list_regions, track_order, list_orders, search_catalog, lookup_catalog, cancel_cart, get_checkout, complete_checkout,
         cancel_checkout, and get_order.
         The standard UCP shopping tools (service dev.ucp.shopping, version 2026-08-25) are search_catalog, lookup_catalog, get_product,
         create_cart, get_cart, update_cart, cancel_cart, create_checkout, get_checkout, update_checkout, complete_checkout, cancel_checkout, and get_order.
@@ -85,6 +85,9 @@ public static class ModuleConstants
         Without placed_after, lookup by cart_id returns only the newest top-level order of the cart and its child orders;
         a storefront cart keeps its id across checkouts, so for the cart's earlier orders pass an earlier placed_after (the date the user asks about, or 2000-01-01T00:00:00Z for the whole history).
         Read orders, not only order, before answering about a checkout's orders.
+        To answer about the buyer's orders in general (order history, open orders, unpaid orders or invoices, amounts due), call list_orders after link_buyer_identity.
+        list_orders returns the signed-in buyer's own orders in this store, newest first; unpaid_only keeps the orders that still have totals.amount_due above zero.
+        Read totals.amount_due and payments[].status before saying an order is paid or unpaid; pass pagination.cursor back as cursor for the next page.
         """;
 
     public static class Capabilities
@@ -198,6 +201,7 @@ public static class ModuleConstants
         public const string CheckoutHandoff = "/ucp/v1/checkouts/{checkoutId}/handoff";
         public const string OrderTrack = "/ucp/v1/orders/{orderId}";
         public const string OrderTrackByCart = "/ucp/v1/orders?cart_id={cartId}";
+        public const string OrderList = "/ucp/v1/orders/list";
         public const string GeographyCountries = "/ucp/v1/geography/countries";
         public const string GeographyCountryResolve = "/ucp/v1/geography/countries/resolve";
         public const string GeographyRegions = "/ucp/v1/geography/countries/{countryId}/regions";
@@ -219,6 +223,7 @@ public static class ModuleConstants
         public const string GetPaymentHandlers = "get_payment_handlers";
         public const string HandoffCheckout = "handoff_checkout";
         public const string TrackOrder = "track_order";
+        public const string ListOrders = "list_orders";
         public const string ListCountries = "list_countries";
         public const string ResolveCountry = "resolve_country";
         public const string ListRegions = "list_regions";
@@ -252,6 +257,7 @@ public static class ModuleConstants
             GetPaymentHandlers,
             HandoffCheckout,
             TrackOrder,
+            ListOrders,
             ListCountries,
             ResolveCountry,
             ListRegions,
@@ -300,6 +306,7 @@ public static class ModuleConstants
         public const string GetPaymentHandlers = Operations.GetPaymentHandlers;
         public const string HandoffCheckout = Operations.HandoffCheckout;
         public const string TrackOrder = Operations.TrackOrder;
+        public const string ListOrders = Operations.ListOrders;
         public const string ListCountries = Operations.ListCountries;
         public const string ResolveCountry = Operations.ResolveCountry;
         public const string ListRegions = Operations.ListRegions;

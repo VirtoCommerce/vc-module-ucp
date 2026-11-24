@@ -25,6 +25,9 @@ public class UcpOrderPayment
     [JsonProperty("approved")]
     public bool Approved { get; set; }
 
+    [JsonProperty("amount")]
+    public UcpMoney Amount { get; set; }
+
     [JsonProperty("billing_address")]
     public UcpOrderAddress BillingAddress { get; set; }
 }

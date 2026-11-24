@@ -285,7 +285,7 @@ public class UcpProfileServiceTests
         var profile = await service.GetProfile(TestContext.Current.CancellationToken);
 
         Assert.Contains(ModuleConstants.McpTools.LogoutBuyer, profile.McpTools);
-        Assert.Equal(25, profile.McpTools.Count);
+        Assert.Equal(26, profile.McpTools.Count);
         Assert.Contains(ModuleConstants.McpTools.CompleteCheckout, profile.McpTools);
         Assert.Contains(ModuleConstants.ErrorCodes.HandoffInProgress, profile.Errors.Codes);
     }

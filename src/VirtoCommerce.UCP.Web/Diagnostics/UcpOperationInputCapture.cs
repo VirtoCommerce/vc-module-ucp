@@ -230,6 +230,16 @@ internal sealed class UcpOperationInputCapture
                 AddLookupKind(GetMcpString(arguments, "order_id"), GetMcpString(arguments, "order_number"), GetMcpString(arguments, "cart_id"));
                 AddMcpCartContext(arguments);
                 break;
+            case ModuleConstants.Operations.ListOrders:
+                AddMcpCommerceContext(arguments);
+                AddMcpCollectionCount(arguments, "statuses", "status_count");
+                if (arguments.TryGetValue("unpaid_only", out var unpaidOnly) && unpaidOnly.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                {
+                    _input["unpaid_only"] = unpaidOnly.ValueKind == JsonValueKind.True ? "true" : "false";
+                }
+                AddMcpFingerprint(arguments, "cursor", "cursor");
+                AddMcpNumber(arguments, _input, "limit", "limit");
+                break;
             case ModuleConstants.Operations.ListCountries:
                 AddMcpQuery(arguments);
                 AddMcpNumber(arguments, _input, "limit", "limit");
@@ -308,6 +318,9 @@ internal sealed class UcpOperationInputCapture
                 break;
             case ModuleConstants.Operations.TrackOrder:
                 CaptureOrderTrackingQuery(GetArgument<UcpOrderTrackingQuery>(arguments, "query"), GetArgumentString(arguments, "orderId"));
+                break;
+            case ModuleConstants.Operations.ListOrders:
+                CaptureOrderListQuery(GetArgument<UcpOrderListQuery>(arguments, "query"));
                 break;
             case ModuleConstants.Operations.ListCountries:
                 AddQuery(GetArgumentString(arguments, "query"));
@@ -455,6 +468,20 @@ internal sealed class UcpOperationInputCapture
         _input["session_present"] = true;
         _input["session_length"] = request.UcpSession.Length;
         _input["session_fingerprint"] = UcpTelemetryInputSanitizer.ComputeFingerprint(request.UcpSession);
+    }
+
+    private void CaptureOrderListQuery(UcpOrderListQuery query)
+    {
+        if (query == null)
+        {
+            return;
+        }
+
+        AddCommerceContext(query.StoreId, null, null, null, query.CultureName, null);
+        AddNumber(_input, "status_count", query.Statuses?.Length);
+        _input["unpaid_only"] = query.UnpaidOnly ? "true" : "false";
+        AddFingerprint(_input, "cursor", query.Cursor);
+        AddNumber(_input, "limit", query.Limit);
     }
 
     private void CaptureOrderTrackingQuery(UcpOrderTrackingQuery query, string routeOrderId)

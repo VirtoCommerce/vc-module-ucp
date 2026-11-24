@@ -431,6 +431,152 @@ public class UcpOrderServiceTests
         Assert.Equal(259800, lineItem.LineTotal.Amount);
     }
 
+    [Fact]
+    public async Task ListOrders_ReturnsTheBuyersOrdersNewestFirstWithPaidTotalAndAmountDue()
+    {
+        var paid = CreateListedOrder("order-paid", "buyer-1", "2026-06-16T09:00:00Z", total: 1299m, approvedPayment: 1299m);
+        var due = CreateListedOrder("order-due", "buyer-1", "2026-06-18T09:00:00Z", total: 500m, pendingPayment: 500m);
+        var foreign = CreateListedOrder("order-foreign", "buyer-2", "2026-06-19T09:00:00Z", total: 10m);
+        var searchService = new StubCustomerOrderSearchService(foreign, due, paid);
+        var service = CreateService(orderSearchService: searchService);
+
+        var response = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1", StoreId = "store-acme" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["order-due", "order-paid"], response.Orders.Select(x => x.Id));
+        Assert.Equal(50000, response.Orders[0].Totals.AmountDue.Amount);
+        Assert.Equal(0, response.Orders[0].Totals.PaidTotal.Amount);
+        Assert.Equal(50000, response.Orders[0].Payments.Single().Amount.Amount);
+        Assert.Equal(0, response.Orders[1].Totals.AmountDue.Amount);
+        Assert.Equal(129900, response.Orders[1].Totals.PaidTotal.Amount);
+        Assert.False(response.Pagination.HasNextPage);
+        Assert.Null(response.Pagination.Cursor);
+
+        var criteria = searchService.Criteria.Single();
+        Assert.Equal("buyer-1", criteria.CustomerId);
+        Assert.Equal(["store-acme"], criteria.StoreIds);
+        Assert.Equal("CreatedDate:desc", criteria.Sort);
+    }
+
+    [Fact]
+    public async Task ListOrders_UnpaidOnly_KeepsOrdersWithAnAmountDueAndLeavesOutCancelledOnes()
+    {
+        var paid = CreateListedOrder("order-paid", "buyer-1", "2026-06-16T09:00:00Z", total: 100m, approvedPayment: 100m);
+        var partly = CreateListedOrder("order-partly", "buyer-1", "2026-06-17T09:00:00Z", total: 100m, approvedPayment: 40m);
+        var cancelled = CreateListedOrder("order-cancelled", "buyer-1", "2026-06-18T09:00:00Z", total: 100m);
+        cancelled.IsCancelled = true;
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(cancelled, partly, paid));
+
+        var response = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+            UnpaidOnly = true,
+        }, TestContext.Current.CancellationToken);
+
+        var order = Assert.Single(response.Orders);
+        Assert.Equal("order-partly", order.Id);
+        Assert.Equal(6000, order.Totals.AmountDue.Amount);
+        Assert.Equal(0, response.Orders.Count(x => x.Id == "order-cancelled"));
+        Assert.Contains(response.Messages, x => x.Code == "total_count_before_payment_filter");
+    }
+
+    [Fact]
+    public async Task ListOrders_PagesWithTheReturnedCursor()
+    {
+        var orders = Enumerable.Range(1, 3)
+            .Select(i => CreateListedOrder($"order-{i}", "buyer-1", $"2026-06-1{i}T09:00:00Z", total: 10m))
+            .Reverse()
+            .ToArray();
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(orders));
+
+        var first = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+            Pagination = new UcpPaginationRequest { Limit = 2 },
+        }, TestContext.Current.CancellationToken);
+        var second = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+            Pagination = new UcpPaginationRequest { Limit = 2, Cursor = first.Pagination.Cursor },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["order-3", "order-2"], first.Orders.Select(x => x.Id));
+        Assert.True(first.Pagination.HasNextPage);
+        Assert.Equal("2", first.Pagination.Cursor);
+        Assert.Equal(3, first.Pagination.TotalCount);
+        Assert.Equal(["order-1"], second.Orders.Select(x => x.Id));
+        Assert.False(second.Pagination.HasNextPage);
+    }
+
+    [Fact]
+    public async Task ListOrders_PassesStatusesAndDatesToTheSearch()
+    {
+        var searchService = new StubCustomerOrderSearchService();
+        var service = CreateService(orderSearchService: searchService);
+        var after = DateTimeOffset.Parse("2026-06-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var before = DateTimeOffset.Parse("2026-06-30T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+
+        await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+            Statuses = ["New", " ", "Processing"],
+            PlacedAfter = after,
+            PlacedBefore = before,
+        }, TestContext.Current.CancellationToken);
+
+        var criteria = searchService.Criteria.Single();
+        Assert.Equal(["New", "Processing"], criteria.Statuses);
+        Assert.Equal(after.UtcDateTime, criteria.StartDate);
+        Assert.Equal(before.UtcDateTime, criteria.EndDate);
+    }
+
+    [Fact]
+    public async Task ListOrders_WithoutBuyer_ReturnsIdentityRequired()
+    {
+        var service = CreateService();
+
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.ListOrders(new UcpOrderListRequest(), TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.IdentityRequired, exception.Code);
+    }
+
+    [Fact]
+    public async Task ListOrders_RejectsACursorItDidNotIssue()
+    {
+        var service = CreateService();
+
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+            Pagination = new UcpPaginationRequest { Cursor = "abc" },
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, exception.Code);
+    }
+
+    private static CustomerOrder CreateListedOrder(string id, string buyerId, string createdAt, decimal total, decimal? approvedPayment = null, decimal? pendingPayment = null)
+    {
+        var order = CreateOrder(id, "cart-" + id, buyerId);
+        order.Number = id.ToUpperInvariant();
+        order.CreatedDate = DateTime.Parse(createdAt, System.Globalization.CultureInfo.InvariantCulture).ToUniversalTime();
+        order.Status = "New";
+        order.Total = total;
+        order.InPayments = [];
+        if (approvedPayment.HasValue)
+        {
+            order.InPayments.Add(new PaymentIn { Id = id + "-paid", Number = "PAY-" + id, Status = "Paid", IsApproved = true, Sum = approvedPayment.Value, Currency = "USD" });
+        }
+
+        if (pendingPayment.HasValue)
+        {
+            order.InPayments.Add(new PaymentIn { Id = id + "-pending", Number = "PAY-" + id, Status = "New", IsApproved = false, Sum = pendingPayment.Value, Currency = "USD" });
+        }
+
+        return order;
+    }
+
     private static UcpOrderService CreateService(
         ICustomerOrderService orderService = null,
         ICustomerOrderSearchService orderSearchService = null)
@@ -588,6 +734,9 @@ public class UcpOrderServiceTests
                 OrganizationId = criteria.OrganizationId,
                 Number = criteria.Number,
                 StartDate = criteria.StartDate,
+                EndDate = criteria.EndDate,
+                StoreIds = criteria.StoreIds,
+                Statuses = criteria.Statuses,
                 HasParentOperation = criteria.HasParentOperation,
                 ParentOperationId = criteria.ParentOperationId,
                 Take = criteria.Take,
@@ -601,6 +750,9 @@ public class UcpOrderServiceTests
                 .Where(order => string.IsNullOrWhiteSpace(criteria.OrganizationId) || order.OrganizationId == criteria.OrganizationId)
                 .Where(order => string.IsNullOrWhiteSpace(criteria.Number) || order.Number == criteria.Number)
                 .Where(order => criteria.StartDate == null || order.CreatedDate >= criteria.StartDate)
+                .Where(order => criteria.EndDate == null || order.CreatedDate <= criteria.EndDate)
+                .Where(order => criteria.StoreIds == null || !criteria.StoreIds.Any() || criteria.StoreIds.Contains(order.StoreId))
+                .Where(order => criteria.Statuses == null || !criteria.Statuses.Any() || criteria.Statuses.Contains(order.Status))
                 .Where(order => criteria.ParentOperationId == null || order.ParentOperationId == criteria.ParentOperationId)
                 .Where(order => criteria.HasParentOperation == null || (order.ParentOperationId != null) == criteria.HasParentOperation)
                 .ToList();

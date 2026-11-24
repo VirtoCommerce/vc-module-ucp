@@ -597,7 +597,7 @@ To serve the scope also at `https://store.example.com/mcp`, set `MCP:Scopes:ucp:
 | Catalog | `search_products`, `get_product` |
 | Cart | `create_cart`, `list_carts`, `get_cart`, `update_cart` |
 | Checkout | `create_checkout`, `update_checkout`, `get_payment_handlers`, `handoff_checkout`, `checkout_and_handoff` |
-| Orders | `track_order` |
+| Orders | `track_order`, `list_orders` |
 | Geography | `list_countries`, `resolve_country`, `list_regions` |
 | Buyer identity | `link_buyer_identity`, `logout_buyer` |
 | UCP standard (`dev.ucp.shopping`) | `search_catalog`, `lookup_catalog`, `cancel_cart`, `get_checkout`, `complete_checkout`, `cancel_checkout`, `get_order`, and the standard shape of `get_product`, `create_cart`, `get_cart`, `update_cart`, `create_checkout`, `update_checkout` |
@@ -822,6 +822,20 @@ After hosted handoff, the client usually does not know `order_id` yet. The prima
 The storefront's default cart survives checkout: after an order is placed the cart is emptied but keeps its id, so one `cart_id` accumulates orders over time. To track the order of one hosted checkout, pass `placed_after` set to the handoff `issued_at` (the `track_order` next step carries it). `orders` then lists all orders of that cart created at or after `placed_after`, oldest first (the main order before its child orders), child orders included, and `order` is the newest top-level order. One checkout can yield several orders, for example when the storefront splits it into per-supplier child orders of a main order; each child carries `parent_order_id`, the id of its parent order. Without `placed_after`, lookup by `cart_id` returns only the newest top-level order of the cart together with its child orders; to list the cart's earlier orders, pass an earlier `placed_after` (for the whole history, a date before the cart existed). Lookup by order id or number returns that single order in `orders` as well and ignores `placed_after`.
 
 `placed_after` is an ISO 8601 timestamp. On REST, URL-encode it: `issued_at` carries a `+00:00` offset, and an unencoded `+` decodes to a space and fails binding with 400. The MCP next step passes it in UTC `Z` form.
+
+### Order list
+
+`list_orders` returns the signed-in buyer's own orders in the store, newest first, with the same order shape as `track_order`. It needs a Platform OAuth buyer (`link_buyer_identity`); an anonymous `buyer_id` is refused with `identity_required`.
+
+```http
+GET /ucp/v1/orders/list?unpaid_only=true&limit=10
+GET /ucp/v1/orders/list?status=New&status=Processing&placed_after=2026-01-01T00:00:00Z&cursor={cursor}
+```
+
+- Scope: the token's user AND organization, the same rule as `track_order`; the store comes from `store_id` or the default store. An organization-wide list (every buyer of the company) is not offered.
+- Filters: `statuses` (order statuses as the store names them), `placed_after` / `placed_before`, and `unpaid_only`.
+- Every order carries `totals.paid_total` (approved, not cancelled payments) and `totals.amount_due` (total less paid, never below zero, zero for a cancelled order); every payment carries `amount`. `unpaid_only` keeps orders whose `amount_due` is above zero.
+- Paging: `limit` (1-50, default 10) and the returned `pagination.cursor`. `unpaid_only` filters after the database query, so one call reads at most 500 orders, and `pagination.total_count` counts orders before that filter (a `total_count_before_payment_filter` message says so).
 
 If the order has not been created yet (with `placed_after`: the buyer has not placed the order since the handoff) or is not found within that buyer context, the endpoint returns the structured error `order_not_found`.
 

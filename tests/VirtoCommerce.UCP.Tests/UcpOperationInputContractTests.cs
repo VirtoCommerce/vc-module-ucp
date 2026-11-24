@@ -41,6 +41,7 @@ public class UcpOperationInputContractTests
         yield return Mcp(ModuleConstants.Operations.CheckoutAndHandoff, CheckoutArgs(("cart_id", "cart-marker")), "cart-marker");
         yield return Mcp(ModuleConstants.Operations.HandoffCheckout, CheckoutArgs(("checkout_id", "checkout-marker")), "checkout-marker");
         yield return Mcp(ModuleConstants.Operations.TrackOrder, Args(("order_number", "order-marker"), ("buyer_id", "buyer-marker")), "order-marker");
+        yield return Mcp(ModuleConstants.Operations.ListOrders, Args(("store_id", "store-marker"), ("unpaid_only", true), ("cursor", "cursor-secret"), ("limit", 5)), "store-marker");
         yield return Mcp(ModuleConstants.Operations.ListCountries, Args(("query", "country-marker"), ("limit", 10)), "country-marker");
         yield return Mcp(ModuleConstants.Operations.ResolveCountry, Args(("query", "resolve-marker")), "resolve-marker");
         yield return Mcp(ModuleConstants.Operations.ListRegions, Args(("country_id", "country-marker")), "country-marker");
@@ -71,6 +72,7 @@ public class UcpOperationInputContractTests
         yield return Rest(ModuleConstants.Operations.HandoffCheckout, new Dictionary<string, object> { ["checkoutId"] = "checkout-marker", ["request"] = CheckoutRequest() }, "checkout-marker");
         yield return Rest(ModuleConstants.Operations.RestoreHandoff, new Dictionary<string, object> { ["request"] = new UcpHandoffRestoreRequest { UcpSession = SecretSession } }, "session_fingerprint");
         yield return Rest(ModuleConstants.Operations.TrackOrder, new Dictionary<string, object> { ["orderId"] = "order-marker", ["query"] = new UcpOrderTrackingQuery { BuyerId = "buyer-marker" } }, "order-marker");
+        yield return Rest(ModuleConstants.Operations.ListOrders, new Dictionary<string, object> { ["query"] = new UcpOrderListQuery { StoreId = "store-marker", UnpaidOnly = true, Cursor = "cursor-secret", Limit = 5 } }, "store-marker");
         yield return Rest(ModuleConstants.Operations.ListCountries, new Dictionary<string, object> { ["query"] = "country-marker", ["limit"] = 10 }, "country-marker");
         yield return Rest(ModuleConstants.Operations.ResolveCountry, new Dictionary<string, object> { ["query"] = "resolve-marker" }, "resolve-marker");
         yield return Rest(ModuleConstants.Operations.ListRegions, new Dictionary<string, object> { ["countryId"] = "country-marker" }, "country-marker");
