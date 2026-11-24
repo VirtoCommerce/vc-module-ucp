@@ -108,6 +108,16 @@ public class UcpMcpCommerceToolsTests
     }
 
     [Fact]
+    public void ListOrdersTool_SaysAmountsAreInMinorUnits()
+    {
+        var description = typeof(UcpMcpCommerceTools).GetMethod(nameof(UcpMcpCommerceTools.ListOrders))
+            ?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description;
+
+        Assert.Contains("minor units of its currency", description);
+        Assert.Contains("2100 with currency USD is $21.00", description);
+    }
+
+    [Fact]
     public void UcpMcpTools_AreServedInUcpScopeAndOnlyIdentityLinkingRequiresUser()
     {
         var tools = new[] { typeof(UcpMcpCommerceTools), typeof(UcpMcpStandardTools), typeof(UcpMcpIdentityTools) }
