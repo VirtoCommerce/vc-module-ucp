@@ -478,6 +478,8 @@ public class UcpOrderServiceTests
         var order = Assert.Single(response.Orders);
         Assert.Equal("order-partly", order.Id);
         Assert.Equal(6000, order.Totals.AmountDue.Amount);
+        Assert.Equal("60.00 USD", order.Totals.AmountDue.FormattedAmount);
+        Assert.Equal("40.00 USD", order.Totals.PaidTotal.FormattedAmount);
         Assert.Equal(0, response.Orders.Count(x => x.Id == "order-cancelled"));
         Assert.Contains(response.Messages, x => x.Code == "total_count_before_payment_filter");
     }

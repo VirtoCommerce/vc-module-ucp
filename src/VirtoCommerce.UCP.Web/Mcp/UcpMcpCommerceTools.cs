@@ -676,7 +676,8 @@ public static class UcpMcpCommerceTools
         "List the signed-in buyer's own orders in this Virto Commerce storefront, newest first, with status, totals, line items, shipments and payments. " +
         "Use it for order history and for unpaid orders or invoices: unpaid_only keeps the orders that still have totals.amount_due above zero " +
         "(not cancelled, and approved payments cover less than the total); totals.paid_total and payments[].amount show what was paid. " +
-        "Every amount is in minor units of its currency: amount 2100 with currency USD is $21.00. " +
+        "Every amount is in minor units of its currency: amount 2100 with currency USD is $21.00; " +
+        "formatted_amount gives the same amount in major units (\"21.00 USD\"), so quote formatted_amount to the user. " +
         "Requires a signed-in buyer: do not call this tool until link_buyer_identity succeeds. " +
         "Pass the returned pagination.cursor as cursor to read the next page. Global order listing is not allowed.")]
     public static Task<object> ListOrders(

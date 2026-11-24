@@ -612,10 +612,15 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
 
     protected virtual UcpMoney CreateMoney(decimal amount, string currency)
     {
+        var minorUnits = ToMinorUnits(amount);
+        // The amount in major units, as an agent should say it: an agent reading only amount 2100 tends to say $2,100
+        var majorUnits = (minorUnits / 100m).ToString("0.00", CultureInfo.InvariantCulture);
+
         return new UcpMoney
         {
-            Amount = ToMinorUnits(amount),
+            Amount = minorUnits,
             Currency = currency,
+            FormattedAmount = string.IsNullOrEmpty(currency) ? majorUnits : $"{majorUnits} {currency}",
         };
     }
 

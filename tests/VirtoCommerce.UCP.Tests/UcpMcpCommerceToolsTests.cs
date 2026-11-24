@@ -115,6 +115,7 @@ public class UcpMcpCommerceToolsTests
 
         Assert.Contains("minor units of its currency", description);
         Assert.Contains("2100 with currency USD is $21.00", description);
+        Assert.Contains("quote formatted_amount", description);
     }
 
     [Fact]
