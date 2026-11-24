@@ -100,6 +100,10 @@ internal sealed class UcpOperationInputCapture
             // The standard arguments are captured below; these add store_id and the buyer_id presence.
             AddMcpCartContext(arguments);
         }
+        else if (operation == ModuleConstants.Operations.ListOrders)
+        {
+            CaptureMcpOrderList(arguments);
+        }
         else if (!CaptureMcpCatalogAndCart(operation, arguments))
         {
             CaptureMcpCheckoutAndLookup(operation, arguments);
@@ -230,16 +234,6 @@ internal sealed class UcpOperationInputCapture
                 AddLookupKind(GetMcpString(arguments, "order_id"), GetMcpString(arguments, "order_number"), GetMcpString(arguments, "cart_id"));
                 AddMcpCartContext(arguments);
                 break;
-            case ModuleConstants.Operations.ListOrders:
-                AddMcpCommerceContext(arguments);
-                AddMcpCollectionCount(arguments, "statuses", "status_count");
-                if (arguments.TryGetValue("unpaid_only", out var unpaidOnly) && unpaidOnly.ValueKind is JsonValueKind.True or JsonValueKind.False)
-                {
-                    _input["unpaid_only"] = unpaidOnly.ValueKind == JsonValueKind.True ? "true" : "false";
-                }
-                AddMcpFingerprint(arguments, "cursor", "cursor");
-                AddMcpNumber(arguments, _input, "limit", "limit");
-                break;
             case ModuleConstants.Operations.ListCountries:
                 AddMcpQuery(arguments);
                 AddMcpNumber(arguments, _input, "limit", "limit");
@@ -262,7 +256,11 @@ internal sealed class UcpOperationInputCapture
             return;
         }
 
-        if (!CaptureRestCatalogAndCart(operation, arguments))
+        if (operation == ModuleConstants.Operations.ListOrders)
+        {
+            CaptureOrderListQuery(GetArgument<UcpOrderListQuery>(arguments, "query"));
+        }
+        else if (!CaptureRestCatalogAndCart(operation, arguments))
         {
             CaptureRestCheckoutAndLookup(operation, arguments);
         }
@@ -318,9 +316,6 @@ internal sealed class UcpOperationInputCapture
                 break;
             case ModuleConstants.Operations.TrackOrder:
                 CaptureOrderTrackingQuery(GetArgument<UcpOrderTrackingQuery>(arguments, "query"), GetArgumentString(arguments, "orderId"));
-                break;
-            case ModuleConstants.Operations.ListOrders:
-                CaptureOrderListQuery(GetArgument<UcpOrderListQuery>(arguments, "query"));
                 break;
             case ModuleConstants.Operations.ListCountries:
                 AddQuery(GetArgumentString(arguments, "query"));
@@ -468,6 +463,19 @@ internal sealed class UcpOperationInputCapture
         _input["session_present"] = true;
         _input["session_length"] = request.UcpSession.Length;
         _input["session_fingerprint"] = UcpTelemetryInputSanitizer.ComputeFingerprint(request.UcpSession);
+    }
+
+    private void CaptureMcpOrderList(IDictionary<string, JsonElement> arguments)
+    {
+        AddMcpCommerceContext(arguments);
+        AddMcpCollectionCount(arguments, "statuses", "status_count");
+        if (arguments.TryGetValue("unpaid_only", out var unpaidOnly) && unpaidOnly.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            _input["unpaid_only"] = unpaidOnly.ValueKind == JsonValueKind.True ? "true" : "false";
+        }
+
+        AddMcpFingerprint(arguments, "cursor", "cursor");
+        AddMcpNumber(arguments, _input, "limit", "limit");
     }
 
     private void CaptureOrderListQuery(UcpOrderListQuery query)

@@ -91,7 +91,17 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
     {
         request ??= new UcpOrderListRequest();
 
-        // Listing orders reads the buyer's history, so it needs a signed-in buyer; an anonymous buyer_id is not enough.
+        var scope = ResolveOrderListScope(request);
+        var limit = Math.Clamp(request.Pagination?.Limit ?? _defaultOrderListLimit, 1, _maxOrderListLimit);
+        var criteria = CreateOrderListCriteria(request, scope, ParseOrderListCursor(request.Pagination?.Cursor));
+        var page = await ReadOrderListPage(request, scope, criteria, limit, cancellationToken);
+
+        return CreateOrderListResponse(request, page, limit);
+    }
+
+    // Listing orders reads the buyer's history, so it needs a signed-in buyer; an anonymous buyer_id is not enough.
+    private OrderExecutionRequest ResolveOrderListScope(UcpOrderListRequest request)
+    {
         var buyerContext = ResolveBuyerContext(
             requestedBuyerIds: [request.Context?.BuyerId],
             requestedOrganizationIds: [request.Context?.OrganizationId],
@@ -102,22 +112,26 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             UserId = buyerContext.UserId,
             OrganizationId = buyerContext.OrganizationId,
         };
+
         if (!HasOrderScope(scope))
         {
             throw CreateException(ModuleConstants.ErrorCodes.IdentityRequired, "A buyer is required to list orders.", StatusCodes.Status401Unauthorized);
         }
 
-        var limit = Math.Clamp(request.Pagination?.Limit ?? _defaultOrderListLimit, 1, _maxOrderListLimit);
-        var position = ParseOrderListCursor(request.Pagination?.Cursor);
-        var statuses = (request.Statuses ?? []).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).ToList();
+        return scope;
+    }
+
+    private static CustomerOrderSearchCriteria CreateOrderListCriteria(UcpOrderListRequest request, OrderExecutionRequest scope, int position)
+    {
+        var statuses = (request.Statuses ?? []).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).ToArray();
         var storeId = request.Context?.StoreId;
 
-        var criteria = new CustomerOrderSearchCriteria
+        return new CustomerOrderSearchCriteria
         {
             CustomerId = scope.UserId,
             OrganizationId = scope.OrganizationId,
             StoreIds = string.IsNullOrWhiteSpace(storeId) ? null : [storeId],
-            Statuses = statuses.Count > 0 ? statuses.ToArray() : null,
+            Statuses = statuses.Length > 0 ? statuses : null,
             StartDate = request.PlacedAfter?.UtcDateTime,
             EndDate = request.PlacedBefore?.UtcDateTime,
             Sort = "CreatedDate:desc",
@@ -125,61 +139,94 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             Take = _orderLookupPageSize,
             ResponseGroup = _orderResponseGroup,
         };
+    }
 
-        var orders = new List<UcpOrder>();
+    private async Task<OrderListPage> ReadOrderListPage(
+        UcpOrderListRequest request,
+        OrderExecutionRequest scope,
+        CustomerOrderSearchCriteria criteria,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var page = new OrderListPage { Position = criteria.Skip };
         var seenOrderIds = new HashSet<string>(StringComparer.Ordinal);
-        var totalCount = 0;
-        var scanned = 0;
 
-        while (orders.Count < limit && scanned < _maxOrderListScan)
+        while (page.Orders.Count < limit && page.Scanned < _maxOrderListScan)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var result = await UcpDiagnostics.ExecuteDependency(
                 "orders",
                 "SearchOrdersOfBuyer",
                 () => _customerOrderSearchService.SearchAsync(criteria, clone: false));
-            totalCount = result.TotalCount;
+            page.TotalCount = result.TotalCount;
             if (result.Results.Count == 0)
             {
                 break;
             }
 
-            foreach (var orderModel in result.Results)
-            {
-                position++;
-                scanned++;
-                if (IsOrderInScope(orderModel, scope) && seenOrderIds.Add(orderModel.Id))
-                {
-                    var order = MapOrder(orderModel);
-                    if (!request.UnpaidOnly || IsUnpaid(orderModel, order))
-                    {
-                        orders.Add(order);
-                    }
-                }
+            TakeListedOrders(result.Results, request, scope, seenOrderIds, page, limit);
 
-                if (orders.Count >= limit || scanned >= _maxOrderListScan)
-                {
-                    break;
-                }
-            }
-
-            criteria.Skip = position;
-            if (position >= totalCount)
+            criteria.Skip = page.Position;
+            if (page.Position >= page.TotalCount)
             {
                 break;
             }
         }
 
-        var hasNextPage = position < totalCount;
+        return page;
+    }
+
+    // Consumes the page up to the order that fills the limit, so the cursor resumes right after it.
+    private void TakeListedOrders(
+        IEnumerable<CustomerOrder> orderModels,
+        UcpOrderListRequest request,
+        OrderExecutionRequest scope,
+        HashSet<string> seenOrderIds,
+        OrderListPage page,
+        int limit)
+    {
+        foreach (var orderModel in orderModels)
+        {
+            page.Position++;
+            page.Scanned++;
+
+            var order = ToListedOrder(orderModel, request, scope, seenOrderIds);
+            if (order != null)
+            {
+                page.Orders.Add(order);
+            }
+
+            if (page.Orders.Count >= limit || page.Scanned >= _maxOrderListScan)
+            {
+                return;
+            }
+        }
+    }
+
+    private UcpOrder ToListedOrder(CustomerOrder orderModel, UcpOrderListRequest request, OrderExecutionRequest scope, HashSet<string> seenOrderIds)
+    {
+        if (!IsOrderInScope(orderModel, scope) || !seenOrderIds.Add(orderModel.Id))
+        {
+            return null;
+        }
+
+        var order = MapOrder(orderModel);
+
+        return !request.UnpaidOnly || IsUnpaid(orderModel, order) ? order : null;
+    }
+
+    private UcpOrderListResponse CreateOrderListResponse(UcpOrderListRequest request, OrderListPage page, int limit)
+    {
+        var hasNextPage = page.Position < page.TotalCount;
         var response = new UcpOrderListResponse
         {
             Ucp = CreateMetadata("success", "dev.ucp.shopping.order.list"),
-            Orders = orders,
+            Orders = page.Orders,
             Pagination = new UcpPaginationResponse
             {
-                Cursor = hasNextPage ? position.ToString(CultureInfo.InvariantCulture) : null,
+                Cursor = hasNextPage ? page.Position.ToString(CultureInfo.InvariantCulture) : null,
                 HasNextPage = hasNextPage,
-                TotalCount = totalCount,
+                TotalCount = page.TotalCount,
             },
         };
 
@@ -194,18 +241,26 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             });
         }
 
-        if (hasNextPage && orders.Count < limit)
+        if (hasNextPage && page.Orders.Count < limit)
         {
             response.Messages.Add(new UcpMessage
             {
                 Type = "info",
                 Code = "scan_limit_reached",
-                Content = $"This call read {scanned} orders, the most one call reads; call list_orders again with the returned cursor to continue.",
+                Content = $"This call read {page.Scanned} orders, the most one call reads; call list_orders again with the returned cursor to continue.",
                 Severity = "info",
             });
         }
 
         return response;
+    }
+
+    private sealed class OrderListPage
+    {
+        public List<UcpOrder> Orders { get; } = [];
+        public int Position { get; set; }
+        public int TotalCount { get; set; }
+        public int Scanned { get; set; }
     }
 
     private int ParseOrderListCursor(string cursor)

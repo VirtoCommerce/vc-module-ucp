@@ -751,8 +751,8 @@ public class UcpOrderServiceTests
                 .Where(order => string.IsNullOrWhiteSpace(criteria.Number) || order.Number == criteria.Number)
                 .Where(order => criteria.StartDate == null || order.CreatedDate >= criteria.StartDate)
                 .Where(order => criteria.EndDate == null || order.CreatedDate <= criteria.EndDate)
-                .Where(order => criteria.StoreIds == null || !criteria.StoreIds.Any() || criteria.StoreIds.Contains(order.StoreId))
-                .Where(order => criteria.Statuses == null || !criteria.Statuses.Any() || criteria.Statuses.Contains(order.Status))
+                .Where(order => criteria.StoreIds == null || criteria.StoreIds.Length == 0 || criteria.StoreIds.Contains(order.StoreId))
+                .Where(order => criteria.Statuses == null || criteria.Statuses.Length == 0 || criteria.Statuses.Contains(order.Status))
                 .Where(order => criteria.ParentOperationId == null || order.ParentOperationId == criteria.ParentOperationId)
                 .Where(order => criteria.HasParentOperation == null || (order.ParentOperationId != null) == criteria.HasParentOperation)
                 .ToList();
