@@ -678,7 +678,7 @@ public static class UcpMcpCommerceTools
         "(not cancelled, and approved payments cover less than the total); paid_only keeps the paid ones (not cancelled, approved payments cover the whole total); " +
         "totals.paid_total and payments[].amount show what was paid. " +
         "Every amount is in minor units of its currency: amount 2100 with currency USD is $21.00; " +
-        "formatted_amount gives the same amount in major units (\"21.00 USD\"), so quote formatted_amount to the user. " +
+        "formatted_amount gives the same amount as the store formats it (\"$21.00\"), so quote formatted_amount to the user. " +
         "Requires a signed-in buyer: do not call this tool until link_buyer_identity succeeds. " +
         "Pass the returned pagination.cursor as cursor to read the next page. Global order listing is not allowed.")]
     public static Task<object> ListOrders(
@@ -692,7 +692,7 @@ public static class UcpMcpCommerceTools
         string store_id = null,
         string language = null,
         string cursor = null,
-        int limit = 10,
+        [Description("Orders per page. Omit for the store's default page size; a larger value than the store's largest page is reduced to it.")] int? limit = null,
         CancellationToken cancellationToken = default)
     {
         return Execute(async () =>

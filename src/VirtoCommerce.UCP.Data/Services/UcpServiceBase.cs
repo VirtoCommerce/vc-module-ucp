@@ -14,7 +14,10 @@ namespace VirtoCommerce.UCP.Data.Services;
 
 public abstract class UcpServiceBase
 {
-    private const decimal MinorUnitScale = 100m;
+    // The decimal digits of a currency the platform does not describe (most currencies have two: cents).
+    protected const int DefaultDecimalDigits = 2;
+    // The most decimal digits a currency is given; no ISO 4217 currency has more than 4.
+    private const int MaxDecimalDigits = 8;
 
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly IUcpBuyerContextAccessor _buyerContextAccessor;
@@ -269,6 +272,28 @@ public abstract class UcpServiceBase
 
     protected static long ToMinorUnits(decimal amount)
     {
-        return Convert.ToInt64(decimal.Round(amount * MinorUnitScale, 0, MidpointRounding.AwayFromZero));
+        return ToMinorUnits(amount, DefaultDecimalDigits);
+    }
+
+    // The amount in the currency's minor units: 21.00 USD (2 digits) is 2100, 1500 JPY (0 digits) is 1500, 1.500 KWD (3 digits) is 1500.
+    protected static long ToMinorUnits(decimal amount, int decimalDigits)
+    {
+        return Convert.ToInt64(decimal.Round(amount * GetMinorUnitScale(decimalDigits), 0, MidpointRounding.AwayFromZero));
+    }
+
+    protected static decimal FromMinorUnits(long minorUnits, int decimalDigits)
+    {
+        return minorUnits / GetMinorUnitScale(decimalDigits);
+    }
+
+    private static decimal GetMinorUnitScale(int decimalDigits)
+    {
+        var scale = 1m;
+        for (var i = 0; i < Math.Clamp(decimalDigits, 0, MaxDecimalDigits); i++)
+        {
+            scale *= 10m;
+        }
+
+        return scale;
     }
 }

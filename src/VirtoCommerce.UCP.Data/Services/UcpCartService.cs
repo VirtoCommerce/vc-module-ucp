@@ -1304,7 +1304,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
 
         return new UcpMoney
         {
-            Amount = ToMinorUnits(ReadDecimal(money, "amount")),
+            Amount = ToMinorUnits(ReadDecimal(money, "amount"), ReadInt(money, "decimalDigits", DefaultDecimalDigits)),
             Currency = money.TryGetProperty("currency", out var currency) ? ReadString(currency, "code") : ReadString(element, "currency"),
             FormattedAmount = ReadString(money, "formattedAmount"),
         };
@@ -1435,6 +1435,7 @@ public class UcpCartService : UcpServiceBase, IUcpCartService
 
     protected const string MoneyFields = """
           amount
+          decimalDigits
           formattedAmount
           currency { code }
         """;

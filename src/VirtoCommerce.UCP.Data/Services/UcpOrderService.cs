@@ -6,6 +6,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
+using Language = VirtoCommerce.CoreModule.Core.Common.Language;
+using VirtoCommerce.CoreModule.Core.Currency;
 using VirtoCommerce.OrdersModule.Core.Model;
 using VirtoCommerce.OrdersModule.Core.Model.Search;
 using VirtoCommerce.OrdersModule.Core.Services;
@@ -21,16 +23,16 @@ namespace VirtoCommerce.UCP.Data.Services;
 public class UcpOrderService : UcpServiceBase, IUcpOrderService
 {
     private const int _orderLookupPageSize = 50;
-    private const int _defaultOrderListLimit = 10;
-    private const int _maxOrderListLimit = 50;
-    // How many orders one list_orders call reads at most while unpaid_only or paid_only filters them, so one call stays bounded.
-    private const int _maxOrderListScan = 500;
     private static readonly string _orderResponseGroup = CustomerOrderResponseGroup.Full.ToString();
 
     private readonly ICustomerOrderService _customerOrderService;
     private readonly ICustomerOrderSearchService _customerOrderSearchService;
     private readonly UcpOptions _options;
     private readonly IUcpRequestOptions _requestOptions;
+    private readonly ICurrencyService _currencyService;
+    private readonly IUcpOrderPaymentStateService _paymentStateService;
+    // The platform currencies of the current call, by code, so formatted_amount is formatted the way XAPI formats it.
+    private readonly AsyncLocal<IDictionary<string, Currency>> _currencies = new();
 
     public UcpOrderService(
         ICustomerOrderService customerOrderService,
@@ -38,9 +40,13 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
         IHttpContextAccessor httpContextAccessor,
         IOptions<UcpOptions> options,
         IUcpBuyerContextAccessor buyerContextAccessor = null,
-        IUcpRequestOptions requestOptions = null)
+        IUcpRequestOptions requestOptions = null,
+        ICurrencyService currencyService = null,
+        IUcpOrderPaymentStateService paymentStateService = null)
         : base(httpContextAccessor, buyerContextAccessor)
     {
+        _currencyService = currencyService;
+        _paymentStateService = paymentStateService ?? new UcpOrderPaymentStateService();
         _customerOrderService = customerOrderService;
         _customerOrderSearchService = customerOrderSearchService;
         _options = options.Value;
@@ -71,6 +77,8 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             throw CreateException(ModuleConstants.ErrorCodes.OrderNotFound, CreateOrderNotFoundMessage(orderRequest), StatusCodes.Status404NotFound);
         }
 
+        _currencies.Value = await LoadCurrencies(orderRequest.CultureName);
+
         var orders = orderModels
             .OrderBy(x => x.CreatedDate)
             .ThenBy(x => !string.IsNullOrEmpty(x.ParentOperationId))
@@ -90,15 +98,18 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
     public virtual async Task<UcpOrderListResponse> ListOrders(UcpOrderListRequest request, CancellationToken cancellationToken = default)
     {
         request ??= new UcpOrderListRequest();
+        // Identity first: an anonymous caller gets identity_required, not a complaint about its arguments.
+        var scope = ResolveOrderListScope(request);
         if (request.UnpaidOnly && request.PaidOnly)
         {
             throw CreateException(ModuleConstants.ErrorCodes.InvalidRequest, "Pass unpaid_only or paid_only, not both.");
         }
 
-        var scope = ResolveOrderListScope(request);
-        var limit = Math.Clamp(request.Pagination?.Limit ?? _defaultOrderListLimit, 1, _maxOrderListLimit);
-        var criteria = CreateOrderListCriteria(request, scope, ParseOrderListCursor(request.Pagination?.Cursor));
-        var page = await ReadOrderListPage(request, scope, criteria, limit, cancellationToken);
+        _currencies.Value = await LoadCurrencies(FirstNotEmpty(request.Context?.Language, Options.DefaultCultureName));
+        var limits = GetOrderListLimits();
+        var limit = Math.Clamp(request.Pagination?.Limit ?? limits.DefaultLimit, 1, limits.MaxLimit);
+        var criteria = CreateOrderListCriteria(request, scope.UserId, scope.OrganizationId, ParseOrderListCursor(request.Pagination?.Cursor), limit);
+        var page = await ReadOrderListPage(request, scope, criteria, limit, limits.MaxScan, cancellationToken);
 
         return CreateOrderListResponse(request, page, limit);
     }
@@ -125,24 +136,43 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
         return scope;
     }
 
-    private static CustomerOrderSearchCriteria CreateOrderListCriteria(UcpOrderListRequest request, OrderExecutionRequest scope, int position)
+    // The search one list_orders page starts from. Without a payment filter every order found is returned, so it reads exactly
+    // one page of the requested size; with unpaid_only or paid_only it reads larger batches, since some orders are filtered out.
+    protected virtual CustomerOrderSearchCriteria CreateOrderListCriteria(UcpOrderListRequest request, string userId, string organizationId, int position, int limit)
     {
         var statuses = (request.Statuses ?? []).Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).ToArray();
-        var storeId = request.Context?.StoreId;
+        // The same store rule as cart and catalog: the requested store, else the request's store (the default store).
+        var storeId = FirstNotEmpty(request.Context?.StoreId, Options.DefaultStoreId);
 
         return new CustomerOrderSearchCriteria
         {
-            CustomerId = scope.UserId,
-            OrganizationId = scope.OrganizationId,
+            CustomerId = userId,
+            OrganizationId = organizationId,
             StoreIds = string.IsNullOrWhiteSpace(storeId) ? null : [storeId],
             Statuses = statuses.Length > 0 ? statuses : null,
             StartDate = request.PlacedAfter?.UtcDateTime,
             EndDate = request.PlacedBefore?.UtcDateTime,
             Sort = "CreatedDate:desc",
             Skip = position,
-            Take = _orderLookupPageSize,
+            Take = HasPaymentFilter(request) ? _orderLookupPageSize : limit,
             ResponseGroup = _orderResponseGroup,
         };
+    }
+
+    private static bool HasPaymentFilter(UcpOrderListRequest request)
+    {
+        return request.UnpaidOnly || request.PaidOnly;
+    }
+
+    // The store settings UCP.OrderListDefaultLimit, UCP.OrderListMaxLimit and UCP.OrderListMaxScan, made consistent: the
+    // largest page is at least 1, the default page fits in it, and one call reads at least one full page.
+    private (int DefaultLimit, int MaxLimit, int MaxScan) GetOrderListLimits()
+    {
+        var maxLimit = Math.Max(1, Options.OrderListMaxLimit);
+        var defaultLimit = Math.Clamp(Options.OrderListDefaultLimit, 1, maxLimit);
+        var maxScan = Math.Max(maxLimit, Options.OrderListMaxScan);
+
+        return (defaultLimit, maxLimit, maxScan);
     }
 
     private async Task<OrderListPage> ReadOrderListPage(
@@ -150,12 +180,13 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
         OrderExecutionRequest scope,
         CustomerOrderSearchCriteria criteria,
         int limit,
+        int maxScan,
         CancellationToken cancellationToken)
     {
-        var page = new OrderListPage { Position = criteria.Skip };
+        var page = new OrderListPage { Position = criteria.Skip, MaxScan = maxScan };
         var seenOrderIds = new HashSet<string>(StringComparer.Ordinal);
 
-        while (page.Orders.Count < limit && page.Scanned < _maxOrderListScan)
+        while (page.Orders.Count < limit && page.Scanned < page.MaxScan)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var result = await UcpDiagnostics.ExecuteDependency(
@@ -200,7 +231,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
                 page.Orders.Add(order);
             }
 
-            if (page.Orders.Count >= limit || page.Scanned >= _maxOrderListScan)
+            if (page.Orders.Count >= limit || page.Scanned >= page.MaxScan)
             {
                 return;
             }
@@ -214,14 +245,14 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             return null;
         }
 
-        var order = MapOrder(orderModel);
-
-        if (request.UnpaidOnly && !IsUnpaid(orderModel, order))
+        // The payment filters read the order itself, not the mapped response, so an override of MapOrder cannot break them.
+        var paymentState = HasPaymentFilter(request) ? GetPaymentState(orderModel) : null;
+        if ((request.UnpaidOnly && !paymentState.IsUnpaid) || (request.PaidOnly && !paymentState.IsPaid))
         {
             return null;
         }
 
-        return !request.PaidOnly || IsPaid(orderModel, order) ? order : null;
+        return MapOrder(orderModel);
     }
 
     private UcpOrderListResponse CreateOrderListResponse(UcpOrderListRequest request, OrderListPage page, int limit)
@@ -229,7 +260,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
         var hasNextPage = page.Position < page.TotalCount;
         var response = new UcpOrderListResponse
         {
-            Ucp = CreateMetadata("success", "dev.ucp.shopping.order.list"),
+            Ucp = CreateMetadata("success", ModuleConstants.Discovery.Order),
             Orders = page.Orders,
             Pagination = new UcpPaginationResponse
             {
@@ -239,7 +270,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
             },
         };
 
-        if (request.UnpaidOnly || request.PaidOnly)
+        if (HasPaymentFilter(request))
         {
             response.Messages.Add(new UcpMessage
             {
@@ -270,6 +301,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
         public int Position { get; set; }
         public int TotalCount { get; set; }
         public int Scanned { get; set; }
+        public int MaxScan { get; set; }
     }
 
     private int ParseOrderListCursor(string cursor)
@@ -287,19 +319,10 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
         return position;
     }
 
-    private static bool IsUnpaid(CustomerOrder orderModel, UcpOrder order)
+    // What the buyer has paid and still owes, from IUcpOrderPaymentStateService.
+    protected virtual UcpOrderPaymentState GetPaymentState(CustomerOrder orderModel)
     {
-        return !IsCancelled(orderModel) && order.Totals.AmountDue.Amount > 0;
-    }
-
-    private static bool IsPaid(CustomerOrder orderModel, UcpOrder order)
-    {
-        return !IsCancelled(orderModel) && order.Totals.AmountDue.Amount == 0 && order.Totals.PaidTotal.Amount > 0;
-    }
-
-    private static bool IsCancelled(CustomerOrder orderModel)
-    {
-        return orderModel.IsCancelled || string.Equals(orderModel.Status, "Cancelled", StringComparison.OrdinalIgnoreCase);
+        return _paymentStateService.GetPaymentState(orderModel);
     }
 
     private static string CreateOrderNotFoundMessage(OrderExecutionRequest request)
@@ -459,10 +482,7 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
     protected virtual UcpOrder MapOrder(CustomerOrder orderModel)
     {
         var currency = orderModel.Currency;
-        var paidTotal = (orderModel.InPayments ?? [])
-            .Where(payment => payment.IsApproved && !payment.IsCancelled)
-            .Sum(payment => payment.Sum);
-        var amountDue = IsCancelled(orderModel) ? 0m : Math.Max(0m, orderModel.Total - paidTotal);
+        var paymentState = GetPaymentState(orderModel);
         var order = new UcpOrder
         {
             Id = orderModel.Id,
@@ -484,8 +504,8 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
                 DiscountTotal = CreateMoney(orderModel.DiscountTotal, currency),
                 ShippingSubtotal = CreateMoney(orderModel.ShippingSubTotal, currency),
                 ShippingTotal = CreateMoney(orderModel.ShippingTotal, currency),
-                PaidTotal = CreateMoney(paidTotal, currency),
-                AmountDue = CreateMoney(amountDue, currency),
+                PaidTotal = CreateMoney(paymentState.PaidTotal, currency),
+                AmountDue = CreateMoney(paymentState.AmountDue, currency),
             },
             LineItems = MapLineItems(orderModel.Items, currency),
             Shipments = MapShipments(orderModel.Shipments, currency),
@@ -626,16 +646,82 @@ public class UcpOrderService : UcpServiceBase, IUcpOrderService
 
     protected virtual UcpMoney CreateMoney(decimal amount, string currency)
     {
-        var minorUnits = ToMinorUnits(amount);
-        // The amount in major units, as an agent should say it: an agent reading only amount 2100 tends to say $2,100
-        var majorUnits = (minorUnits / 100m).ToString("0.00", CultureInfo.InvariantCulture);
+        var decimalDigits = GetDecimalDigits(currency);
+        var minorUnits = ToMinorUnits(amount, decimalDigits);
 
         return new UcpMoney
         {
             Amount = minorUnits,
             Currency = currency,
-            FormattedAmount = string.IsNullOrEmpty(currency) ? majorUnits : $"{majorUnits} {currency}",
+            FormattedAmount = FormatAmount(amount, minorUnits, currency),
         };
+    }
+
+    // The currency's decimal digits as the platform configures them (Currency.DecimalDigits), else two.
+    protected virtual int GetDecimalDigits(string currency)
+    {
+        return FindCurrency(currency)?.DecimalDigits ?? DefaultDecimalDigits;
+    }
+
+    private Currency FindCurrency(string currency)
+    {
+        var currencies = _currencies.Value;
+
+        return !string.IsNullOrEmpty(currency) && currencies != null && currencies.TryGetValue(currency, out var platformCurrency)
+            ? platformCurrency
+            : null;
+    }
+
+    // The amount as an agent should say it (an agent reading only amount 2100 tends to say $2,100). A currency registered in the
+    // platform is formatted as XAPI formats cart and catalog money ("$21.00"); any other falls back to "21.00 USD".
+    protected virtual string FormatAmount(decimal amount, long minorUnits, string currency)
+    {
+        var platformCurrency = FindCurrency(currency);
+        if (platformCurrency != null)
+        {
+            return new Money(amount, platformCurrency).FormattedAmount;
+        }
+
+        var majorUnits = FromMinorUnits(minorUnits, DefaultDecimalDigits).ToString("0.00", CultureInfo.InvariantCulture);
+
+        return string.IsNullOrEmpty(currency) ? majorUnits : $"{majorUnits} {currency}";
+    }
+
+    // Set by the calling operation: a value set inside an awaited method does not flow back to its caller.
+    private async Task<IDictionary<string, Currency>> LoadCurrencies(string cultureName)
+    {
+        if (_currencyService == null)
+        {
+            return null;
+        }
+
+        var currencies = await UcpDiagnostics.ExecuteDependency("currencies", "GetAllCurrencies", () => _currencyService.GetAllCurrenciesAsync());
+        return (currencies ?? [])
+            .Where(x => !string.IsNullOrEmpty(x?.Code))
+            .GroupBy(x => x.Code, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(x => x.Key, x => ForCulture(x.First(), cultureName), StringComparer.OrdinalIgnoreCase);
+    }
+
+    // The registered currency in the request's culture, the same clone XAPI makes for order money.
+    private static Currency ForCulture(Currency currency, string cultureName)
+    {
+        var result = new Currency(
+            string.IsNullOrEmpty(cultureName) ? Language.InvariantLanguage : new Language(cultureName),
+            currency.Code,
+            currency.Name,
+            currency.Symbol,
+            currency.ExchangeRate)
+        {
+            CustomFormatting = currency.CustomFormatting,
+            RoundingPolicy = currency.RoundingPolicy ?? new DefaultMoneyRoundingPolicy(),
+            RoundingType = currency.RoundingType,
+            MidpointRounding = currency.MidpointRounding,
+            DecimalDigits = currency.DecimalDigits,
+        };
+        // The constructor copied the default 2 digits into the number format; use the currency's own.
+        result.NumberFormat.CurrencyDecimalDigits = currency.DecimalDigits;
+
+        return result;
     }
 
 }

@@ -333,6 +333,9 @@ public static class ModuleConstants
         public static class Store
         {
             public const int DefaultCheckoutLinkLifetimeMinutes = 15;
+            public const int DefaultOrderListLimit = 10;
+            public const int DefaultOrderListMaxLimit = 50;
+            public const int DefaultOrderListMaxScan = 500;
 
             public static SettingDescriptor StoreManagedAddresses { get; } = new()
             {
@@ -358,6 +361,30 @@ public static class ModuleConstants
                 DefaultValue = string.Empty,
             };
 
+            public static SettingDescriptor OrderListDefaultLimit { get; } = new()
+            {
+                Name = "UCP.OrderListDefaultLimit",
+                GroupName = "UCP|Store",
+                ValueType = SettingValueType.PositiveInteger,
+                DefaultValue = DefaultOrderListLimit,
+            };
+
+            public static SettingDescriptor OrderListMaxLimit { get; } = new()
+            {
+                Name = "UCP.OrderListMaxLimit",
+                GroupName = "UCP|Store",
+                ValueType = SettingValueType.PositiveInteger,
+                DefaultValue = DefaultOrderListMaxLimit,
+            };
+
+            public static SettingDescriptor OrderListMaxScan { get; } = new()
+            {
+                Name = "UCP.OrderListMaxScan",
+                GroupName = "UCP|Store",
+                ValueType = SettingValueType.PositiveInteger,
+                DefaultValue = DefaultOrderListMaxScan,
+            };
+
             public static IEnumerable<SettingDescriptor> AllSettings
             {
                 get
@@ -365,6 +392,9 @@ public static class ModuleConstants
                     yield return StoreManagedAddresses;
                     yield return CheckoutLinkLifetimeMinutes;
                     yield return CheckoutUrlTemplate;
+                    yield return OrderListDefaultLimit;
+                    yield return OrderListMaxLimit;
+                    yield return OrderListMaxScan;
                 }
             }
         }

@@ -596,6 +596,278 @@ public class UcpOrderServiceTests
         Assert.Equal(ModuleConstants.ErrorCodes.InvalidRequest, exception.Code);
     }
 
+    [Fact]
+    public async Task ListOrders_WithoutStoreId_UsesTheDefaultStore()
+    {
+        var searchService = new StubCustomerOrderSearchService();
+        var service = CreateService(orderSearchService: searchService, defaultStoreId: "store-default");
+
+        await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["store-default"], searchService.Criteria.Single().StoreIds);
+    }
+
+    [Fact]
+    public async Task ListOrders_WithoutPaymentFilter_ReadsOnlyTheRequestedPage()
+    {
+        var searchService = new StubCustomerOrderSearchService();
+        var service = CreateService(orderSearchService: searchService);
+
+        await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+            Pagination = new UcpPaginationRequest { Limit = 5 },
+        }, TestContext.Current.CancellationToken);
+        await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+            UnpaidOnly = true,
+            Pagination = new UcpPaginationRequest { Limit = 5 },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal([5, 50], searchService.Criteria.Select(x => x.Take));
+    }
+
+    [Fact]
+    public async Task ListOrders_NamesTheStandardOrderCapability()
+    {
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(
+            CreateListedOrder("order-1", "buyer-1", "2026-06-16T09:00:00Z", total: 10m)));
+
+        var response = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal([ModuleConstants.Discovery.Order], response.Ucp.Capabilities.Keys);
+    }
+
+    [Fact]
+    public async Task ListOrders_WithBothPaymentFiltersAndNoBuyer_ReturnsIdentityRequired()
+    {
+        var service = CreateService();
+
+        var exception = await Assert.ThrowsAsync<UcpException>(() => service.ListOrders(new UcpOrderListRequest
+        {
+            UnpaidOnly = true,
+            PaidOnly = true,
+        }, TestContext.Current.CancellationToken));
+
+        Assert.Equal(ModuleConstants.ErrorCodes.IdentityRequired, exception.Code);
+    }
+
+    [Fact]
+    public async Task ListOrders_PaymentFilters_DoNotDependOnTheMappedOrder()
+    {
+        var paid = CreateListedOrder("order-paid", "buyer-1", "2026-06-16T09:00:00Z", total: 100m, approvedPayment: 100m);
+        var due = CreateListedOrder("order-due", "buyer-1", "2026-06-17T09:00:00Z", total: 100m);
+        var service = new OrderServiceWithoutTotals(new StubCustomerOrderSearchService(due, paid));
+
+        var unpaid = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+            UnpaidOnly = true,
+        }, TestContext.Current.CancellationToken);
+        var paidOnly = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+            PaidOnly = true,
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["order-due"], unpaid.Orders.Select(x => x.Id));
+        Assert.Equal(["order-paid"], paidOnly.Orders.Select(x => x.Id));
+    }
+
+    [Fact]
+    public async Task ListOrders_UsesTheOverriddenPaymentState()
+    {
+        // A captured-only rule: an approved payment that is not captured yet does not count as paid.
+        var authorized = CreateListedOrder("order-authorized", "buyer-1", "2026-06-16T09:00:00Z", total: 100m, approvedPayment: 100m);
+        var service = new OrderServiceCountingCapturedOnly(new StubCustomerOrderSearchService(authorized));
+
+        var response = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+            UnpaidOnly = true,
+        }, TestContext.Current.CancellationToken);
+
+        var order = Assert.Single(response.Orders);
+        Assert.Equal(0, order.Totals.PaidTotal.Amount);
+        Assert.Equal(10000, order.Totals.AmountDue.Amount);
+    }
+
+    [Fact]
+    public async Task ListOrders_FormatsAmountsWithThePlatformCurrency()
+    {
+        var order = CreateListedOrder("order-1", "buyer-1", "2026-06-16T09:00:00Z", total: 1234.5m);
+        var currencies = new StubCurrencyService(
+            new VirtoCommerce.CoreModule.Core.Currency.Currency(new VirtoCommerce.CoreModule.Core.Common.Language("en-US"), "USD", "US dollar", "$", 1m),
+            new VirtoCommerce.CoreModule.Core.Currency.Currency(new VirtoCommerce.CoreModule.Core.Common.Language("en-US"), "JPY", "Yen", "¥", 1m) { DecimalDigits = 0 });
+        var service = new UcpOrderService(
+            new StubCustomerOrderService(),
+            new StubCustomerOrderSearchService(order),
+            CreateHttpContextAccessor(),
+            Options.Create(new UcpOptions { DefaultCultureName = "en-US" }),
+            new TestBuyerContextAccessor(),
+            currencyService: currencies);
+
+        var usd = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+        order.Currency = "JPY";
+        var jpy = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("$1,234.50", usd.Orders.Single().Totals.Total.FormattedAmount);
+        Assert.Equal(123450, usd.Orders.Single().Totals.Total.Amount);
+        Assert.Equal("¥1,235", jpy.Orders.Single().Totals.Total.FormattedAmount);
+        // JPY has no minor unit in the platform (DecimalDigits 0), so amount is whole yen, not hundredths.
+        Assert.Equal(1235, jpy.Orders.Single().Totals.Total.Amount);
+    }
+
+    private sealed class StubCurrencyService(params VirtoCommerce.CoreModule.Core.Currency.Currency[] currencies)
+        : VirtoCommerce.CoreModule.Core.Currency.ICurrencyService
+    {
+        public Task<IEnumerable<VirtoCommerce.CoreModule.Core.Currency.Currency>> GetAllCurrenciesAsync()
+        {
+            return Task.FromResult<IEnumerable<VirtoCommerce.CoreModule.Core.Currency.Currency>>(currencies);
+        }
+
+        public Task SaveChangesAsync(VirtoCommerce.CoreModule.Core.Currency.Currency[] currencies) => Task.CompletedTask;
+
+        public Task DeleteCurrenciesAsync(string[] codes) => Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task ListOrders_TakesItsPageSizesFromTheStoreSettings()
+    {
+        var orders = Enumerable.Range(1, 5)
+            .Select(i => CreateListedOrder($"order-{i}", "buyer-1", $"2026-06-1{i}T09:00:00Z", total: 10m))
+            .Reverse()
+            .ToArray();
+        var searchService = new StubCustomerOrderSearchService(orders);
+        var service = CreateService(orderSearchService: searchService, options: new UcpOptions
+        {
+            OrderListDefaultLimit = 2,
+            OrderListMaxLimit = 3,
+        });
+
+        var byDefault = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+        var tooMany = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+            Pagination = new UcpPaginationRequest { Limit = 100 },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, byDefault.Orders.Count);
+        Assert.Equal(3, tooMany.Orders.Count);
+    }
+
+    [Fact]
+    public async Task ListOrders_StopsAtTheConfiguredScanLimit()
+    {
+        // Ten orders, none unpaid: with a scan limit of 4 one call reads 4 and hands back a cursor to continue.
+        var orders = Enumerable.Range(0, 10)
+            .Select(i => CreateListedOrder($"order-{i}", "buyer-1", $"2026-06-1{i}T09:00:00Z", total: 10m, approvedPayment: 10m))
+            .Reverse()
+            .ToArray();
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(orders), options: new UcpOptions
+        {
+            OrderListMaxLimit = 2,
+            OrderListMaxScan = 4,
+        });
+
+        var response = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+            UnpaidOnly = true,
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Empty(response.Orders);
+        Assert.Equal("4", response.Pagination.Cursor);
+        Assert.Contains(response.Messages, x => x.Code == "scan_limit_reached");
+    }
+
+    [Fact]
+    public async Task ListOrders_WithInconsistentSettings_StillReturnsAPage()
+    {
+        var orders = Enumerable.Range(1, 3)
+            .Select(i => CreateListedOrder($"order-{i}", "buyer-1", $"2026-06-1{i}T09:00:00Z", total: 10m))
+            .ToArray();
+        var service = CreateService(orderSearchService: new StubCustomerOrderSearchService(orders), options: new UcpOptions
+        {
+            OrderListDefaultLimit = 20,
+            OrderListMaxLimit = 0,
+            OrderListMaxScan = 0,
+        });
+
+        var response = await service.ListOrders(new UcpOrderListRequest
+        {
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Single(response.Orders);
+        Assert.True(response.Pagination.HasNextPage);
+    }
+
+    [Fact]
+    public async Task TrackOrder_UsesTheRegisteredPaymentStateService()
+    {
+        var order = CreateListedOrder("order-1", "buyer-1", "2026-06-16T09:00:00Z", total: 100m, approvedPayment: 100m);
+        var service = new UcpOrderService(
+            new StubCustomerOrderService(order),
+            new StubCustomerOrderSearchService(order),
+            CreateHttpContextAccessor(),
+            Options.Create(new UcpOptions()),
+            new TestBuyerContextAccessor(),
+            paymentStateService: new CapturedOnlyPaymentStateService());
+
+        var response = await service.TrackOrder(new UcpOrderTrackingRequest
+        {
+            OrderId = "order-1",
+            Context = new UcpCartContext { BuyerId = "buyer-1" },
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, response.Order.Totals.PaidTotal.Amount);
+        Assert.Equal(10000, response.Order.Totals.AmountDue.Amount);
+    }
+
+    private sealed class OrderServiceWithoutTotals(ICustomerOrderSearchService searchService)
+        : UcpOrderService(new StubCustomerOrderService(), searchService, CreateHttpContextAccessor(), Microsoft.Extensions.Options.Options.Create(new UcpOptions()), new TestBuyerContextAccessor())
+    {
+        protected override UcpOrder MapOrder(CustomerOrder orderModel)
+        {
+            return new UcpOrder { Id = orderModel.Id };
+        }
+    }
+
+    private sealed class OrderServiceCountingCapturedOnly(ICustomerOrderSearchService searchService)
+        : UcpOrderService(
+            new StubCustomerOrderService(),
+            searchService,
+            CreateHttpContextAccessor(),
+            Microsoft.Extensions.Options.Options.Create(new UcpOptions()),
+            new TestBuyerContextAccessor(),
+            paymentStateService: new CapturedOnlyPaymentStateService());
+
+    // A downstream rule: an approved payment counts as paid only once it is captured.
+    private sealed class CapturedOnlyPaymentStateService : UcpOrderPaymentStateService
+    {
+        protected override bool IsPaidPayment(PaymentIn payment)
+        {
+            return base.IsPaidPayment(payment) && payment.CapturedDate.HasValue;
+        }
+    }
+
     private static CustomerOrder CreateListedOrder(string id, string buyerId, string createdAt, decimal total, decimal? approvedPayment = null, decimal? pendingPayment = null)
     {
         var order = CreateOrder(id, "cart-" + id, buyerId);
@@ -619,7 +891,23 @@ public class UcpOrderServiceTests
 
     private static UcpOrderService CreateService(
         ICustomerOrderService orderService = null,
-        ICustomerOrderSearchService orderSearchService = null)
+        ICustomerOrderSearchService orderSearchService = null,
+        string defaultStoreId = null,
+        UcpOptions options = null)
+    {
+        options ??= new UcpOptions();
+        options.DefaultCultureName ??= "en-US";
+        options.DefaultStoreId ??= defaultStoreId;
+
+        return new UcpOrderService(
+            orderService ?? new StubCustomerOrderService(),
+            orderSearchService ?? new StubCustomerOrderSearchService(),
+            CreateHttpContextAccessor(),
+            Options.Create(options),
+            new TestBuyerContextAccessor());
+    }
+
+    private static HttpContextAccessor CreateHttpContextAccessor()
     {
         var httpContextAccessor = new HttpContextAccessor
         {
@@ -627,15 +915,7 @@ public class UcpOrderServiceTests
         };
         httpContextAccessor.HttpContext.TraceIdentifier = "trace-order";
 
-        return new UcpOrderService(
-            orderService ?? new StubCustomerOrderService(),
-            orderSearchService ?? new StubCustomerOrderSearchService(),
-            httpContextAccessor,
-            Options.Create(new UcpOptions
-            {
-                DefaultCultureName = "en-US",
-            }),
-            new TestBuyerContextAccessor());
+        return httpContextAccessor;
     }
 
     private static CustomerOrder CreateOrder(string id, string cartId, string buyerId)

@@ -53,6 +53,9 @@ public class UcpRequestOptions(IHttpContextAccessor httpContextAccessor, IOption
             HandoffTokenTtlMinutes = GetStoreValue(store, StoreSettings.CheckoutLinkLifetimeMinutes, configured.HandoffTokenTtlMinutes),
             AnonymousCatalog = configured.AnonymousCatalog,
             StoreManagedAddresses = GetStoreValue(store, StoreSettings.StoreManagedAddresses, configured.StoreManagedAddresses),
+            OrderListDefaultLimit = GetStoreValue(store, StoreSettings.OrderListDefaultLimit, configured.OrderListDefaultLimit),
+            OrderListMaxLimit = GetStoreValue(store, StoreSettings.OrderListMaxLimit, configured.OrderListMaxLimit),
+            OrderListMaxScan = GetStoreValue(store, StoreSettings.OrderListMaxScan, configured.OrderListMaxScan),
             Observability = configured.Observability,
         };
     }

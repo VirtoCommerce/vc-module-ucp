@@ -194,6 +194,9 @@ public class UcpStoreContextTests
                 new ObjectSettingEntry(StoreSettings.StoreManagedAddresses) { Value = true },
                 new ObjectSettingEntry(StoreSettings.CheckoutLinkLifetimeMinutes) { Value = 30 },
                 new ObjectSettingEntry(StoreSettings.CheckoutUrlTemplate) { Value = "https://fashion.example/buy?s={token}" },
+                new ObjectSettingEntry(StoreSettings.OrderListDefaultLimit) { Value = 5 },
+                new ObjectSettingEntry(StoreSettings.OrderListMaxLimit) { Value = 25 },
+                new ObjectSettingEntry(StoreSettings.OrderListMaxScan) { Value = 200 },
             ],
         };
 
@@ -202,6 +205,9 @@ public class UcpStoreContextTests
         Assert.True(options.StoreManagedAddresses);
         Assert.Equal(30, options.HandoffTokenTtlMinutes);
         Assert.Equal("https://fashion.example/buy?s={token}", options.HandoffUrlTemplate);
+        Assert.Equal(5, options.OrderListDefaultLimit);
+        Assert.Equal(25, options.OrderListMaxLimit);
+        Assert.Equal(200, options.OrderListMaxScan);
     }
 
     [Fact]
