@@ -100,6 +100,10 @@ internal sealed class UcpOperationInputCapture
             // The standard arguments are captured below; these add store_id and the buyer_id presence.
             AddMcpCartContext(arguments);
         }
+        else if (operation == ModuleConstants.Operations.ListOrders)
+        {
+            CaptureMcpOrderList(arguments);
+        }
         else if (!CaptureMcpCatalogAndCart(operation, arguments))
         {
             CaptureMcpCheckoutAndLookup(operation, arguments);
@@ -252,7 +256,11 @@ internal sealed class UcpOperationInputCapture
             return;
         }
 
-        if (!CaptureRestCatalogAndCart(operation, arguments))
+        if (operation == ModuleConstants.Operations.ListOrders)
+        {
+            CaptureOrderListQuery(GetArgument<UcpOrderListQuery>(arguments, "query"));
+        }
+        else if (!CaptureRestCatalogAndCart(operation, arguments))
         {
             CaptureRestCheckoutAndLookup(operation, arguments);
         }
@@ -455,6 +463,39 @@ internal sealed class UcpOperationInputCapture
         _input["session_present"] = true;
         _input["session_length"] = request.UcpSession.Length;
         _input["session_fingerprint"] = UcpTelemetryInputSanitizer.ComputeFingerprint(request.UcpSession);
+    }
+
+    private void CaptureMcpOrderList(IDictionary<string, JsonElement> arguments)
+    {
+        AddMcpCommerceContext(arguments);
+        AddMcpCollectionCount(arguments, "statuses", "status_count");
+        if (arguments.TryGetValue("unpaid_only", out var unpaidOnly) && unpaidOnly.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            _input["unpaid_only"] = unpaidOnly.ValueKind == JsonValueKind.True ? "true" : "false";
+        }
+
+        if (arguments.TryGetValue("paid_only", out var paidOnly) && paidOnly.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            _input["paid_only"] = paidOnly.ValueKind == JsonValueKind.True ? "true" : "false";
+        }
+
+        AddMcpFingerprint(arguments, "cursor", "cursor");
+        AddMcpNumber(arguments, _input, "limit", "limit");
+    }
+
+    private void CaptureOrderListQuery(UcpOrderListQuery query)
+    {
+        if (query == null)
+        {
+            return;
+        }
+
+        AddCommerceContext(query.StoreId, null, null, null, query.CultureName, null);
+        AddNumber(_input, "status_count", query.Statuses?.Length);
+        _input["unpaid_only"] = query.UnpaidOnly ? "true" : "false";
+        _input["paid_only"] = query.PaidOnly ? "true" : "false";
+        AddFingerprint(_input, "cursor", query.Cursor);
+        AddNumber(_input, "limit", query.Limit);
     }
 
     private void CaptureOrderTrackingQuery(UcpOrderTrackingQuery query, string routeOrderId)

@@ -19,7 +19,6 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
 {
     private const int DefaultLimit = 10;
     private const int MaxLimit = 50;
-    private const decimal MinorUnitsPerMajorUnit = 100m;
 
     private readonly IXApiInProcessExecutor _xApiExecutor;
     private readonly UcpOptions _options;
@@ -296,9 +295,10 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
         return upper == null ? $"{lower} TO" : $"{lower} TO {upper}";
     }
 
+    // A price filter arrives before the search knows the currency's decimal digits, so it is read with two (cents).
     private static string ToMajorUnits(long amount)
     {
-        return (amount / MinorUnitsPerMajorUnit).ToString(CultureInfo.InvariantCulture);
+        return FromMinorUnits(amount, DefaultDecimalDigits).ToString(CultureInfo.InvariantCulture);
     }
 
     protected virtual UcpProduct ReadProduct(JsonElement element)
@@ -385,7 +385,7 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
 
         return new UcpMoney
         {
-            Amount = ToMinorUnits(ReadDecimal(money, "amount")),
+            Amount = ToMinorUnits(ReadDecimal(money, "amount"), ReadInt(money, "decimalDigits", DefaultDecimalDigits)),
             Currency = money.TryGetProperty("currency", out var currency) ? ReadString(currency, "code") : null,
             FormattedAmount = ReadString(money, "formattedAmount"),
         };
@@ -417,8 +417,8 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
         brandName
         productType
         price {
-          actual { amount formattedAmount currency { code } }
-          list { amount formattedAmount currency { code } }
+          actual { amount decimalDigits formattedAmount currency { code } }
+          list { amount decimalDigits formattedAmount currency { code } }
         }
         availabilityData {
           availableQuantity
@@ -435,7 +435,7 @@ public class UcpCatalogService : UcpServiceBase, IUcpCatalogService
           code
           name
           price {
-            actual { amount formattedAmount currency { code } }
+            actual { amount decimalDigits formattedAmount currency { code } }
           }
           availabilityData {
             availableQuantity

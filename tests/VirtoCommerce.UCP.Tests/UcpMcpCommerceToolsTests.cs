@@ -43,7 +43,7 @@ public class UcpMcpCommerceToolsTests
             .ToDictionary(tool => tool.ProtocolTool.Name, tool => tool.Metadata);
 
         // Assert
-        Assert.Equal(25, tools.Count);
+        Assert.Equal(26, tools.Count);
         foreach (var (name, metadata) in tools)
         {
             var allowsAnonymous = metadata.OfType<IAllowAnonymous>().Any();
@@ -84,7 +84,8 @@ public class UcpMcpCommerceToolsTests
         Assert.Contains(ModuleConstants.McpTools.ResolveCountry, toolNames);
         Assert.Contains(ModuleConstants.McpTools.ListRegions, toolNames);
         Assert.Contains(ModuleConstants.McpTools.TrackOrder, toolNames);
-        Assert.Equal(16, toolNames.Length);
+        Assert.Contains(ModuleConstants.McpTools.ListOrders, toolNames);
+        Assert.Equal(17, toolNames.Length);
         Assert.All(toolNames, toolName => Assert.True(ModuleConstants.McpTools.IsUcpTool(toolName)));
         Assert.DoesNotContain("get_ucp_autodiscovery", toolNames);
     }
@@ -104,6 +105,17 @@ public class UcpMcpCommerceToolsTests
         Assert.StartsWith("REQUIRED first step", description);
         Assert.Contains("Platform OAuth", description);
         Assert.Contains("for my organization", description);
+    }
+
+    [Fact]
+    public void ListOrdersTool_SaysAmountsAreInMinorUnits()
+    {
+        var description = typeof(UcpMcpCommerceTools).GetMethod(nameof(UcpMcpCommerceTools.ListOrders))
+            ?.GetCustomAttribute<System.ComponentModel.DescriptionAttribute>()?.Description;
+
+        Assert.Contains("minor units of its currency", description);
+        Assert.Contains("2100 with currency USD is $21.00", description);
+        Assert.Contains("quote formatted_amount", description);
     }
 
     [Fact]
@@ -280,6 +292,7 @@ public class UcpMcpCommerceToolsTests
             nameof(UcpMcpCommerceTools.CheckoutAndHandoff),
             nameof(UcpMcpCommerceTools.HandoffCheckout),
             nameof(UcpMcpCommerceTools.TrackOrder),
+            nameof(UcpMcpCommerceTools.ListOrders),
         };
 
         foreach (var methodName in methods)
@@ -372,6 +385,7 @@ public class UcpMcpCommerceToolsTests
             [nameof(UcpMcpCommerceTools.CheckoutAndHandoff)] = ["cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
             [nameof(UcpMcpCommerceTools.HandoffCheckout)] = ["checkout_id", "cart_id", "store_id", "currency", "language", "buyer_id", "buyer", "buyer_email", "buyer_name", "buyer_phone", "shipping_address", "billing_address", "payment_handler", "notes"],
             [nameof(UcpMcpCommerceTools.TrackOrder)] = ["order_id", "order_number", "cart_id", "placed_after", "store_id", "currency", "language", "buyer_id"],
+            [nameof(UcpMcpCommerceTools.ListOrders)] = ["statuses", "unpaid_only", "paid_only", "placed_after", "placed_before", "store_id", "language", "cursor", "limit"],
         };
 
         foreach (var (methodName, expectedProperties) in expectedSchemas)

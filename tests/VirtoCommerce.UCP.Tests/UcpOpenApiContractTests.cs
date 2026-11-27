@@ -41,6 +41,7 @@ public class UcpOpenApiContractTests
             "UcpGeographyController.ListCountries",
             "UcpGeographyController.ListRegions",
             "UcpGeographyController.ResolveCountry",
+            "UcpOrderController.ListOrders",
             "UcpOrderController.TrackOrder",
             "UcpOrderController.TrackOrderByCart",
             "UcpProfileController.GetProfile",

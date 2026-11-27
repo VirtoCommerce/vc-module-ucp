@@ -918,6 +918,11 @@ public class UcpMcpStandardToolsTests
     {
         public UcpOrderTrackingRequest LastRequest { get; private set; }
 
+        public Task<UcpOrderListResponse> ListOrders(UcpOrderListRequest request, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException("The standard binding has no list_orders tool.");
+        }
+
         public Task<UcpOrderResponse> TrackOrder(UcpOrderTrackingRequest request, CancellationToken cancellationToken = default)
         {
             LastRequest = request;

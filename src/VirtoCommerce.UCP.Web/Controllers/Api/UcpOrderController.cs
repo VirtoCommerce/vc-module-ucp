@@ -33,6 +33,19 @@ public class UcpOrderController : ControllerBase
         return Ok(await _orderService.TrackOrder((query ?? new UcpOrderTrackingQuery()).ToRequest(), cancellationToken));
     }
 
+    // A literal segment outranks {orderId}, so /orders/list never reaches TrackOrder.
+    [HttpGet("list")]
+    [UcpOperation(ModuleConstants.Operations.ListOrders)]
+    [ProducesResponseType(typeof(UcpOrderListResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(UcpError), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(UcpError), StatusCodes.Status401Unauthorized)]
+    public async Task<ActionResult<UcpOrderListResponse>> ListOrders(
+        [FromQuery] UcpOrderListQuery query,
+        CancellationToken cancellationToken)
+    {
+        return Ok(await _orderService.ListOrders((query ?? new UcpOrderListQuery()).ToRequest(), cancellationToken));
+    }
+
     [HttpGet("{orderId}")]
     [UcpOperation(ModuleConstants.Operations.TrackOrder)]
     [ProducesResponseType(typeof(UcpOrderResponse), StatusCodes.Status200OK)]

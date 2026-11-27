@@ -58,6 +58,8 @@ Everything else works with its default, and each further store works the same wa
 | The checkout page of a checkout link | `{store URL}/checkout` | The store setting `UCP.CheckoutUrlTemplate` |
 | How long a checkout link stays valid | 15 minutes | The store setting `UCP.CheckoutLinkLifetimeMinutes` |
 | Cart addresses | Set by the assistant | The store setting `UCP.StoreManagedAddresses` |
+| Orders per `list_orders` page | 10, at most 50 | The store settings `UCP.OrderListDefaultLimit` and `UCP.OrderListMaxLimit` |
+| Orders one `list_orders` call reads while filtering by payment | 500 | The store setting `UCP.OrderListMaxScan` |
 
 <details>
 <summary>More about the setup</summary>
@@ -328,6 +330,7 @@ UCP needs almost no configuration of its own: it takes the store of each request
 | Addresses the storefront assigns itself | Store setting `UCP.StoreManagedAddresses` | Store administrator |
 | Lifetime of a checkout link | Store setting `UCP.CheckoutLinkLifetimeMinutes` (15) | Store administrator |
 | Checkout page of a storefront not at `/checkout` | Store setting `UCP.CheckoutUrlTemplate`, with `{token}` | Store administrator |
+| Page sizes of `list_orders` | Store settings `UCP.OrderListDefaultLimit` (10), `UCP.OrderListMaxLimit` (50) and `UCP.OrderListMaxScan` (500) | Store administrator |
 | UCP on or off | `MCP:Scopes:ucp:Enabled` ([Switching UCP on and off](#switching-ucp-on-and-off)) | IT |
 | A fixed public origin | `MCP:Scopes:ucp:PublicOrigin`, only where the platform cannot see the public host | IT |
 | What operation input reaches telemetry | `UCP:Observability:InputCaptureMode` | IT |
@@ -597,7 +600,7 @@ To serve the scope also at `https://store.example.com/mcp`, set `MCP:Scopes:ucp:
 | Catalog | `search_products`, `get_product` |
 | Cart | `create_cart`, `list_carts`, `get_cart`, `update_cart` |
 | Checkout | `create_checkout`, `update_checkout`, `get_payment_handlers`, `handoff_checkout`, `checkout_and_handoff` |
-| Orders | `track_order` |
+| Orders | `track_order`, `list_orders` |
 | Geography | `list_countries`, `resolve_country`, `list_regions` |
 | Buyer identity | `link_buyer_identity`, `logout_buyer` |
 | UCP standard (`dev.ucp.shopping`) | `search_catalog`, `lookup_catalog`, `cancel_cart`, `get_checkout`, `complete_checkout`, `cancel_checkout`, `get_order`, and the standard shape of `get_product`, `create_cart`, `get_cart`, `update_cart`, `create_checkout`, `update_checkout` |
@@ -680,7 +683,7 @@ Example request:
 }
 ```
 
-UCP prices and price filters use minor units. For example, `$700.00` is represented as `70000`.
+UCP prices and price filters use minor units. For example, `$700.00` is represented as `70000`. A price's minor units follow the `decimalDigits` that XAPI returns with it. XAPI currently returns 2 for every currency, because it copies the currency into the request's language without its decimal digits, so cart and catalog prices are in hundredths whatever the currency's **Decimal digits**; order amounts use the currency's own (see [Order list](#order-list)). A price filter is read with 2 decimal digits.
 
 ### Product detail
 
@@ -823,6 +826,21 @@ The storefront's default cart survives checkout: after an order is placed the ca
 
 `placed_after` is an ISO 8601 timestamp. On REST, URL-encode it: `issued_at` carries a `+00:00` offset, and an unencoded `+` decodes to a space and fails binding with 400. The MCP next step passes it in UTC `Z` form.
 
+### Order list
+
+`list_orders` returns the signed-in buyer's own orders in the store, newest first, with the same order shape as `track_order`. It needs a Platform OAuth buyer (`link_buyer_identity`); an anonymous `buyer_id` is refused with `identity_required`.
+
+```http
+GET /ucp/v1/orders/list?unpaid_only=true&limit=10
+GET /ucp/v1/orders/list?paid_only=true
+GET /ucp/v1/orders/list?status=New&status=Processing&placed_after=2026-01-01T00:00:00Z&cursor={cursor}
+```
+
+- Scope: the token's user AND organization, the same rule as `track_order`; the store comes from `store_id`, else the request's store (the default store), the same rule as cart and catalog. An organization-wide list (every buyer of the company) is not offered.
+- Filters: order statuses as the store names them (MCP: `statuses`, an array; REST: `status`, repeated as in the example above), `placed_after` / `placed_before`, and `unpaid_only` or `paid_only` (not both: `invalid_request`).
+- Every order carries `totals.paid_total` (approved, not cancelled payments) and `totals.amount_due` (total less paid, never below zero, zero for a cancelled order); every payment carries `amount`. `unpaid_only` keeps orders whose `amount_due` is above zero; `paid_only` keeps the orders that are not cancelled, have `amount_due` zero and a `paid_total` above zero (a free order is not "paid"). Every amount is in minor units of its currency, by the currency's **Decimal digits** in the platform (2 for USD: 2100 is $21.00; 0 for a currency set to 0 digits, such as JPY), so an order amount in a currency without 2 digits differs from the same price in a cart or catalog response (see above). `formatted_amount` is formatted the way XAPI formats cart and catalog money, from the platform currency in the request's culture ("$21.00"); a currency the platform does not know falls back to "21.00 USD".
+- Paging: `limit` and the returned `pagination.cursor`. Without `limit` a page holds `UCP.OrderListDefaultLimit` orders (10); a larger `limit` than `UCP.OrderListMaxLimit` (50) is reduced to it. `unpaid_only` and `paid_only` filter after the database query, so one call reads at most `UCP.OrderListMaxScan` orders (500), and `pagination.total_count` counts orders before that filter (a `total_count_before_payment_filter` message says so).
+
 If the order has not been created yet (with `placed_after`: the buyer has not placed the order since the handoff) or is not found within that buyer context, the endpoint returns the structured error `order_not_found`.
 
 ### Error model
@@ -898,7 +916,8 @@ The module has no database tables and no migrations.
 | `UcpCatalogService` | `IUcpCatalogService` | Product search and product details through XCatalog |
 | `UcpCartService` | `IUcpCartService` | Carts through XCart, with replacement semantics and the anonymous cart merge |
 | `UcpCheckoutService` | `IUcpCheckoutService` | Checkout snapshots, addresses, payment handlers, checkout links and their restore |
-| `UcpOrderService` | `IUcpOrderService` | Order tracking within the buyer's context |
+| `UcpOrderService` | `IUcpOrderService` | Order tracking and the buyer's order list within the buyer's context |
+| `UcpOrderPaymentStateService` | `IUcpOrderPaymentStateService` | What a buyer has paid and still owes on an order |
 | `UcpGeographyService` | `IUcpGeographyService` | Countries and regions from the platform |
 | `RedisUcpHandoffSessionStore`, `InMemoryUcpHandoffSessionStore` | `IUcpHandoffSessionStore` | Checkout link sessions, in Redis when it is configured |
 | `UcpBuyerContextAccessor` | `IUcpBuyerContextAccessor` | The buyer and organization of a request, anonymous or from the platform token |
@@ -921,6 +940,20 @@ var operation = context.GetEndpoint()?.Metadata.GetMetadata<UcpOperationAttribut
 // operation.Name is the UCP operation, such as search_products or create_cart; null for any other endpoint
 ```
 
+What a buyer has paid and still owes on an order (`totals.paid_total`, `totals.amount_due`, and the `unpaid_only` and `paid_only` filters of `list_orders`) comes from `IUcpOrderPaymentStateService` (`VirtoCommerce.UCP.Core.Services`). The default `UcpOrderPaymentStateService` counts approved, not cancelled incoming payments. To change the rule, for example to count captured payments only or to subtract processed refunds, register your own implementation or a subclass that overrides `IsPaidPayment`, `GetPaidTotal` or `IsCancelled`:
+
+```csharp
+serviceCollection.AddTransient<IUcpOrderPaymentStateService, CapturedPaymentStateService>();
+
+public class CapturedPaymentStateService : UcpOrderPaymentStateService
+{
+    protected override bool IsPaidPayment(PaymentIn payment)
+    {
+        return base.IsPaidPayment(payment) && payment.CapturedDate.HasValue;
+    }
+}
+```
+
 ### Dependencies
 
 The module manifest declares these runtime dependencies:
@@ -929,9 +962,9 @@ The module manifest declares these runtime dependencies:
 | --- | --- |
 | `VirtoCommerce.MCP` | `3.1000.0` |
 | `VirtoCommerce.Xapi` | `3.1030.0` |
-| `VirtoCommerce.XCatalog` | `3.1023.0` |
-| `VirtoCommerce.XCart` | `3.1044.0` |
-| `VirtoCommerce.XOrder` | `3.1017.0` |
+| `VirtoCommerce.XCatalog` | `3.1025.0` |
+| `VirtoCommerce.XCart` | `3.1047.0` |
+| `VirtoCommerce.XOrder` | `3.1018.0` |
 | `VirtoCommerce.Store` | `3.1013.0` |
 | `VirtoCommerce.Orders` | `3.1019.0` |
 | `VirtoCommerce.Marketing` | `3.1010.0` |
@@ -941,7 +974,7 @@ UCP builds against the `VirtoCommerce.MCP.Core` package of the same version as t
 
 Target framework: `.NET 10`.
 
-Minimum Virto Commerce Platform version: `3.1096.0`.
+Minimum Virto Commerce Platform version: `3.1097.0`.
 
 ### Build and test
 
